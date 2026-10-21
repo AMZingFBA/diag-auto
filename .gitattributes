@@ -1,0 +1,4 @@
+# Les fichiers LICIEL doivent rester identiques à l'octet près :
+# aucune conversion de fin de ligne (ils utilisent CR seul, encodage Windows-1252).
+tests/fixtures/** -text
+*.xml -text
