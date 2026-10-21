@@ -1,0 +1,21 @@
+<adresse_demande>Rue de Bonavis 59400 ANNEUX</adresse_demande>
+<id_batiment_rnb>Non trouvé</id_batiment_rnb>
+<label_brut>Rue de Bonavis 59400 Cambrai</label_brut>
+<enum_statut_geocodage_ban_id>1</enum_statut_geocodage_ban_id>
+<ban_date_appel>2026-04-23</ban_date_appel>
+<ban_id>59122_0400</ban_id>
+<ban_label>Rue de Bonavis 59400 Cambrai</ban_label>
+<ban_housenumber></ban_housenumber>
+<ban_street>Rue de Bonavis</ban_street>
+<ban_citycode>59122</ban_citycode>
+<ban_postcode>59400</ban_postcode>
+<ban_city>Cambrai</ban_city>
+<ban_type>street</ban_type>
+<ban_score>0.65994</ban_score>
+<ban_x>716442.1</ban_x>
+<ban_y>7006949.93</ban_y>
+<latitude>50.160502</latitude>
+<longitude>3.229843</longitude>
+<GPS_API>api-adresse.data.gouv.fr</GPS_API>
+<altitude>68.5</altitude>
+<elevation_API>data.geopf.fr</elevation_API>

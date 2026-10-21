@@ -1,0 +1,209 @@
+<LiTable_Z_DPE_2020_General>
+     <LiColonne_Version_Enregistrement>13/11/2025 - Version 64 bits</LiColonne_Version_Enregistrement>
+     <LiColonne_Version_logiciel>LICIEL Diagnostics v4 [Moteur BBS Slama: 2025.11.1.0]</LiColonne_Version_logiciel>
+     <LiColonne_erreur_sur_le_dpe></LiColonne_erreur_sur_le_dpe>
+     <LiColonne_pas_de_calcul_ch>False</LiColonne_pas_de_calcul_ch>
+     <LiColonne_Cmb_Activite>U : Établissements de soins</LiColonne_Cmb_Activite>
+     <LiColonne_Cmb_Activite_ADEME>10</LiColonne_Cmb_Activite_ADEME>
+     <LiColonne_Cmb_Type_Batiment_SelectedIndex>0</LiColonne_Cmb_Type_Batiment_SelectedIndex>
+     <LiColonne_Cmb_Type_Batiment_detail></LiColonne_Cmb_Type_Batiment_detail>
+     <LiColonne_TxtSurfaceHabitable>80</LiColonne_TxtSurfaceHabitable>
+     <LiColonne_TxtHauteurMoyenSousPlafond>2,5</LiColonne_TxtHauteurMoyenSousPlafond>
+     <LiColonne_TxtSurfaceHabitableImmeubleComplet></LiColonne_TxtSurfaceHabitableImmeubleComplet>
+     <LiColonne_TxtSurfaceHabitableImmeubleCompletTertiaire></LiColonne_TxtSurfaceHabitableImmeubleCompletTertiaire>
+     <LiColonne_Txt_Coef_IFC></LiColonne_Txt_Coef_IFC>
+     <LiColonne_Cmb_Nb_niveau>1</LiColonne_Cmb_Nb_niveau>
+     <LiColonne_Chk_IFC_Inconnu>0</LiColonne_Chk_IFC_Inconnu>
+     <LiColonne_Chk_Appartement_systemes_similaires>0</LiColonne_Chk_Appartement_systemes_similaires>
+     <LiColonne_chk_dans_un_batiment_habitation>0</LiColonne_chk_dans_un_batiment_habitation>
+     <LiColonne_Chk_decoupage_appart_par_niveau>0</LiColonne_Chk_decoupage_appart_par_niveau>
+     <LiColonne_Chk_decoupage_appart_par_Appartement_2022>0</LiColonne_Chk_decoupage_appart_par_Appartement_2022>
+     <LiColonne_Chk_decoupage_appart_par_Appartement_2022_simple>0</LiColonne_Chk_decoupage_appart_par_Appartement_2022_simple>
+     <LiColonne_ChkActiverOutilEchantillonage>0</LiColonne_ChkActiverOutilEchantillonage>
+     <LiColonne_Chk_Audit_Reglementaire>1</LiColonne_Chk_Audit_Reglementaire>
+     <LiColonne_Cmb_Appartements_repartition_chauffage_Enum>1</LiColonne_Cmb_Appartements_repartition_chauffage_Enum>
+     <LiColonne_DPE_Appartements_repartition_ecs_Enum>1</LiColonne_DPE_Appartements_repartition_ecs_Enum>
+     <LiColonne_CmbDepartement_index>6</LiColonne_CmbDepartement_index>
+     <LiColonne_CmbAltitude></LiColonne_CmbAltitude>
+     <LiColonne_Cmb_annee_construction_nom_donnee>1978 - 1982</LiColonne_Cmb_annee_construction_nom_donnee>
+     <LiColonne_TXT_annee_construction></LiColonne_TXT_annee_construction>
+     <LiColonne_Cmb_inertie_txt>Moyenne</LiColonne_Cmb_inertie_txt>
+     <LiColonne_Chk_Commentaires_Methode_3CL>0</LiColonne_Chk_Commentaires_Methode_3CL>
+     <LiColonne_Txt_Conseil_Entretien></LiColonne_Txt_Conseil_Entretien>
+     <LiColonne_Txt_Pourquoi_Un_DPE></LiColonne_Txt_Pourquoi_Un_DPE>
+     <LiColonne_Cmb_Type_Transaction_index>0</LiColonne_Cmb_Type_Transaction_index>
+     <LiColonne_chk_methode_Facture>0</LiColonne_chk_methode_Facture>
+     <LiColonne_chk_Facture_non_valides>0</LiColonne_chk_Facture_non_valides>
+     <LiColonne_cmbFactureRaison>les factures sont exprimées en Euro</LiColonne_cmbFactureRaison>
+     <LiColonne_txtValEnergie>308</LiColonne_txtValEnergie>
+     <LiColonne_txtValCout_Total>24 651</LiColonne_txtValCout_Total>
+     <LiColonne_txtValCout_Total_details>entre 1 590 € et 2 200 € par an</LiColonne_txtValCout_Total_details>
+     <LiColonne_txtValCout_Total_ERE>2252,61</LiColonne_txtValCout_Total_ERE>
+     <LiColonne_txtValCout_Total_ERE_details>entre 1 900 € et 2 610 € par an</LiColonne_txtValCout_Total_ERE_details>
+     <LiColonne_txtValCo2>67</LiColonne_txtValCo2>
+     <LiColonne_txtValkmEquivalentCo2_ERE>24228</LiColonne_txtValkmEquivalentCo2_ERE>
+     <LiColonne_txtValkgCo2Emis_ERE>4676</LiColonne_txtValkgCo2Emis_ERE>
+     <LiColonne_txtValkmEquivalentCo2>28122</LiColonne_txtValkmEquivalentCo2>
+     <LiColonne_txtValkgCo2Emis>5427</LiColonne_txtValkgCo2Emis>
+     <LiColonne_txtmodele_DPE>Rapport_DPE_2020_Habitation</LiColonne_txtmodele_DPE>
+     <LiColonne_txtmodeledocx_DPE>D7 - Modele_DPE_2020_Habitation.docx</LiColonne_txtmodeledocx_DPE>
+     <LiColonne_methode_calcul>3CL-DPE 2021</LiColonne_methode_calcul>
+     <LiColonne_documents_remis></LiColonne_documents_remis>
+     <LiColonne_documents_remis_complets>Plans du logement
+Plan de masse
+Diag Carrez/Boutin
+Taxe d’habitation
+Relevé de propriété
+Règlement de copropriété
+Descriptifs des équipements collectifs - Syndic
+Factures de travaux
+Photographies des travaux
+Justificatifs Crédit d’impôt
+Déclaration préalable des travaux de rénovation
+Cahier des charges / Programme de travaux</LiColonne_documents_remis_complets>
+     <LiColonne_txtLettreCo2>E</LiColonne_txtLettreCo2>
+     <LiColonne_txtLettreEnergie>E</LiColonne_txtLettreEnergie>
+     <LiColonne_txtValEnergie_ERE>264</LiColonne_txtValEnergie_ERE>
+     <LiColonne_txtValCo2_ERE>58</LiColonne_txtValCo2_ERE>
+     <LiColonne_txtLettreCo2_ERE>F</LiColonne_txtLettreCo2_ERE>
+     <LiColonne_txtLettreEnergie_ERE>E</LiColonne_txtLettreEnergie_ERE>
+     <LiColonne_Senario_travaux_index>01</LiColonne_Senario_travaux_index>
+     <LiColonne_lbl_simulation_1_resume>Actuel   :   Consommation: 264 kwh/m²/an
+Etape 1 :   Consommation: 190 kwh/m²/an, Gain: 28 %,  Eco: 567 €/an, Coût: 22500 €, TRI: 40 an(s)
+Etape 2 :   Consommation: 94 kwh/m²/an, Gain: 64 %,  Eco: 1274 €/an, Coût: 38350 € (+15850 €), TRI: 31 an(s)
+Etape 3 :   N/A
+Les informations des étapes sont mentionnées en cumulé (Etape 2 correspond à Etape 1+2)</LiColonne_lbl_simulation_1_resume>
+     <LiColonne_lbl_simulation_2_resume>Actuel   :   Consommation: 264 kwh/m²/an
+Etape 1 :   Consommation: 94 kwh/m²/an, Gain: 64 %,  Eco: 1274 €/an, Coût: 38350 €, TRI: 31 an(s)
+Etape 2 :   N/A
+Etape 3 :   N/A
+Les informations des étapes sont mentionnées en cumulé (Etape 2 correspond à Etape 1+2)</LiColonne_lbl_simulation_2_resume>
+     <LiColonne_lbl_simulation_3_resume></LiColonne_lbl_simulation_3_resume>
+     <LiColonne_is_simulation_1_une_etape>0</LiColonne_is_simulation_1_une_etape>
+     <LiColonne_is_simulation_2_une_etape>1</LiColonne_is_simulation_2_une_etape>
+     <LiColonne_is_simulation_3_une_etape>0</LiColonne_is_simulation_3_une_etape>
+     <LiColonne_chk_simulation_1_present_rapport>1</LiColonne_chk_simulation_1_present_rapport>
+     <LiColonne_chk_simulation_2_present_rapport>1</LiColonne_chk_simulation_2_present_rapport>
+     <LiColonne_chk_simulation_3_present_rapport>0</LiColonne_chk_simulation_3_present_rapport>
+     <LiColonne_chk_simulation_1_detail_postes>0</LiColonne_chk_simulation_1_detail_postes>
+     <LiColonne_chk_simulation_2_detail_postes>0</LiColonne_chk_simulation_2_detail_postes>
+     <LiColonne_chk_simulation_3_detail_postes>0</LiColonne_chk_simulation_3_detail_postes>
+     <LiColonne_Chk_tertiaire_batiment_entier>1</LiColonne_Chk_tertiaire_batiment_entier>
+     <LiColonne_Chk_tertiaire_batiment_partie>0</LiColonne_Chk_tertiaire_batiment_partie>
+     <LiColonne_Txt_tertiaire_batiment_partie></LiColonne_Txt_tertiaire_batiment_partie>
+     <LiColonne_Txt_tertiaire_S_Utile></LiColonne_Txt_tertiaire_S_Utile>
+     <LiColonne_Chk_tertiaire_facture_energie>0</LiColonne_Chk_tertiaire_facture_energie>
+     <LiColonne_Radio_Picture_Perfo_Maison_Schema>1</LiColonne_Radio_Picture_Perfo_Maison_Schema>
+     <LiColonne_CmbAltitude_valeur>800 m et supérieur</LiColonne_CmbAltitude_valeur>
+     <LiColonne_CmbAltitude_index>3</LiColonne_CmbAltitude_index>
+     <LiColonne_Cmb_entretien></LiColonne_Cmb_entretien>
+     <LiColonne_TxtConstatations_diverses>Un ravalement des murs extérieurs de la maison est nécessaire 	
+Le vide sanitaire du bâtiment présente une hauteur libre de 90cm qui le rend accessible.</LiColonne_TxtConstatations_diverses>
+     <LiColonne_TxtConstatations_diverses_Audit></LiColonne_TxtConstatations_diverses_Audit>
+     <LiColonne_chk_constatation_differentes_audit_dpe>0</LiColonne_chk_constatation_differentes_audit_dpe>
+     <LiColonne_Cmb_Nb_appartement>1</LiColonne_Cmb_Nb_appartement>
+     <LiColonne_Cmb_Type_Batiment_nom_donnee>Maison Individuelle</LiColonne_Cmb_Type_Batiment_nom_donnee>
+     <LiColonne_Cmb_Type_Batiment_type>Habitation</LiColonne_Cmb_Type_Batiment_type>
+     <LiColonne_Cmb_Type_Transaction_nom_donnee>DPE Vente</LiColonne_Cmb_Type_Transaction_nom_donnee>
+     <LiColonne_Annees_tarif_des_energies>2021, 2022, 2023</LiColonne_Annees_tarif_des_energies>
+     <LiColonne_DPE_Quantite_energier_renouvellable>0</LiColonne_DPE_Quantite_energier_renouvellable>
+     <LiColonne_DPE_Quantite_energier_renouvellable_indeterminee></LiColonne_DPE_Quantite_energier_renouvellable_indeterminee>
+     <LiColonne_CmbDepartement_nom_donnee>07  Ardèche</LiColonne_CmbDepartement_nom_donnee>
+     <LiColonne_chk_non_chauffe>0</LiColonne_chk_non_chauffe>
+     <LiColonne_Tarif_Cout_abonnement>0</LiColonne_Tarif_Cout_abonnement>
+     <LiColonne_Tarif_Cout_abonnement_individuel>0</LiColonne_Tarif_Cout_abonnement_individuel>
+     <LiColonne_Tarif_Cout_abonnement_ERE>0</LiColonne_Tarif_Cout_abonnement_ERE>
+     <LiColonne_Tarif_Cout_abonnement_individuel_ERE>0</LiColonne_Tarif_Cout_abonnement_individuel_ERE>
+     <LiColonne_Tarif_Cout_abonnement_reel>0</LiColonne_Tarif_Cout_abonnement_reel>
+     <LiColonne_Tarif_Cout_abonnement_reel_individuel>0</LiColonne_Tarif_Cout_abonnement_reel_individuel>
+     <LiColonne_Annees_des_factures_constatees></LiColonne_Annees_des_factures_constatees>
+     <LiColonne_Txt_detail_Etude_Thermique_info></LiColonne_Txt_detail_Etude_Thermique_info>
+     <LiColonne_Txt_detail_Etude_Thermique_rapport></LiColonne_Txt_detail_Etude_Thermique_rapport>
+     <LiColonne_Txt_detail_Releve_conso_dates_rapport></LiColonne_Txt_detail_Releve_conso_dates_rapport>
+     <LiColonne_Tableau_resultat_codee></LiColonne_Tableau_resultat_codee>
+     <LiColonne_Check_mode_DPE_plus_actif>0</LiColonne_Check_mode_DPE_plus_actif>
+     <LiColonne_Check_mode_DPE_plus_3CLModifiee>0</LiColonne_Check_mode_DPE_plus_3CLModifiee>
+     <LiColonne_Cmb_jours_absence_ete>28</LiColonne_Cmb_jours_absence_ete>
+     <LiColonne_Cmb_jours_absence_hivers>14</LiColonne_Cmb_jours_absence_hivers>
+     <LiColonne_Cmb_Chauffage_dpe_plus>3</LiColonne_Cmb_Chauffage_dpe_plus>
+     <LiColonne_Cmb_ECS_dpe_plus>3</LiColonne_Cmb_ECS_dpe_plus>
+     <LiColonne_Cmb_Clim_dpe_plus>3</LiColonne_Cmb_Clim_dpe_plus>
+     <LiColonne_Cmb_T_confort>20</LiColonne_Cmb_T_confort>
+     <LiColonne_Cmb_T_reduit>18</LiColonne_Cmb_T_reduit>
+     <LiColonne_Cmb_nb_heure_reduit>16</LiColonne_Cmb_nb_heure_reduit>
+     <LiColonne_Cmb_Nb_occupant>NC</LiColonne_Cmb_Nb_occupant>
+     <LiColonne_Cmb_equipement_ecs>Douche + plus de 3 éviers</LiColonne_Cmb_equipement_ecs>
+     <LiColonne_Cmb_exposition_bien_clim>Non précisés</LiColonne_Cmb_exposition_bien_clim>
+     <LiColonne_Txt_Constatations_conso_reelle_pr_3cl>Les mesures de débit de ventilation réalisées lors de la visite montrent que les débits de ventilation du logement sont très en deçà des débits hygiéniques. Le calcul  des consommations sont réalisés pour une utilisation standardisée du bâtiment qui considère un renouvellement d'air plus important. Cette différence peu expliquer des consommations calculées supérieures aux consommations réelles	
+Les consignes de températures sont réglées dans la maison sur 21°C. L'audit énergétique est réalisé en considérant une utilisation standard du bâtiment avec une consigne réglée autour de 19°C. Ce paramètre peut générer une sous estimation des consommations réelles du logement.</LiColonne_Txt_Constatations_conso_reelle_pr_3cl>
+     <LiColonne_TxtConstatations_diverses2></LiColonne_TxtConstatations_diverses2>
+     <LiColonne_TxtCommentairesRecommandation></LiColonne_TxtCommentairesRecommandation>
+     <LiColonne_TxtCommentairesRecommandation_ERE_SR01>Certains coûts d'investissement additionnels éventuels (travaux de finition, etc.) ne sont pas pris en compte. Ces valeurs devront impérativement être complétées avant réalisation des travaux par des devis d'entreprises. Enfin, il est à noter que certaines aides fiscales peuvent minimiser les coûts moyens annoncés (subventions, crédit d'impôt, etc.). La TVA est comptée au taux en vigueur.
+Les travaux sont à réaliser par un professionnel qualifié.
+Vous pouvez peut-être bénéficier d'un crédit d'impôt pour réduire le prix d'achat des fournitures, pensez-y !</LiColonne_TxtCommentairesRecommandation_ERE_SR01>
+     <LiColonne_TxtCommentairesRecommandation_ERE_SR02></LiColonne_TxtCommentairesRecommandation_ERE_SR02>
+     <LiColonne_TxtCommentairesRecommandation_ERE_SR03></LiColonne_TxtCommentairesRecommandation_ERE_SR03>
+     <LiColonne_TxtCommentairesAvantagesRecommandation_ERE_SR01>Ce scénario permet de ne pas trop déranger les occupants.</LiColonne_TxtCommentairesAvantagesRecommandation_ERE_SR01>
+     <LiColonne_TxtCommentairesAvantagesRecommandation_ERE_SR02>Ce scénario permets de tout faire en une fois, cela peut perturber les habitants.</LiColonne_TxtCommentairesAvantagesRecommandation_ERE_SR02>
+     <LiColonne_TxtCommentairesAvantagesRecommandation_ERE_SR03></LiColonne_TxtCommentairesAvantagesRecommandation_ERE_SR03>
+     <LiColonne_Chk_Reco_Pas_ITI>0</LiColonne_Chk_Reco_Pas_ITI>
+     <LiColonne_Chk_Reco_Pas_ITE>0</LiColonne_Chk_Reco_Pas_ITE>
+     <LiColonne_Chk_Reco_Pas_Menuiseries>1</LiColonne_Chk_Reco_Pas_Menuiseries>
+     <LiColonne_Chk_Reco_VentilationChauffage>0</LiColonne_Chk_Reco_VentilationChauffage>
+     <LiColonne_Txt_num_ademe_v2>NumAdemeFictifDPE</LiColonne_Txt_num_ademe_v2>
+     <LiColonne_Txt_DPE_QrCode>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</LiColonne_Txt_DPE_QrCode>
+     <LiColonne_Txt_num_ademe_v2_audit>NumAdemeFictifAUDIT</LiColonne_Txt_num_ademe_v2_audit>
+     <LiColonne_Txt_num_ademe_raison_remplacement></LiColonne_Txt_num_ademe_raison_remplacement>
+     <LiColonne_Txt_XML_envoye>Dossier_ADEME.xml</LiColonne_Txt_XML_envoye>
+     <LiColonne_Txt_XML_envoye_tag></LiColonne_Txt_XML_envoye_tag>
+     <LiColonne_Txt_historique_ADEME_XML></LiColonne_Txt_historique_ADEME_XML>
+     <LiColonne_Txt_historique_ADEME_envoie_XML>Résultats du DPE envoyés avec succès: Dpe inséré auprès de l'ADEME [2392E0001812I]</LiColonne_Txt_historique_ADEME_envoie_XML>
+     <LiColonne_Txt_historique_ADEME_envoie_XML_AUDIT></LiColonne_Txt_historique_ADEME_envoie_XML_AUDIT>
+     <LiColonne_Txt_historique_ADEME_details></LiColonne_Txt_historique_ADEME_details>
+     <LiColonne_Txt_historique_ADEME_details_AUDIT></LiColonne_Txt_historique_ADEME_details_AUDIT>
+     <LiColonne_commentaires_Ouvtrants></LiColonne_commentaires_Ouvtrants>
+     <LiColonne_commentaires_Ponts></LiColonne_commentaires_Ponts>
+     <LiColonne_commentaires_Planchers></LiColonne_commentaires_Planchers>
+     <LiColonne_commentaires_Plafonds></LiColonne_commentaires_Plafonds>
+     <LiColonne_commentaires_Murs></LiColonne_commentaires_Murs>
+     <LiColonne_commentaires_ENRs></LiColonne_commentaires_ENRs>
+     <LiColonne_commentaires_ECSs></LiColonne_commentaires_ECSs>
+     <LiColonne_commentaires_Clims></LiColonne_commentaires_Clims>
+     <LiColonne_commentaires_Chauffages></LiColonne_commentaires_Chauffages>
+     <LiColonne_commentaires_Chauffages_Pilotage></LiColonne_commentaires_Chauffages_Pilotage>
+     <LiColonne_commentaires_Ventilations></LiColonne_commentaires_Ventilations>
+     <LiColonne_TxtSurfaceHabitableImmeubleComplet_Tantiemes_Ind></LiColonne_TxtSurfaceHabitableImmeubleComplet_Tantiemes_Ind>
+     <LiColonne_TxtSurfaceHabitableImmeubleComplet_Tantiemes_Collectif></LiColonne_TxtSurfaceHabitableImmeubleComplet_Tantiemes_Collectif>
+     <LiColonne_Cmb_T_clim>19</LiColonne_Cmb_T_clim>
+     <LiColonne_ventillation_XML><Sh>80</Sh><Q4paconv>1,9</Q4paconv><P_vent>0</P_vent><enum_type_ventilation_id>2</enum_type_ventilation_id><type_ventilation_name>Ventilation par entrées d'air hautes et basses</type_ventilation_name><EtudeThermique_QvInf>0</EtudeThermique_QvInf><Sdep>170</Sdep><tv_q4pa_conv_id>7</tv_q4pa_conv_id><AnneeInstallation>1978</AnneeInstallation><AnneeInstallation_pour_permea>0</AnneeInstallation_pour_permea><plusieurs_facade_exposee>True</plusieurs_facade_exposee><bien_Isolation_Mur_Plafond_Isole>True</bien_Isolation_Mur_Plafond_Isole><presence_braseurs_d_aire_fixes>False</presence_braseurs_d_aire_fixes><presence_cheminee_ouvert>False</presence_cheminee_ouvert><presence_ventilation_meca_sdb>False</presence_ventilation_meca_sdb><presence_autres_syetemes_secondaires>False</presence_autres_syetemes_secondaires><systeme_collectif>False</systeme_collectif></LiColonne_ventillation_XML>
+     <LiColonne_dpe_vierge>0</LiColonne_dpe_vierge>
+     <LiColonne_commentaires_reco_couts_induit>Les coûts ont été mentionnés pour appréhender la globalité des travaux et anticiper votre rénovation énergétique ainsi que le temps de retour sur investissement de manière générale. Ce ne sont pas de coûts de maitrise d'œuvre et de ce fait ne sont pas contractuels. Il est rappelé qu'ils ont été établis suivant un repérage visuel non destructif et donc certaines pathologies peuvent ne pas avoir été prises en compte. Ils ne prennent pas non plus en compte leurs volatilités dans le temps.</LiColonne_commentaires_reco_couts_induit>
+     <LiColonne_commentaires_reco_bdd_chiffrage></LiColonne_commentaires_reco_bdd_chiffrage>
+     <LiColonne_txtReglementation></LiColonne_txtReglementation>
+     <LiColonne_Valeur_R_Reco_parametres></LiColonne_Valeur_R_Reco_parametres>
+     <LiColonne_Valeur_Cout_Reco_parametres><Pourcent_Induit>30</Pourcent_Induit></LiColonne_Valeur_Cout_Reco_parametres>
+     <LiColonne_Valeur_Descript_Reco_parametres></LiColonne_Valeur_Descript_Reco_parametres>
+     <LiColonne_Ville_XML><id_clef>7</id_clef><Departement>07  Ardèche</Departement><Nref>4900</Nref><Dhref>53000</Dhref><Pref>105</Pref><C3>1,5</C3><C4>0</C4><Zone_ete>Ed</Zone_ete><Zone_Hiver>2</Zone_Hiver><Zone_Climatique>H2d</Zone_Climatique><Text>-6</Text><Classe_ext_alt_maxi>5</Classe_ext_alt_maxi><MI_Fecs_encien>60,4</MI_Fecs_encien><MI_Fecs_recente>75,6</MI_Fecs_recente><MI_Fch>36,9</MI_Fch><MI_Fecs_Combine>96</MI_Fecs_Combine><IC_Fesc_encien>39</IC_Fesc_encien><Classe_ext_alt_min>1</Classe_ext_alt_min><IC_Fesc_recente>58</IC_Fesc_recente><altitude_mini>40</altitude_mini><altitude_maxi>1753</altitude_maxi></LiColonne_Ville_XML>
+     <LiColonne_XML_Sauvagarde_stat><Deperdition_fenetres>42,3864</Deperdition_fenetres><Deperdition_portes>17,65</Deperdition_portes><Deperdition_mur>71,62785</Deperdition_mur><Deperdition_plafond>26,2068965517241</Deperdition_plafond><Deperdition_plancher>32,72</Deperdition_plancher><Deperdition_Pont_Thermiques>11,16</Deperdition_Pont_Thermiques><Deperdition_ventillation>89,4651261602203</Deperdition_ventillation><Surface_fenetres>15,12</Surface_fenetres><surface_Portes>4</surface_Portes><surface_mur>70,88</surface_mur><surface_plafond>80</surface_plafond><surface_plancher>80</surface_plancher><EF_PCI_Complet><valeur1>Series1</valeur1><valeur2>Répartition des déperdition (PCI)</valeur2><valeur3><axe0>Chauffage (Gaz Naturel)</axe0><axe1>Auxiliaires (Electrique)</axe1><axe2>ECSanitaires (Gaz Naturel)</axe2><axe3>Eclairage (Electrique)</axe3></valeur3><valeur4><axe0>20118</axe0><axe1>211</axe1><axe2>3684</axe2><axe3>158</axe3></valeur4></EF_PCI_Complet><EF_PCI_Energie><valeur1>Series1</valeur1><valeur2>Répartition des déperdition (PCI)</valeur2><valeur3><axe0>Gaz Naturel</axe0><axe1>Electrique</axe1></valeur3><valeur4><axe0>23802</axe0><axe1>369</axe1></valeur4></EF_PCI_Energie><Tarifs_Complet><valeur1>Series1</valeur1><valeur2>Répartition des déperdition (PCI)</valeur2><valeur3><axe0>Chauffage (Gaz Naturel)</axe0><axe1>Auxiliaires (Electrique)</axe1><axe2>ECSanitaires (Gaz Naturel)</axe2><axe3>Eclairage (Electrique)</axe3></valeur3><valeur4><axe0>1509</axe0><axe1>61</axe1><axe2>276</axe2><axe3>46</axe3></valeur4></Tarifs_Complet></LiColonne_XML_Sauvagarde_stat>
+     <LiColonne_XML_Sauvagarde_stat_ERE><Deperdition_fenetres>42,3864</Deperdition_fenetres><Deperdition_portes>17,65</Deperdition_portes><Deperdition_mur>71,62785</Deperdition_mur><Deperdition_plafond>26,2068965517241</Deperdition_plafond><Deperdition_plancher>32,72</Deperdition_plancher><Deperdition_Pont_Thermiques>11,16</Deperdition_Pont_Thermiques><Deperdition_ventillation>89,4651261602203</Deperdition_ventillation><Surface_fenetres>15,12</Surface_fenetres><surface_Portes>4</surface_Portes><surface_mur>70,88</surface_mur><surface_plafond>80</surface_plafond><surface_plancher>80</surface_plancher><EF_PCI_Complet><valeur1>Series1</valeur1><valeur2>Répartition des déperdition (PCI)</valeur2><valeur3><axe0>Chauffage (Gaz Naturel)</axe0><axe1>Auxiliaires (Electrique)</axe1><axe2>ECSanitaires (Gaz Naturel)</axe2><axe3>Eclairage (Electrique)</axe3></valeur3><valeur4><axe0>16810</axe0><axe1>206</axe1><axe2>3684</axe2><axe3>158</axe3></valeur4></EF_PCI_Complet><EF_PCI_Energie><valeur1>Series1</valeur1><valeur2>Répartition des déperdition (PCI)</valeur2><valeur3><axe0>Gaz Naturel</axe0><axe1>Electrique</axe1></valeur3><valeur4><axe0>20494</axe0><axe1>363</axe1></valeur4></EF_PCI_Energie><Tarifs_Complet><valeur1>Series1</valeur1><valeur2>Répartition des déperdition (PCI)</valeur2><valeur3><axe0>Chauffage (Gaz Naturel)</axe0><axe1>Auxiliaires (Electrique)</axe1><axe2>ECSanitaires (Gaz Naturel)</axe2><axe3>Eclairage (Electrique)</axe3></valeur3><valeur4><axe0>1744</axe0><axe1>71</axe1><axe2>382</axe2><axe3>55</axe3></valeur4></Tarifs_Complet></LiColonne_XML_Sauvagarde_stat_ERE>
+     <LiColonne_impression_Resultat_Calcul>Class</LiColonne_impression_Resultat_Calcul>
+     <LiColonne_impression_Resultat_Calcul_BaseReco>Class</LiColonne_impression_Resultat_Calcul_BaseReco>
+     <LiColonne_impression_Donnees_intermediaires_details>Class</LiColonne_impression_Donnees_intermediaires_details>
+     <LiColonne_impression_Donnees_ventillation_details>Class</LiColonne_impression_Donnees_ventillation_details>
+     <LiColonne_impression_Donnees_Details_Calcul>Class</LiColonne_impression_Donnees_Details_Calcul>
+     <LiColonne_Txt_Cmb_Chauffage_dpe_plus></LiColonne_Txt_Cmb_Chauffage_dpe_plus>
+     <LiColonne_Txt_Cmb_ECS_dpe_plus>Critères manuels</LiColonne_Txt_Cmb_ECS_dpe_plus>
+     <LiColonne_Txt_Cmb_Clim_dpe_plus></LiColonne_Txt_Cmb_Clim_dpe_plus>
+     <LiColonne_Txt_surface_chauffee_logement></LiColonne_Txt_surface_chauffee_logement>
+     <LiColonne_Chk_Logement_chauffe_non_uniforme>0</LiColonne_Chk_Logement_chauffe_non_uniforme>
+     <LiColonne_Chk_DPE_Mention>0</LiColonne_Chk_DPE_Mention>
+     <LiColonne_chk_consentement_proprietaire>1</LiColonne_chk_consentement_proprietaire>
+     <LiColonne_rb_consentement_signe>1</LiColonne_rb_consentement_signe>
+     <LiColonne_rb_consentement_Refus>0</LiColonne_rb_consentement_Refus>
+     <LiColonne_rb_consentement_Dispense>0</LiColonne_rb_consentement_Dispense>
+     <LiColonne_Txt_Numero_Affaire></LiColonne_Txt_Numero_Affaire>
+     <LiColonne_IsAuditCopro>False</LiColonne_IsAuditCopro>
+     <LiColonne_DemandeHistorisation>07/05/2026 10:42:57-ASSISTANCEASUS</LiColonne_DemandeHistorisation>
+     <LiColonne_HistorisationKey>24-CA-B9-E7-3B-3E-6A-69-C7-DB-4A-0E-84-6A-AB-3C-0B-83-C8-46-8F-F7-6A-B1-2A-45-4E-D0-E7-50-A2-D8</LiColonne_HistorisationKey>
+
+</LiTable_Z_DPE_2020_General>
