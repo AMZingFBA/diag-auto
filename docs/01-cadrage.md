@@ -69,6 +69,12 @@ C:\LICIEL_Diagnostics\
 - Le **numéro de dossier** a la forme `AAMMJJ` + compteur (`2610210001`).
 - **« Démarrer dossier »** crée le sous-dossier `Dossiers_AAAA\<n°>\` et lance la partie terrain.
 - Une copie des données de mission est aussi écrite dans le dossier : `XML\Table_Admin_Donnees_Dossiers.xml` (donneur d'ordre, propriétaire, adresse du bien, date de RDV, missions cochées, opérateur…).
+- **Export officiel d'un dossier : fichier `.LDossier`.** Exemple : `Eval_DPE_2020\FA4-1\Export_MI6-1.LDossier`. C'est un **ZIP standard, non chiffré** (seule sa liste de contenu a été lue), qui contient :
+  - `LICIEL_Dossiers.Donnees_Dossiers.xml` : la fiche mission, en XML ISO-8859-1, avec **les vrais noms de colonnes de la base** (`id`, `Num_dossier`, `dordre_nom`, `bien_adresse`…) ;
+  - une mini-base `LICIEL_Dossiers.mdb` ;
+  - le dossier complet `Dossiers_2025/MI6-1/` (XML, images, archives `Version`).
+
+  C'est le format d'échange de LICIEL entre postes. **Si LICIEL accepte d'importer un `.LDossier` que nous aurions fabriqué, on crée mission et dossier d'un coup, sans toucher à la base principale** (voir option 1 ter, question H12).
 
 ### 1.3 Format des tables `Table_*.xml`
 
@@ -106,8 +112,11 @@ Deux formes existent.
 | Sujet | Constat |
 |---|---|
 | Ce n'est **pas du XML standard** | Les `&` ne sont pas échappés (ex. `<LiColonne_Annee_Construction>1780 & 1830</…>` dans `Table_Z_Elec_General.xml`). Il faut un lecteur et un écrivain « maison », pas une bibliothèque XML classique. |
-| Encodage | Windows-1252, pas UTF-8. |
-| Fins de ligne | `CR` seul, parfois `CRLF`. Indentation de 5 espaces par niveau. |
+| Encodage | Windows-1252, pas UTF-8 (aucun fichier UTF-8 parmi les 1 614 tables du poste). |
+| Fins de ligne | Une seule fin de ligne « de structure » par fichier : `CR` (1 610 fichiers) ou `LF` (4 fichiers). Les `CRLF` n'apparaissent qu'*à l'intérieur* des valeurs multi-lignes. Indentation de 5 espaces par niveau. |
+| Colonnes en double | Une même colonne peut apparaître deux fois dans une ligne, avec des valeurs différentes (vu une fois, résultats DPE d'un ancien dossier de validation). |
+| Fichiers non LiTable | 27 `Table_*.xml` sont des fragments XML libres, sans racine `LiTable_` (ex. `Z_DPE_2020_Details_simulations_ERE_SR01`). |
+| Nom de fichier ≠ nom de table | 220 fichiers d'audit : `Table_Z_DPE_2020_Composants_SR01.xml` contient `<LiTable_Z_DPE_2020_Composants>`. On indexe donc par nom de fichier. |
 | Nombres | Virgule décimale (`2,6`, `284,20`). On trouve parfois un point (`TxtSurface>10.2`) : il faut fixer une règle par champ. |
 | Booléens hétérogènes | `Vrai`/`Faux`, `0`/`1`, `True`/`False` selon les tables. |
 | Dates et heures | `05/03/2025`, `18 h 40`, `01 h 00`. |
@@ -155,9 +164,18 @@ Trois tables, avec un **niveau de confiance** pour chaque interprétation :
 | `Surface_2` = surface au sol | **Forte** | Somme des `Surface_2` du résumé = `Surface_Sol` (DEMO_0001 : 325,80 ; DEMO_0002 : 100,76). |
 | `Surface_1` = Carrez, `Surface_3` = habitable (Boutin) | Moyenne | Les sommes correspondent bien, mais Carrez = habitable dans les 3 démos, donc l'ordre exact n'est pas prouvé. |
 | `Surface_4` = surface de référence | Moyenne | Toujours 0 dans les démos. |
-| Les totaux ne sont **pas toujours une simple somme** | Constaté | DEMO_0003 : somme des `Surface_2` = 368,87 alors que `Surface_Sol` = 286,87. Probablement une pièce « annexe » exclue. |
-| `Data1`/`Data2` = ajouter ou retrancher, `Data5` = valeur absolue, `Data3`/`Data4` = surfaces impactées | Faible | À confirmer par saisie contrôlée (étape E3). |
+| Dans `Details` : `Data1=Vrai` → ajouter, `Data2=Vrai` → retrancher, `Data5` = valeur saisie (positive) | **Forte** | Cohérent avec toutes les lignes des 3 démos (ex. Étage 1 - Pièce 4 : `+9,04` puis `-1,65`). |
+| `Data3=1` → la ligne compte en Carrez/habitable, `Data4=1` → elle compte en surface au sol | **Forte** | Garage, véranda, escalier : `Data3=0` et `Data4=1`, donc 0 en Carrez mais compté au sol. Retrait < 1,80 m de DEMO_0001 : `Data3=1` et `Data4=0`, donc déduit du Carrez mais pas du sol. |
+| `Resume.Data2 = "OUI"` → pièce annexe, exclue des totaux | Forte | DEMO_0003 : l'écart de 82 m² entre la somme « au sol » (368,87) et `Surface_Sol` (286,87) = Garage - Pièce 1 (50) + Garage - Pièce 2 (32), les deux seules pièces marquées `OUI`. |
+| `Resume.Data1` = hauteur sous plafond de la pièce | Forte | 2,5 ; 2,7 ; 2,83… |
 | `Code_Outil_Mesure_*` = trace de l'outil de mesure (forme, télémètre) | Faible | Toujours vide dans les démos. |
+| `Code_Chk_Habitable` | Inconnue | 1 pour certaines pièces, 0 pour d'autres, sans lien évident. |
+
+Deux constats sur les données de démo :
+- Plusieurs nombres de `Details` ont perdu leur virgule (`1183605` pour 11,83605 m²), alors que `Resume` est juste (11,83). Il ne faut donc pas recalculer les surfaces à partir de `Details` sans précaution.
+- Dans DEMO_0001, deux lignes Carrez (« RDCH - Pièce 1/2 ») ne correspondent à aucune pièce de la liste.
+
+La commande `diagauto inspect` affiche ces contrôles.
 
 ---
 
@@ -238,6 +256,7 @@ Esquisse pour le MVP :
 |---|---|---|---|---|---|
 | **1** | **Générer les `Table_*.xml` d'un dossier créé par LICIEL**, LICIEL fermé (écriture directe) | Tout ce qui est stocké en XML : pièces, Carrez, description, puis les autres modules | Moyenne : format non documenté, qui peut évoluer à chaque mise à jour. On compense par des tests de non-régression sur les dossiers DEMO et Eval. | Moyen | **Voie principale du MVP.** Les pièces sont testables dès maintenant (la démo enregistre les parties générales). Le Carrez demande une licence. |
 | **1 bis** | **Même génération, mais dans un « dossier source » séparé, puis fusion par la fonction officielle « Terrain › Importation »** | Pièces, description, amiante, termites, plomb (cumul possible). DPE et Élec ne se cumulent pas. Carrez : inconnu. | Meilleure : c'est LICIEL qui intègre les données. | Faible en plus du rang 1 | **À tester en parallèle.** Variante plus sûre là où elle s'applique. |
+| **1 ter** | **Fabriquer un export `.LDossier`** (ZIP : fiche mission XML + mini-base + dossier avec nos tables), puis l'importer par la fonction officielle d'import de dossier | Mission + toutes les tables | Bonne si LICIEL l'accepte : il crée lui-même la mission et le dossier | Faible en plus du rang 1, sauf si la mini-base `.mdb` doit être fabriquée (inconnu) | **Découvert à l'étape E1, à tester par Hermes (H12).** Pourrait éviter de créer la mission à la main. |
 | **2** | **Imports officiels ciblés** | Partielle | Bonne (supportée par l'éditeur) | Variable | Voir le détail sous le tableau. |
 | **3** | **Passerelle officielle LICIEL sur devis** (« LOGICIEL Externe » : import d'un format XML/Excel défini par nous) | À définir (idéalement tout) | **Excellente** (maintenue par l'éditeur, vaut accord écrit) | Coût et délai côté LICIEL (analyse 80 € HT + développement) | **À demander dès maintenant, en parallèle** (question N2). Pas d'API publique aujourd'hui. |
 | **4** | **Automatisation de l'interface** (piloter les écrans LICIEL comme un humain, via UI Automation / pywinauto) | Tout ce qu'un humain peut saisir | Faible : lent, fragile aux mises à jour et à l'affichage | Élevé | **Dernier recours**, ou « colle » ponctuelle (ex. ouvrir un dossier, cliquer un import officiel). |
@@ -266,9 +285,9 @@ Chaque étape a un livrable vérifiable. On ne passe à la suivante que si le cr
 
 | Étape | Contenu | Livrable / critère de réussite | Prérequis |
 |---|---|---|---|
-| **E0** | Cadrage (ce document) | Questions de la section 4 tranchées | — |
-| **E1** | **Lecteur/écrivain fidèle** des `Table_*.xml` (Python), avec tests automatiques | Les 4 dossiers DEMO et les ~165 dossiers Eval sont relus puis réécrits **identiques à l'octet près**. Travail sur copies, dans le dépôt. | Aucun (faisable tout de suite) |
-| **E2** | **Preuve d'injection n°1 : les pièces.** Sur un dossier **jetable** créé par Hermes dans LICIEL, LICIEL fermé, on ajoute 2 pièces dans `Table_General_Pieces_Toutes`. On teste aussi la variante 1 bis (dossier source + « Terrain › Importation »). | LICIEL ouvre le dossier, les pièces apparaissent, on peut enregistrer et rouvrir sans erreur. On sait aussi s'il faut remplir `Pieces_Visites` nous-mêmes. | Accord d'Hermes pour écrire dans un dossier de test (H2). La version d'essai suffit. |
+| **E0** ✅ | Cadrage (ce document) | Questions de la section 4 tranchées | — |
+| **E1** ✅ | **Lecteur/écrivain fidèle** des `Table_*.xml` (paquet Python `diagauto.liciel_xml`), avec tests automatiques, commandes `diagauto inspect` et `diagauto verifier` | **Atteint le 21/10/2026.** Les 296 tables des fixtures (4 DEMO + 5 Eval) et les 1 614 tables présentes sur le poste sont relues puis réécrites **identiques à l'octet près** ; 624 tests pytest passent. | — |
+| **E2** | **Preuve d'injection n°1 : les pièces.** Je génère, dans le dépôt, une version modifiée de `Table_General_Pieces_Toutes` (+ 2 pièces). **Hermes** la pose dans un dossier **jetable**, LICIEL fermé, et vérifie le résultat (H2 : aucune écriture de ma part sous `C:\LICIEL_*`). Variantes à tester par Hermes : 1 bis (« Terrain › Importation ») et 1 ter (import d'un `.LDossier`). | LICIEL ouvre le dossier, les pièces apparaissent, on peut enregistrer et rouvrir sans erreur. On sait aussi s'il faut remplir `Pieces_Visites` nous-mêmes. | Hermes disponible pour le test. La version d'essai suffit. |
 | **E3** | **Cartographie Carrez par saisie contrôlée.** Noah ou Hermes saisit dans LICIEL 4 cas : pièce rectangulaire simple ; pièce en L (2 ajouts) ; comble avec retrait < 1,80 m ; cave/balcon annexe. Comparaison des fichiers avant/après. | Chaque colonne de `Z_Carrez_*` documentée (`Surface_1..4`, `Data1..12`, `Code_Chk_Habitable`). On sait si LICIEL **recalcule** `Resume`/`General` à l'ouverture. | **Licence LICIEL** (N1) |
 | **E4** | **Générateur Carrez** : modèle JSON → 3 tables Carrez (+ pièces), avec tests unitaires des règles | Pour 3 logements réels, le rapport Carrez édité par LICIEL après injection est **identique** à celui obtenu par saisie manuelle (surfaces, commentaires, totaux). | E1 à E3 |
 | **E5** | **Saisie terrain v0 + injecteur.** Page web mobile hors ligne (pièces, mesures, HSP, cases < 1,80 m / annexe, photos), export JSON. Commande `diagauto injecter <n° dossier> <fichier.json>`. | Un diagnostiqueur saisit un logement sur téléphone, puis injecte en moins d'une minute au bureau. | E4, choix du matériel (N4) |
@@ -324,10 +343,15 @@ Chaque étape a un livrable vérifiable. On ne passe à la suivante que si le cr
 
 ### Pour Hermes
 
-- **H1 — Accès.**
-  - Je n'ai qu'un accès en lecture à `C:\LICIEL_Diagnostics`. Pour l'étape E1, je travaillerai sur des **copies** dans le dépôt (`tests/fixtures/`) : OK de copier les 4 dossiers DEMO et quelques dossiers `Eval_DPE_2020` ?
-  - Les dossiers DEMO ne contiennent que des données fictives ; j'en déduis qu'on peut les versionner dans git. Tu confirmes ?
-- **H2 — Écriture de test.** Pour la preuve E2, qui écrit dans le dossier de test : toi, ou moi avec ton autorisation explicite sur **un** dossier jetable précis (pas `2610210001` si tu veux le garder intact) ? Il faut LICIEL fermé et une sauvegarde avant.
+*Réponses reçues le 21/10/2026 :*
+- **H1 = oui** : 4 dossiers DEMO et 5 Eval copiés dans `tests/fixtures/` et versionnés.
+- **H2** : **aucune écriture de ma part sous `C:\LICIEL_*`**. Hermes fera les tests d'écriture lui-même, plus tard, sur un dossier jetable.
+- **H11** : branche `main` ; je commite par petites étapes, Hermes relit.
+- **H3 à H10** seront testées progressivement par Hermes.
+- Cadre juridique confirmé : interopérabilité de nos dossiers uniquement, pas de décompilation, pas de fichiers chiffrés.
+
+- ~~H1 — Accès.~~ Réglée (voir ci-dessus).
+- ~~H2 — Écriture de test.~~ Réglée : c'est Hermes qui écrit.
 - **H3 — « Ré-importer dossiers orphelins » / « Terrain › Importation ».**
   - Peux-tu tester si LICIEL accepte un dossier posé sur disque sans entrée dans la base `.mdb` ?
   - Et si « Importation » d'un dossier source ramène bien les pièces, et éventuellement le Carrez ?
@@ -346,8 +370,13 @@ Chaque étape a un livrable vérifiable. On ne passe à la suivante que si le cr
   - Le modèle Excel « paramétrable » (ligne 1 = noms des champs de la base) est-il disponible dans le wiki ?
 - **H9 — XML ADEME.** Le bouton d'import XML ADEME existe-t-il dans le module DPE, ou seulement dans l'Audit ? Accepte-t-il un XML jamais déposé à l'ADEME ? C'est déterminant pour la stratégie DPE.
 - **H10 — Libellés des pièces.** Le libellé de liaison est « Bâtiment - Local ». Comment LICIEL construit-il ce libellé quand il y a un numéro automatique ou des adjectifs (balises `{0}{1}{2}{3}`) ? Il faut le reproduire à l'identique, sinon le Carrez ne se rattache pas à la pièce.
-- **H11 — Git.** Le dépôt est sur la branche `master`, sans commit, alors que la branche principale annoncée est `main`. On renomme en `main` au premier commit ? Et qui valide les commits ?
+- ~~H11 — Git.~~ Réglée : branche `main`.
+  - Aucune identité git n'était configurée sur le poste. Les commits utilisent une identité **locale au dépôt** (`DiagAuto` + e-mail du compte), à remplacer si besoin par `git config user.name/user.email`.
+- **H12 — Import d'un `.LDossier` (nouveau).**
+  - LICIEL sait-il importer un fichier `.LDossier` (menu d'import de dossier ZIP) ?
+  - Si oui, la mini-base `LICIEL_Dossiers.mdb` contenue dans le ZIP est-elle indispensable, ou la fiche `LICIEL_Dossiers.Donnees_Dossiers.xml` suffit-elle ?
+  - Test proposé : exporter le dossier `2610210001` en `.LDossier`, puis le réimporter sous un autre numéro. Si l'import fonctionne, c'est peut-être la voie d'injection la plus « officielle » sans passerelle payante.
 
 ---
 
-*Prochaine action proposée, dès les réponses à H1/H11 : démarrer E1 (lecteur/écrivain fidèle + tests). Cette étape ne demande ni licence ni écriture dans LICIEL.*
+*Prochaine action proposée : préparer pour Hermes le fichier de test de l'étape E2 (liste des pièces modifiée, générée par `diagauto.liciel_xml`, livrée dans le dépôt et non dans LICIEL) ; en parallèle, attendre la licence (N1) pour E3.*
