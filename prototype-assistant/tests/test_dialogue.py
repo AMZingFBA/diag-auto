@@ -53,9 +53,9 @@ def test_piece_complete_a_4_murs(tmp_path):
     c = session.checklist
     valeurs = {e.id: {champ: v[-1].valeur for champ, v in e.valeurs.items()} for e in c.elements}
     assert valeurs["M1"] == {"donne_sur": "extérieur", "materiau": "brique", "epaisseur": "30 cm", "isolation": "ITI"}
-    assert valeurs["M2"] == {"donne_sur": "local chauffé"}  # paroi non déperditive : rien d'autre demandé
-    assert valeurs["M3"] == {"materiau": "parpaing", "epaisseur": "20 cm", "isolation": "non isolé", "donne_sur": "local non chauffé : garage"}
-    assert valeurs["M4"] == {"donne_sur": "extérieur", "materiau": "brique", "epaisseur": "30 cm", "isolation": VALEUR_INCONNUE}
+    assert valeurs["M2"] == {"materiau": "parpaing", "epaisseur": "20 cm", "isolation": "non isolé", "donne_sur": "local non chauffé : garage"}
+    assert valeurs["M3"] == {"donne_sur": "extérieur", "materiau": "brique", "epaisseur": "30 cm", "isolation": VALEUR_INCONNUE}
+    assert valeurs["M4"] == {"donne_sur": "local chauffé"}  # paroi non déperditive : rien d'autre demandé
     assert valeurs["PL1"] == {"donne_sur": "combles perdus", "isolation": "isolé laine de verre 30 cm"}
     assert valeurs["PB1"] == {"donne_sur": "terre-plein", "isolation": "non isolé"}
     assert c.trouver_element("F1").nombre == 3 and valeurs["F1"] == {"menuiserie": "PVC", "vitrage": "double", "volets": "roulants"}
@@ -85,11 +85,13 @@ def test_mise_en_place_de_la_conversation_comprise_par_les_regles_seules(tmp_pat
     from assistant.evaluer import MISE_EN_PLACE
     session, questions_apres, _ = asyncio.run(visite(tmp_path, MISE_EN_PLACE))
     assert questions_apres == [
-        ["Décrivez le premier mur."], ["Un autre mur dans cette pièce ?"], ["Un autre mur dans cette pièce ?"],
+        # « Un autre mur donne sur le voisin » : mur sur un local chauffé, la question des murs n'est pas reposée.
+        ["Décrivez le premier mur."], ["D'autres murs sur l'extérieur ou un local non chauffé ?"],
+        ["Au-dessus du plafond : combles, terrasse ou logement ?"],
         ["Au-dessus du plafond : combles, terrasse ou logement ?"], ["Sous le plancher : terre-plein, vide sanitaire, cave ou logement ?"],
         ["Les 2 fenêtres : des volets ?"], ["D'autres fenêtres, ou une porte vers l'extérieur ?"], ["Des radiateurs dans cette pièce ?"],
         ["Quel est le chauffage principal ?"], ["Et l'eau chaude, comment est-elle produite ?"], ["Décrivez le premier mur."],
-        ["Un autre mur dans cette pièce ?"]]
+        ["D'autres murs sur l'extérieur ou un local non chauffé ?"]]
     assert "mur" in session.checklist.pieces["sejour"].clos
 
 
@@ -102,7 +104,7 @@ def test_piece_suivante_plafond_pareil_et_plancher_different(tmp_path):
     ]
     session, questions_apres, _ = asyncio.run(visite(tmp_path, echanges))
     assert questions_apres[-4:] == [
-        ["Un autre mur dans cette pièce ?"],
+        ["D'autres murs sur l'extérieur ou un local non chauffé ?"],
         ["Plafond pareil que dans le séjour ?"],
         ["Plancher pareil que dans le séjour ?"],
         ["Des fenêtres dans cette pièce ?"],

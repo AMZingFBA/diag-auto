@@ -25,6 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from .boussole import REGLAGES as REGLAGES_BOUSSOLE
 from .cerveau import CerveauClaudeCode, trouver_claude
 from .reglages import DOSSIER_PROTOTYPE, Reglages
+from .reponses import options_par_champ
 from .session import Session
 from .simulation import CerveauSimulation
 from .transcription import creer_transcripteur
@@ -112,7 +113,9 @@ def creer_app(reglages: Reglages | None = None) -> FastAPI:
         cerveau = (f"Claude Code (abonnement), modèle {reglages.modele}" if gestionnaire.mode_cerveau == "claude"
                    else "simulation (règles simples, sans Claude)")
         return {"cerveau": cerveau, "mode_cerveau": gestionnaire.mode_cerveau, "transcription": gestionnaire.transcripteur.nom,
-                "code_requis": bool(reglages.code), "boussole": REGLAGES_BOUSSOLE}
+                "code_requis": bool(reglages.code), "boussole": REGLAGES_BOUSSOLE,
+                # Réponses en boutons, par information : la fiche de la pièce sur le téléphone (questionnaire en direct).
+                "options": options_par_champ()}
 
     @app.post("/api/sessions/{ident}/video")
     async def recevoir_video(ident: str, request: Request) -> dict:

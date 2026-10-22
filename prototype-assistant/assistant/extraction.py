@@ -358,6 +358,25 @@ _OUI = re.compile(r"^(?:oui|ouais|si|exact|exactement|il y en a|bien sur|tout a 
                   r"|c est (?:bien )?ca|pareil|meme chose|identique)\b")
 _NON = re.compile(r"^(?:non|nan|aucune?|pas du tout|il n y en a pas|y en a pas|c est tout|c est fini|fini|termine|rien"
                   r"|pas d autres?|plus d autres?|il n y (?:en )?a pas d autres?|y (?:en )?a pas d autres?)\b")  # « Pas d'autre mur. »
+# « C'est le même mur ? » : « c'est le même », « même mur », « c'est pareil » valent oui ; « un autre », « pas le
+# même », « différent » valent non (texte normalisé).
+_MEME = re.compile(r"\b(?:c est (?:bien |exactement |tout a fait )?(?:le|la) meme|(?:le |la )?meme (?:mur|fenetre|porte|element|chose)"
+                   r"|c est pareil|c est (?:bien )?(?:lui|elle|celui la|celle la))\b")
+_PAS_MEME = re.compile(r"\b(?:pas (?:le|la) meme|pas pareil|un autre|une autre|differente?s?|c est pas (?:lui|elle|ca))\b")
+
+
+_PLUS_D_AUTRE = re.compile(r"^(?:non\s*,?\s*)?(?:(?:il\s+)?n?\s*y\s+(?:en\s+)?a\s+)?(?:pas|plus)\s+d\s+autres?\s+(murs?|fenetres?)\b"
+                           r"|^c est tout pour les (murs|fenetres)\b")
+
+
+def confirme_meme(texte: str) -> bool:
+    """Le diagnostiqueur confirme-t-il que les deux éléments n'en font qu'un (texte normalisé) ?"""
+    texte = texte.strip(" ,")
+    if _PAS_MEME.search(texte) or _NON.match(texte):
+        return False
+    return bool(_OUI.match(texte) or _MEME.search(texte))
+
+
 # « En tout trois fenêtres, toutes pareilles » : le nombre total d'un élément déjà décrit.
 _TOTAL = re.compile(r"\ben tout\b|\bau total\b|\btoutes? (?:pareilles?|identiques?|les memes)\b|\btous (?:pareils|identiques|les memes)\b")
 _PIECES = {
@@ -927,12 +946,18 @@ def extraire(phrase: str, checklist: Checklist, cible: Cible | None = None) -> E
     texte = normaliser(phrase)
     if not texte.strip(" ,"):
         return resultat
-    if question_posee(phrase):
-        resultat.demande = _demande(texte)  # « il te faut quoi d'autre ? » : le serveur sait y répondre
-        return resultat
 
     def action(outil: str, **donnees) -> None:
         resultat.actions.append({"outil": outil, "citation": phrase, **donnees})
+
+    if cible and cible.genre == "doublon" and confirme_meme(texte):
+        # « Je viens de dire que c'est le même mur ? » : une confirmation, même transcrite avec un point d'interrogation
+        # (test de Noah du 22/10 après-midi).
+        action("fusionner", element_id=cible.element_id, meme_que=cible.source)
+        return resultat
+    if question_posee(phrase):
+        resultat.demande = _demande(texte)  # « il te faut quoi d'autre ? » : le serveur sait y répondre
+        return resultat
 
     piece = _PIECE.search(texte) or (_NOM_PIECE.search(texte) if cible and cible.genre == "piece" else None)
     if piece:
@@ -941,8 +966,16 @@ def extraire(phrase: str, checklist: Checklist, cible: Cible | None = None) -> E
     elif cible and cible.genre == "piece" and cible.champ == "proposee" and _OUI.match(texte.strip(" ,")):
         action("piece_courante", nom=cible.source)  # « On est dans la cuisine ? » « Oui. »
         return resultat
-    elif cible and cible.genre == "doublon" and _OUI.match(texte.strip(" ,")):
-        action("fusionner", element_id=cible.element_id, meme_que=cible.source)  # « C'est le même mur ? » « Oui. »
+    elif ((m := _PLUS_D_AUTRE.match(texte.strip(" ,"))) and not (cible and cible.genre == "suite")
+          and not _valeurs(type_clos := ("mur" if (m.group(1) or m.group(2)).startswith("mur") else "fenetre"), texte)):
+        # « Pas d'autre mur. » dit à tout moment : « D'autres murs… ? » n'est plus reposé après chaque mur (test de Noah du
+        # 22/10 après-midi), le diagnostiqueur clôt lui-même la liste.
+        action("cloturer", type=type_clos)
+        return resultat
+    elif cible and cible.genre == "doublon" and confirme_meme(texte):
+        # « C'est le même mur ? » « Oui. » ; ou, test de Noah du 22/10 après-midi : « c'est bien extérieur, c'est le même
+        # mur » (la réponse ne commençait pas par « oui » : les deux murs étaient restés, et les questions doublées).
+        action("fusionner", element_id=cible.element_id, meme_que=cible.source)
         return resultat
     courante = _PIECES[piece.group(1)] if piece else checklist.nom_piece(checklist.piece_courante) if checklist.piece_courante else ""
     if courante and not re.search(r"\b(?:sauf|excepte|a part|hormis)\b", texte):  # « sauf celle de la chambre » : une exception

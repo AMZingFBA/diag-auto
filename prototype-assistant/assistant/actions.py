@@ -7,8 +7,24 @@ appliquée.
 
 from __future__ import annotations
 
+import re
+
 from .checklist import Checklist, ErreurChecklist, cle_texte
 from .citations import citation_trouvee
+
+# « C'est la première pièce » : Claude l'avait appelée « U » (test de Noah du 22/10 après-midi : « la pièce U »).
+_PREMIERE_PIECE = re.compile(r"^(?:la\s+)?(?:pi[eè]ce\s+)?(?:u|un|une|1|premi[eè]re)(?:\s+pi[eè]ce)?$", re.IGNORECASE)
+
+
+def _nom_piece(checklist: Checklist, nom: str) -> str:
+    """Un vrai nom de pièce : « U », « une », « première pièce » → « Pièce 1 » ; une ou deux lettres (sauf WC) →
+    « Pièce n »."""
+    nom = " ".join(nom.split())
+    if _PREMIERE_PIECE.match(nom):
+        return "Pièce 1"
+    if len(nom.replace(" ", "")) <= 2 and nom.upper() != "WC":
+        return f"Pièce {len(checklist.pieces) + 1}"
+    return nom
 
 
 def _texte(action: dict, cle: str) -> str:
@@ -56,7 +72,7 @@ def appliquer_action(checklist: Checklist, action: dict, t: float, phrases: list
             raise ErreurChecklist("citation introuvable dans ce qui a été dit")
         if outil == "piece_courante":
             confirme = bool(citation) and citation_trouvee(citation, phrases)
-            checklist.definir_piece(_texte(action, "nom"), t, citation if confirme else "")
+            checklist.definir_piece(_nom_piece(checklist, _texte(action, "nom")), t, citation if confirme else "")
             if not confirme:
                 resultat["raison"] = "pièce déduite de l'image, à confirmer"
         elif outil == "signaler_element":

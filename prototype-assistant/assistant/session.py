@@ -24,12 +24,14 @@ from typing import Awaitable, Callable
 
 from . import parcours, plausibilite
 from .actions import appliquer
+from .citations import citation_trouvee
 from .cerveau import Contexte, Decision, ImageInstant, phrases_finies
 from .checklist import ORIENTABLES, TOUJOURS_PRESENTS, Checklist, Element, cle_texte, horodatage
-from .extraction import VOCABULAIRE, Cible, extraire, normaliser, question_posee, valeur_normalisee
+from .extraction import VOCABULAIRE, Cible, confirme_meme, extraire, normaliser, question_posee, valeur_normalisee
 from .boussole import MEME_COTE, Boussole, Mesure, ecart
 from .decor import Decor
 from .repetition import mots_repetes, reformulation
+from .reponses import options_pour, suspecte
 from .garde import Questions, champ_rempli, demande_de_repeter, nom_abstrait
 from .simulation import CerveauSimulation
 from .reglages import Reglages
@@ -55,9 +57,12 @@ _SUSPENDUS = {"est", "fait", "de", "du", "des", "la", "le", "les", "et", "en", "
 
 def valeurs_attendues(cible: Cible | None) -> list[str]:
     """Les réponses possibles à la dernière question, pour que Claude interprète une transcription
-    fautive par rapport à elles (« Oh ! est chaude » à « à eau ou électrique ? » = eau chaude)."""
+    fautive par rapport à elles (« Oh ! est chaude » à « à eau ou électrique ? » = eau chaude), et pour la réécoute
+    d'une réponse courte par Whisper (« Ventilation : VMC ou naturelle ? » : les types de ventilation, pas oui / non)."""
     if cible is None or cible.genre == "piece":
         return []
+    if cible.genre == "presence" and cible.type in ("emetteur", "chauffage", "ecs", "ventilation"):
+        return list(dict.fromkeys(o["valeur"] for o in options_pour(cible) if o["valeur"] not in ("non", "inconnu"))) + ["non"]
     if cible.genre in ("presence", "suite", "pareil"):
         return ["oui", "non"]
     if cible.genre == "orientation":
@@ -197,6 +202,7 @@ class Session:
         # Étape 8 : parole confirmée, réponse coupée à redire après un bruit, élément en cours de description.
         self._parole_confirmee = False
         self._dernier_bruit = -1  # numéro de la dernière prise de parole qui n'était qu'un bruit
+        self._paroles_reelles = -1  # numéro de la dernière prise de parole qui était une vraie phrase
         self._interrompue: dict | None = None
         self._en_cours: tuple[str, float] | None = None
         self._t_question = 0.0
@@ -402,6 +408,8 @@ class Session:
             # Phrase écrite dans la page (tests sans micro, ou sans transcription).
             self._paroles += 1
             await self._file.put(("texte", str(message["texte"]).strip(), time.monotonic(), self._paroles))
+        elif genre == "reponse":
+            await self.recevoir_reponse(message)
         elif genre == "tts":
             self.vad.ia_parle = message.get("etat") == "debut"
             if message.get("etat") == "debut" and isinstance(message.get("id"), int):
@@ -456,13 +464,26 @@ class Session:
             t_debut, t_fin, son = phrase.t_debut, phrase.t_fin, phrase.audio
         else:
             texte, t_debut, t_fin, duree = donnee, self.t_video, self.t_video, 0.0
+        reecoute = ""
+        if (son is not None and texte and re.search(r"\w", texte) and hasattr(self.transcripteur, "second_avis")
+                and (suspecte(texte) or self._reponse_courte_incomprise(texte))):
+            # Test de Noah du 22/10 après-midi : « A. », « F. », « Il ré. » étaient des bruits (téléphone manipulé), pris
+            # pour des réponses incomprises (question reposée, réponse coupée) ; « Vaime s. », « Na. » étaient « VMC » et
+            # « non », mal transcrits. Une phrase courte sans mot connu est réécoutée par Whisper.
+            debut = time.perf_counter()
+            avant = texte
+            texte, reecoute = await self._reecouter(texte, son)
+            duree += time.perf_counter() - debut
+            self.journaliser("reecoute", rapide=avant, retenu=texte, raison=reecoute, duree_s=round(time.perf_counter() - debut, 3))
         if not texte or not re.search(r"\w", texte):
             # Rien de dit (« . » : un bruit). Étape 8 : plus d'appel à Claude ni à Whisper pour ça ; et si ce bruit a coupé
             # la réponse de l'assistant, elle est redite.
-            self.journaliser("phrase_vide", t_phrase=round(t_fin, 2), transcription_s=round(duree, 3), texte=texte)
+            self.journaliser("phrase_vide", t_phrase=round(t_fin, 2), transcription_s=round(duree, 3), texte=texte,
+                             **({"raison": reecoute} if reecoute else {}))
             self._dernier_bruit = paroles
             await self._reprendre()
             return
+        self._paroles_reelles = max(self._paroles_reelles, paroles)
         ligne = f"[{horodatage(t_fin)}] Diagnostiqueur : « {texte} »"
         self.phrases.append((t_debut, t_fin, texte))
         self.dialogue.append(ligne)
@@ -569,6 +590,9 @@ class Session:
         contexte.deja_note = self._deja_note(resultats)
         if self._cible and champ_rempli(self._cible, self.checklist):
             self._cible = None  # la dernière question a eu sa réponse
+        elif (self._cible is not None and self._cible.genre == "suite"
+              and any(r["statut"] == "accepte" and r["action"].get("type") == self._cible.type for r in resultats)):
+            self._cible = None  # « D'autres murs… ? » « Oui, celui-ci… » : répondu par le mur décrit, pas à reposer
         # Question restée sans réponse alors que la phrase a été comprise (une correction, un autre élément) : elle
         # pourra être reposée une fois, après la prise en compte de ce qui vient d'être dit.
         en_attente = self._derniere_cle if self._cible is not None and self._cible.genre != "confirmation" else ""
@@ -804,6 +828,15 @@ class Session:
         actions = [{**a, "note": a.get("note") or "interprété par Claude, à vérifier"}
                    if a.get("certitude") == "probable" and a.get("outil") == "enregistrer_reponse" else a for a in actions]
         probables: list[dict] = []
+        if self.checklist.piece_courante and self.checklist.manques_piece():
+            # Pièce reconnue sur l'image par Claude (rien n'a été dit) alors que la pièce en cours n'est pas finie : on ne
+            # change pas de pièce (test de Noah du 22/10 après-midi : il a dû revenir finir la première pièce).
+            dites = self._phrases_recentes(contexte)
+            reportees = [a for a in actions if a.get("outil") == "piece_courante"
+                         and not citation_trouvee(str(a.get("citation") or ""), dites)]
+            if reportees:
+                actions = [a for a in actions if a not in reportees]
+                self.journaliser("piece_proposee_reportee", noms=[str(a.get("nom") or "") for a in reportees])
         actions, invraisemblables, ecartees = plausibilite.filtrer(_normaliser(actions))
         signales = len(self.checklist.signalements)
         resultats = appliquer(self.checklist, actions, contexte.t, self._phrases_recentes(contexte))
@@ -818,6 +851,14 @@ class Session:
             # Dans le doute, l'élément reste et on lui demande, brièvement (étape 9). La preuve (même repère, même
             # orientation, même description) est notée au journal ; sans elle, rien n'est jamais affirmé.
             if self._doublon_possible(ident, meme):
+                if confirme_meme(normaliser(contexte.phrase)):
+                    # Il vient de dire que c'est le même (test de Noah du 22/10 après-midi : Claude reproposait le doublon et
+                    # la question repartait) : réunis tout de suite.
+                    fusion = appliquer(self.checklist, [{"outil": "fusionner", "element_id": ident, "meme_que": meme,
+                                                         "citation": contexte.phrase}], contexte.t, [contexte.phrase])
+                    resultats += fusion
+                    commandes.append(f"fusion {ident}={meme} (confirmée : « {contexte.phrase[:60]} »)")
+                    break
                 self._doublon_propose = (ident, meme)
                 commandes.append(f"doublon {ident}={meme} ({self._preuve_doublon(ident, meme) or 'sans preuve : demandé'})")
                 break
@@ -862,11 +903,53 @@ class Session:
             await self._envoyer({"type": "erreur", "message": f"Assistant : {decision.erreur}"})
         await self.envoyer_etat()
 
+    async def _reecouter(self, texte: str, son) -> tuple[str, str]:
+        """Phrase courte douteuse réécoutée par Whisper : (texte retenu, raison). Texte vide : c'était un bruit."""
+        whisper = await asyncio.to_thread(self.transcripteur.second_avis, son)
+        if not whisper:
+            return "", "bruit : Whisper n'entend pas de parole"
+        if self._reponse_reconnue(whisper):
+            return whisper, "réponse reconnue par Whisper"
+        attendues = valeurs_attendues(self._cible)
+        if attendues and hasattr(self.transcripteur, "reecoute_guidee"):
+            guide = await asyncio.to_thread(self.transcripteur.reecoute_guidee, son, attendues)
+            if guide and self._reponse_reconnue(guide):
+                return guide, "réponse attendue reconnue par Whisper guidé"
+        if not suspecte(whisper):
+            return (whisper if suspecte(texte) else texte), "phrase confirmée par Whisper"
+        return "", f"bruit : Whisper n'entend rien de clair (« {whisper} »)"
+
+    def _reponse_courte_incomprise(self, texte: str) -> bool:
+        """Réponse de trois mots au plus, à une question qui attend des réponses précises (VMC, PVC…), que les règles ne
+        comprennent pas : « V'aime ça. » pour « VMC » (rejeu du test de Noah du 22/10 après-midi). Elle est réécoutée
+        plutôt que de faire reposer la question."""
+        if "?" in texte or len(re.findall(r"\w+", texte)) > 3:
+            return False
+        attendues = [v for v in valeurs_attendues(self._cible) if v not in ("oui", "non")]
+        return bool(attendues) and not self._reponse_reconnue(texte)
+
+    def _reponse_reconnue(self, texte: str) -> bool:
+        """Les règles comprennent-elles ce texte comme une réponse (à la question posée, ou une valeur) ? Une réponse qui
+        donne plusieurs valeurs différentes au même champ est écartée : Whisper a recopié la liste des réponses."""
+        try:
+            extraction = extraire(texte, self.checklist, self._cible)
+        except Exception:
+            return False
+        valeurs = {}
+        for action in extraction.actions:
+            cle = (action.get("element_id"), action.get("type"), action.get("champ"))
+            if action.get("outil") == "enregistrer_reponse" and cle in valeurs and valeurs[cle] != action.get("valeur"):
+                return False
+            valeurs[cle] = action.get("valeur")
+        return bool(extraction.actions)
+
     async def _reprendre(self) -> None:
         """La réponse coupée par un bruit (pris pour une prise de parole, puis transcrit vide) est redite : il n'avait rien
-        dit (étape 8). Rien n'est redit s'il a vraiment parlé depuis, ou si une phrase attend d'être traitée."""
+        dit (étape 8). Rien n'est redit s'il a vraiment parlé depuis, ou si une phrase attend d'être traitée. Test de Noah du
+        22/10 après-midi : deux bruits de suite (téléphone manipulé) empêchaient la reprise, d'où 30 s de silence ; seule
+        compte maintenant une vraie phrase dite depuis la coupure."""
         interrompue = self._interrompue
-        if (interrompue is None or self._dernier_bruit != interrompue["paroles"] or self._paroles != interrompue["paroles"]
+        if (interrompue is None or self._paroles_reelles >= interrompue["paroles"]
                 or self._en_parole or not self._file.empty() or not self._file_textes.empty() or not self._file_claude.empty()):
             return
         self._interrompue = None
@@ -1420,8 +1503,57 @@ class Session:
         latence = round(maintenant - reference, 2) if mesure is not None else None
         image = self._vignette(cible)
         self.journaliser("dire", id=self._compteur_dire, texte=texte, cible=cible.code if cible else "", muet=self.muet, latence_s=latence)
-        await self._envoyer({"type": "dire", "id": self._compteur_dire, "texte": texte, "muet": self.muet, "latence_s": latence,
-                             "image": image, "suite": suite})
+        message = {"type": "dire", "id": self._compteur_dire, "texte": texte, "muet": self.muet, "latence_s": latence,
+                   "image": image, "suite": suite}
+        if cible is not None and question and not forcer:
+            # Questionnaire en direct : la question arrive sur le téléphone avec ses réponses en boutons.
+            message.update(cible=cible.code, options=options_pour(cible))
+        await self._envoyer(message)
+
+    async def recevoir_reponse(self, message: dict) -> None:
+        """Réponse cochée sur le téléphone (bouton de la question en cours, ou fiche de la pièce) : appliquée tout de suite
+        comme une réponse dite, puis la question suivante du parcours part aussitôt (sans attendre Claude)."""
+        valeur = " ".join(str(message.get("valeur") or "").split())
+        libelle = " ".join(str(message.get("libelle") or valeur).split())
+        if not valeur:
+            return
+        if message.get("element") and message.get("champ"):
+            try:
+                element = self.checklist.trouver_element(str(message["element"]))
+            except ValueError:
+                return
+            cible = Cible("champ", element.type, str(message["champ"]), element.id)
+        else:
+            cible = Cible.depuis_code(str(message.get("cible") or ""), self.checklist)
+        if cible is None:
+            return
+        reference = time.monotonic()
+        t = self.t_video
+        citation = f"coché sur le téléphone : {libelle}"
+        self._interrompue = None  # la question coupée a eu sa réponse : rien à redire
+        if cible.genre in ("champ", "secondaire") and cible.element_id:
+            actions = [{"outil": "enregistrer_reponse", "element_id": cible.element_id, "type": cible.type, "champ": cible.champ,
+                        "valeur": valeur, "citation": citation}]
+            resultats = appliquer(self.checklist, actions, t, [citation])
+        else:
+            # Oui / non, pièce, réponse à « Quel est le chauffage principal ? » : le mot coché, compris par les règles comme
+            # s'il avait été dit en réponse à cette question.
+            extraction = extraire(valeur, self.checklist, cible)
+            resultats = appliquer(self.checklist, extraction.actions, t, [valeur])
+        self._suivre(resultats)
+        self.journaliser("reponse_cochee", cible=cible.code, valeur=valeur, libelle=libelle,
+                         resultats=[{"outil": r["action"].get("outil"), "statut": r["statut"], "element": r.get("element"),
+                                     "raison": r["raison"]} for r in resultats])
+        self.dialogue.append(f"[{horodatage(t)}] Diagnostiqueur (coché sur le téléphone) : « {libelle} »")
+        await self._envoyer_actions(resultats, "telephone")
+        await self.envoyer_etat()
+        if not any(r["statut"] == "accepte" for r in resultats) and not (
+                valeur == "non" and cible.genre in ("piece", "doublon", "confirmation")):
+            return  # « Non » à « On est dans la cuisine ? » ou à « C'est le même mur ? » : rien à noter, mais répondu
+        en_cours = self._cible
+        if en_cours is None or en_cours.code == cible.code or champ_rempli(en_cours, self.checklist):
+            self._cible = None
+            await self._question_du_parcours(reference, None)
 
     def _vignette(self, cible: Cible | None) -> str | None:
         """Adresse de l'image de l'élément dont parle la question, pour que le diagnostiqueur sache lequel c'est."""

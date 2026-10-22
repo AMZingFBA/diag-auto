@@ -386,11 +386,11 @@ def test_au_moins_15_scenarios_d_exceptions():
 def test_dialogue_qui_s_adapte(tmp_path):
     echanges = [
         ("Ici c'est le séjour.", "Décrivez le premier mur."),
-        ("Ce mur donne dehors, brique 30 cm, isolé par l'intérieur.", "Un autre mur dans cette pièce ?"),
-        ("Oui, celui-ci donne sur une pièce chauffée.", "Un autre mur dans cette pièce ?"),
+        ("Ce mur donne dehors, brique 30 cm, isolé par l'intérieur.", "D'autres murs sur l'extérieur ou un local non chauffé ?"),
+        # Mur sur une pièce chauffée : rien d'autre à demander, et pas de nouvelle question sur les murs.
+        ("Oui, celui-ci donne sur une pièce chauffée.", "Au-dessus du plafond : combles, terrasse ou logement ?"),
         # Correction tardive : gardée, signalée, puis la question restée en attente est reposée.
-        ("Le premier mur, en fait c'est du béton.", "Je remplace brique. Un autre mur dans cette pièce ?"),
-        ("Non, c'est tout.", "Au-dessus du plafond : combles, terrasse ou logement ?"),
+        ("Le premier mur, en fait c'est du béton.", "Je remplace brique. Au-dessus du plafond : combles, terrasse ou logement ?"),
         ("Logement au-dessus.", "Sous le plancher : terre-plein, vide sanitaire, cave ou logement ?"),
         ("Logement en dessous.", "Des fenêtres dans cette pièce ?"),
         ("Oui, trois, double vitrage.", "Les 3 fenêtres : PVC, bois ou alu ?"),

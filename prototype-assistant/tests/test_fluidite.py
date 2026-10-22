@@ -247,7 +247,9 @@ def test_changement_de_piece_dit_autrement(tmp_path):
     assert session.checklist.piece_courante == "cuisine"
 
 
-def test_piece_reconnue_sur_les_images_demandee_puis_confirmee(tmp_path):
+def test_piece_reconnue_sur_les_images_pas_proposee_tant_que_la_piece_n_est_pas_finie(tmp_path):
+    # Test de Noah du 22/10 après-midi : « On est dans la cuisine ? » d'après l'image, alors que la première pièce n'était
+    # pas finie ; il a fallu y revenir. Plus de proposition avant la fin de la pièce (il peut toujours le dire lui-même).
     veille = CerveauScenario(lambda contexte: ("", "", [{"outil": "piece_courante", "nom": "Cuisine", "citation": ""}]))
     cerveau = CerveauScenario(poli(defaut=""))
 
@@ -257,6 +259,28 @@ def test_piece_reconnue_sur_les_images_demandee_puis_confirmee(tmp_path):
         await attendre(session)
         debut = len(recus)
         await session._veiller()  # il filme sans parler : Claude reconnaît une cuisine
+        question = dits(recus[debut:])
+        await session.terminer()
+        return session, question
+
+    session, question = asyncio.run(scenario())
+    assert question == [] and session.checklist.piece_courante == "sejour"
+
+
+def test_piece_reconnue_sur_les_images_demandee_puis_confirmee_une_fois_la_piece_finie(tmp_path):
+    from assistant.evaluer import PIECE_A_4_MURS
+
+    veille = CerveauScenario(lambda contexte: ("", "", [{"outil": "piece_courante", "nom": "Cuisine", "citation": ""}]))
+    cerveau = CerveauScenario(poli(defaut=""))
+
+    async def scenario():
+        session, recus = await ouvrir(tmp_path, cerveau, cerveau_veille=veille)
+        for phrase, _ in PIECE_A_4_MURS[:-2]:  # le séjour décrit en entier
+            await parler(session, phrase)
+            await attendre(session)
+        assert not session.checklist.manques_piece()
+        debut = len(recus)
+        await session._veiller()
         question = dits(recus[debut:])
         assert session.checklist.piece_courante == "sejour"  # pas décidé par l'image seule
         await parler(session, "Oui.")

@@ -9,6 +9,7 @@ import re
 
 from .checklist import TOUJOURS_PRESENTS, TYPES, Checklist, ErreurChecklist, cle_texte
 from .extraction import Cible
+from .parcours import cle_suite
 
 DELAI_REDEMANDE_S = 120.0
 # « Le mur 3 », « le quatrième mur » : le diagnostiqueur ne sait pas lequel c'est (test réel de Noah, étape 5).
@@ -78,11 +79,19 @@ class Questions:
         self._reposees: set[str] = set()
 
     @staticmethod
-    def _cle(texte: str, cible: Cible | None, piece: str | None) -> str:
+    def _cle(texte: str, cible: Cible | None, piece: str | None, checklist: Checklist | None = None) -> str:
+        """Clé d'une question de Claude : la même que celle du parcours pour la même question, pour qu'elle ne revienne
+        pas sous une autre forme."""
         if cible is None:
             return "texte:" + cle_texte(texte)
         if cible.genre == "presence" and TYPES[cible.type].niveau == "piece":
             return f"{cible.code}@{piece}"
+        if cible.genre == "suite" and checklist is not None and cible.type in ("mur", "fenetre"):
+            return cle_suite(checklist, cible.type)
+        if cible.genre == "pareil":
+            return f"pareil:{cible.type}@{piece}"
+        if cible.genre == "piece" and cible.champ == "suivante":
+            return f"piece:suivante@{piece}"
         return cible.code
 
     def recentes(self, maintenant: float, piece: str | None = None) -> list[str]:
@@ -121,9 +130,15 @@ class Questions:
         if "?" in texte:
             texte = texte[: texte.index("?") + 1]  # une seule question : ce qui suit le premier « ? » est coupé
         cible = Cible.depuis_code(code_cible, checklist) if code_cible else None
-        cle = cle or self._cle(texte, cible, checklist.piece_courante)
+        cle = cle or self._cle(texte, cible, checklist.piece_courante, checklist)
         if cible and champ_rempli(cible, checklist):
             return "", cible, f"{cible.code} déjà renseigné", cle
+        if (cible and cible.genre == "piece" and cible.champ == "proposee" and checklist.piece_courante
+                and checklist.manques_piece()):
+            # Test de Noah du 22/10 après-midi : « On est dans la cuisine ? » d'après l'image, alors que la pièce en cours
+            # n'était pas finie ; il a fallu y revenir. On ne propose plus de changer de pièce avant ; lui peut toujours
+            # le dire (« on passe dans la cuisine »).
+            return "", cible, "pièce en cours pas finie : changement de pièce non proposé", cle
         if reposer and cle == reposer and cle not in self._reposees:
             if not a_blanc:  # à blanc : la question suivante proposée à Claude, pas encore posée
                 self._reposees.add(cle)

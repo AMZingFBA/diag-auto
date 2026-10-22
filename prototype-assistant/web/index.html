@@ -55,6 +55,8 @@
         <img id="vignette" class="vignette" alt="Élément concerné par la question" hidden>
         <div id="question" class="question" hidden></div>
       </div>
+      <!-- Questionnaire en direct : les réponses de la question posée, à cocher au lieu de les dire. -->
+      <div id="choix" class="choix" hidden></div>
       <div id="latence" class="latence"></div>
       <div id="vous" class="vous"></div>
       <details id="manques-bloc" class="manques">
@@ -71,10 +73,16 @@
         <p id="infos" class="petit"></p>
       </details>
       <div class="boutons">
+        <button id="voir-fiche">📋 Fiche</button>
         <button id="silence">🔈 Assistant actif</button>
         <button id="terminer" class="danger">Terminer</button>
       </div>
     </div>
+    <!-- Fiche de la pièce : chaque information, à compléter ou corriger d'un appui (en même temps qu'à l'oral). -->
+    <section id="fiche" class="fiche" hidden>
+      <header class="fiche-titre"><span id="fiche-piece">Pièce</span><button id="fermer-fiche" class="petit-bouton">Fermer</button></header>
+      <div id="fiche-contenu"></div>
+    </section>
   </section>
 
   <!-- Fin de visite -->

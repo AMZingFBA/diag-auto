@@ -118,6 +118,24 @@ class TranscripteurWhisper:
             return ""
         return corriger(texte)
 
+    def transcrire_guide(self, audio: np.ndarray, attendues: list[str]) -> str:
+        """Réécoute d'une réponse courte, en donnant à Whisper les réponses attendues à la question posée (« VMC,
+        naturelle ») : il retrouve « VMC » là où la transcription rapide entendait « Vaime s. ». Sur un bruit, Whisper
+        recopie souvent cette liste : une réponse qui en contient plusieurs est écartée."""
+        indices = ", ".join(attendues[:12])
+        with self._verrou:
+            segments, _ = self._charger().transcribe(
+                audio, language="fr", beam_size=self.faisceau, initial_prompt=f"Réponses possibles : {indices}.",
+                condition_on_previous_text=False, without_timestamps=True, vad_filter=False, temperature=0.0,
+                no_repeat_ngram_size=3, max_new_tokens=int(len(audio) / 16_000 * 8) + 8,
+            )
+            segments = list(segments)
+            texte = " ".join(s.text.strip() for s in segments)
+        if est_hallucination(texte) or (segments and max(s.no_speech_prob for s in segments) >= SEUIL_SANS_PAROLE
+                                        and min(s.avg_logprob for s in segments) <= SEUIL_CONFIANCE):
+            return ""
+        return corriger(texte)
+
 
 class TranscripteurFastConformer:
     """Option : FastConformer français de NVIDIA (CC-BY-4.0, mention de la source requise), version ONNX
@@ -182,6 +200,10 @@ class TranscripteurRapide:
     def second_avis(self, audio: np.ndarray) -> str:
         """Transcription Whisper (vocabulaire métier) ; chaîne vide si ce n'était probablement pas de la parole."""
         return self.whisper.transcrire(audio)
+
+    def reecoute_guidee(self, audio: np.ndarray, attendues: list[str]) -> str:
+        """Whisper guidé par les réponses attendues à la question posée (voir TranscripteurWhisper.transcrire_guide)."""
+        return self.whisper.transcrire_guide(audio, attendues)
 
 
 def creer_transcripteur(mode: str, modele: str, appareil: str, faisceau: int):

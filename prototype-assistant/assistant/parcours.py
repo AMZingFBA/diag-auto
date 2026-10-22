@@ -2,7 +2,8 @@
 attendre Claude (retour de Noah, étape 2 du 22/10/2026).
 
 Dans chaque pièce :
-1. les murs un par un (« donne sur » d'abord), puis « Un autre mur dans cette pièce ? » jusqu'au non ; si la
+1. les murs un par un (« donne sur » d'abord), puis « D'autres murs sur l'extérieur ou un local non chauffé ? »,
+   une fois, et de nouveau seulement après un tel mur ajouté (test de Noah du 22/10 après-midi) ; si la
    boussole est absente ou perturbée, l'orientation d'un mur extérieur est demandée une fois (étape 6) ;
 2. le plafond, puis le plancher (« pareil que la pièce précédente ? » s'ils y sont connus) ;
 3. les fenêtres et portes restantes, puis « D'autres fenêtres, ou une porte vers l'extérieur ? » ;
@@ -123,7 +124,9 @@ QUESTIONS_PRESENCE = {
     "ventilation": "Ventilation : VMC ou naturelle ?",
 }
 QUESTIONS_SUITE = {
-    "mur": "Un autre mur dans cette pièce ?",
+    # Test de Noah du 22/10 après-midi : « Un autre mur dans cette pièce ? » posé 10 fois. Pour le DPE, seuls comptent les
+    # murs qui donnent dehors ou sur un local non chauffé : la question les vise, une fois par pièce.
+    "mur": "D'autres murs sur l'extérieur ou un local non chauffé ?",
     "fenetre": "D'autres fenêtres, ou une porte vers l'extérieur ?",
 }
 # Date et température des radiateurs : jamais demandées (Noah, étape 4), mais notées dès qu'elles sont dites.
@@ -155,6 +158,23 @@ def _source_pareil(checklist: Checklist, type_element: str) -> str | None:
     return None
 
 
+def cle_suite(checklist: Checklist, type_element: str) -> str:
+    """Clé de « D'autres murs… ? » / « D'autres fenêtres… ? » dans la pièce en cours : la même pour le parcours et pour
+    les questions de Claude (test de Noah du 22/10 après-midi : Claude reposait « Un autre mur ? » sous une autre clé,
+    10 fois). Elle ne change, et la question ne peut revenir, qu'avec un nouveau mur dehors ou sur un local non chauffé
+    (ou une fenêtre de plus)."""
+    piece_cle = checklist.piece_courante
+    elements = checklist.elements_de(piece_cle)
+    if type_element == "mur":
+        murs = [e for e in elements if e.type == "mur"]
+        piece = checklist.pieces.get(piece_cle) if piece_cle else None
+        reste = int(piece.nombre_murs.valeur) - sum(m.nombre for m in murs) if piece and piece.nombre_murs else 0
+        compte = sum(m.nombre for m in murs if not m.sur_local_chauffe) if reste <= 0 else len(murs)
+    else:
+        compte = len([e for e in elements if e.type in ("fenetre", "porte")])
+    return f"suite:{type_element}@{piece_cle}#{compte}"
+
+
 def questions(checklist: Checklist, dernier_id: str | None = None) -> Iterator[QuestionPlan]:
     """Les questions possibles, dans l'ordre du parcours."""
     piece_cle = checklist.piece_courante
@@ -184,7 +204,9 @@ def questions(checklist: Checklist, dernier_id: str | None = None) -> Iterator[Q
         reste = int(piece.nombre_murs.valeur) - sum(m.nombre for m in murs) if piece.nombre_murs else 0
         texte = (QUESTIONS_SUITE["mur"] if reste <= 0 else "Il reste un mur : il donne sur quoi ?" if reste == 1
                  else f"Il reste {reste} murs : le suivant donne sur quoi ?")
-        yield QuestionPlan("suite:mur", texte, f"suite:mur@{piece_cle}#{len(murs)}")
+        # Reposée seulement après un nouveau mur qui donne dehors ou sur un local non chauffé (pas après un mur sur un
+        # voisin ou une pièce chauffée).
+        yield QuestionPlan("suite:mur", texte, cle_suite(checklist, "mur"))
 
     # 2-3. Plafond puis plancher, avec « pareil que la pièce précédente ? » s'ils y sont connus.
     for type_element in ("plafond", "plancher"):
@@ -203,7 +225,7 @@ def questions(checklist: Checklist, dernier_id: str | None = None) -> Iterator[Q
         yield QuestionPlan("presence:fenetre", QUESTIONS_PRESENCE["fenetre"], f"presence:fenetre@{piece_cle}")
     yield from _champs(checklist, fenetres + portes, dernier_id, separes)
     if fenetres and "fenetre" not in piece.clos and not any(e.champs_manquants() for e in fenetres + portes):
-        yield QuestionPlan("suite:fenetre", QUESTIONS_SUITE["fenetre"], f"suite:fenetre@{piece_cle}#{len(fenetres) + len(portes)}")
+        yield QuestionPlan("suite:fenetre", QUESTIONS_SUITE["fenetre"], cle_suite(checklist, "fenetre"))
 
     # 5. Émetteurs de chauffage (le type seulement ; le reste est secondaire).
     emetteurs = du_type("emetteur")

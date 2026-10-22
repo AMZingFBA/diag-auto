@@ -28,6 +28,9 @@ const etat = {
   // Relevé continu de la boussole et du gyroscope (20 par seconde), envoyé avec la vidéo en fin de visite (étape 12) :
   // le serveur s'en sert pour savoir quel mur est filmé à chaque instant.
   capteursContinus: [],
+  // Questionnaire en direct : réponses en boutons de la question posée, fiche de la pièce (dernier état reçu).
+  options: {}, // « type.champ » → réponses en boutons (reçues avec le statut du serveur)
+  dernierEtat: null,
   minuteries: [],
   muet: false,
   termine: false,
@@ -61,6 +64,7 @@ async function chargerStatut() {
     $("statut-serveur").textContent = `Serveur prêt. Cerveau : ${s.cerveau}. Transcription : ${s.transcription}.`;
     $("ligne-code").hidden = !s.code_requis;
     if (s.boussole) etat.reglagesBoussole = s.boussole;
+    if (s.options) etat.options = s.options;
   } catch {
     serveurInjoignable($("statut-serveur"));
   }
@@ -208,6 +212,7 @@ function recevoir(m) {
   switch (m.type) {
     case "statut":
       etat.session = m.session;
+      if (m.options) etat.options = m.options;
       alerte("");
       $("infos").textContent = `Visite ${m.session}${m.reprise ? " (reprise)" : ""} — cerveau : ${m.cerveau} — transcription : ${m.transcription}`;
       break;
@@ -228,6 +233,7 @@ function recevoir(m) {
       $("question").classList.toggle("muet", m.muet || etat.muet);
       $("question").hidden = false;
       if (!m.suite) $("latence").textContent = m.latence_s != null ? `Réponse ${secondes(m.latence_s)} après la fin de votre phrase` : "";
+      if (m.cible !== undefined) afficherChoix(m.cible, m.options || []);
       if (!m.muet && !etat.muet) parler(m.texte, m.id, m.suite);
       break;
     case "bip":
@@ -237,6 +243,8 @@ function recevoir(m) {
       break;
     case "etat":
       majEtat(m);
+      etat.dernierEtat = m;
+      if (!$("fiche").hidden) afficherFiche();
       break;
     case "actions":
       majActions(m.resultats);
@@ -257,6 +265,63 @@ function majEtat(m) {
   const liste = $("manques");
   liste.replaceChildren(...m.manques.map((texte) => Object.assign(document.createElement("li"), { textContent: texte })));
   $("manques-titre").textContent = `Manques de la pièce (${m.manques.length}) — visite : ${m.nb_manques_visite}`;
+}
+
+// --- Questionnaire en direct ---------------------------------------------------------------------------------
+// Chaque question arrive avec ses réponses en boutons ; un appui vaut une réponse dite (le serveur l'applique et pose
+// aussitôt la question suivante). La fiche montre toute la pièce, à compléter ou corriger d'un appui.
+
+function boutonsReponse(conteneur, options, envoyer) {
+  conteneur.replaceChildren(...options.map((o) => {
+    const bouton = Object.assign(document.createElement("button"), { type: "button", textContent: o.libelle });
+    bouton.onclick = () => {
+      conteneur.querySelectorAll("button").forEach((b) => b.classList.toggle("choisi", b === bouton));
+      couperVoix(); // il a répondu : la question en cours n'est plus lue
+      envoyer(o);
+      $("latence").textContent = `✓ Coché : ${o.libelle}`;
+    };
+    return bouton;
+  }));
+  conteneur.hidden = !options.length;
+}
+
+function afficherChoix(cible, options) {
+  boutonsReponse($("choix"), options, (o) => envoyerJson({ type: "reponse", cible, valeur: o.valeur, libelle: o.libelle, t: maintenant() }));
+}
+
+function afficherFiche() {
+  const m = etat.dernierEtat;
+  const contenu = $("fiche-contenu");
+  if (!m || !m.checklist) return contenu.replaceChildren("La fiche apparaît dès que la visite a commencé.");
+  const piece = (m.checklist.pieces || []).find((p) => p.nom === m.piece);
+  $("fiche-piece").textContent = `Fiche : ${m.piece || "pièce"}`;
+  const blocs = [];
+  const ajouterElements = (titre, elements) => {
+    const utiles = (elements || []).filter((e) => Object.values(e.champs || {}).some((c) => c.utile));
+    if (!utiles.length) return;
+    blocs.push(Object.assign(document.createElement("h3"), { textContent: titre }));
+    for (const e of utiles) {
+      const nombre = e.nombre > 1 ? ` (${e.nombre})` : "";
+      blocs.push(Object.assign(document.createElement("div"), { className: "petit", textContent: `${e.nom || e.description}${nombre}` }));
+      for (const [champ, c] of Object.entries(e.champs)) {
+        if (!c.utile) continue;
+        const valeur = c.valeur ? c.valeur.valeur : "";
+        const ligne = Object.assign(document.createElement("button"), { type: "button", className: `champ${valeur ? "" : " manque"}` });
+        ligne.append(Object.assign(document.createElement("span"), { textContent: c.libelle }),
+                     Object.assign(document.createElement("span"), { className: "valeur", textContent: valeur || "à remplir" }));
+        const choix = Object.assign(document.createElement("div"), { className: "choix", hidden: true });
+        const options = etat.options[`${e.type}.${champ}`] || [];
+        ligne.onclick = () => {
+          if (!options.length) return;
+          boutonsReponse(choix, options, (o) => envoyerJson({ type: "reponse", element: e.id, champ, valeur: o.valeur, libelle: o.libelle, t: maintenant() }));
+        };
+        blocs.push(ligne, choix);
+      }
+    }
+  };
+  ajouterElements(m.piece || "Pièce", piece ? piece.elements : []);
+  ajouterElements("Logement", m.checklist.logement ? m.checklist.logement.elements : []);
+  contenu.replaceChildren(...blocs);
 }
 
 function majActions(resultats) {
@@ -576,6 +641,8 @@ function envoyerVideo(blob) {
 // --- Boutons ---------------------------------------------------------------------------------------
 
 $("demarrer").onclick = demarrer;
+$("voir-fiche").onclick = () => { $("fiche").hidden = false; afficherFiche(); };
+$("fermer-fiche").onclick = () => ($("fiche").hidden = true);
 $("terminer").onclick = terminer;
 $("nouvelle").onclick = () => location.reload();
 $("silence").onclick = () => {

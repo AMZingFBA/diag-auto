@@ -32,14 +32,16 @@ from .transcription import TranscripteurSimulation
 # Les tests (tests/test_dialogue.py) vérifient ce même parcours question par question.
 PIECE_A_4_MURS = [
     ("Ici c'est le séjour.", "Décrivez le premier mur."),
-    ("Ce mur donne dehors, brique 30 cm, isolé par l'intérieur.", "Un autre mur dans cette pièce ?"),
-    ("Oui, celui-ci donne sur une pièce chauffée.", "Un autre mur dans cette pièce ?"),  # mur intérieur : rien d'autre
-    ("Oui, en parpaing de 20, non isolé, sur le garage.", "Un autre mur dans cette pièce ?"),
-    ("Oui, le quatrième mur donne dehors.", "Ce mur est en quoi ?"),  # jamais « le mur 4 » (étape 5)
+    # « D'autres murs qui donnent dehors… ? » : une fois, puis seulement après un nouveau mur dehors ou sur un local non
+    # chauffé (test de Noah du 22/10 après-midi : « Un autre mur dans cette pièce ? » posé 10 fois).
+    ("Ce mur donne dehors, brique 30 cm, isolé par l'intérieur.", "D'autres murs sur l'extérieur ou un local non chauffé ?"),
+    ("Oui, en parpaing de 20, non isolé, sur le garage.", "D'autres murs sur l'extérieur ou un local non chauffé ?"),
+    ("Oui, le troisième mur donne dehors.", "Ce mur est en quoi ?"),  # jamais « le mur 3 » (étape 5)
     ("Brique.", "Quelle épaisseur ?"),
     ("30 centimètres.", "Il est isolé ?"),
-    ("Je ne sais pas.", "Un autre mur dans cette pièce ?"),
-    ("Non, c'est tout.", "Au-dessus du plafond : combles, terrasse ou logement ?"),
+    ("Je ne sais pas.", "D'autres murs sur l'extérieur ou un local non chauffé ?"),
+    # Un mur sur une pièce chauffée : rien d'autre à demander, et pas de nouvelle question sur les murs.
+    ("Oui, le dernier mur donne sur une pièce chauffée.", "Au-dessus du plafond : combles, terrasse ou logement ?"),
     ("Des combles perdus, isolés avec 30 cm de laine de verre.", "Sous le plancher : terre-plein, vide sanitaire, cave ou logement ?"),
     ("Terre-plein, pas isolé.", "Des fenêtres dans cette pièce ?"),
     ("En tout trois fenêtres, toutes pareilles, en PVC double vitrage.", "Les 3 fenêtres : des volets ?"),
@@ -298,7 +300,8 @@ async def evaluer(simulation: bool) -> dict:
         return _s(statistics.median(valeurs)) if valeurs else "—"
 
     questions = [m["texte"] for m in recus if m["type"] == "dire"]
-    reviennent = {"Un autre mur dans cette pièce ?", "Décrivez le premier mur.", "D'autres fenêtres, ou une porte vers l'extérieur ?"}
+    reviennent = {"D'autres murs sur l'extérieur ou un local non chauffé ?", "Décrivez le premier mur.",
+                  "D'autres fenêtres, ou une porte vers l'extérieur ?"}
     uniques = [q for q in questions if q not in reviennent]
     print("\nRésumé :")
     print(f"  questions conformes au parcours : {conformes}/{len(PIECE_A_4_MURS)} ; valeurs notées {bilan['acceptees']},"
