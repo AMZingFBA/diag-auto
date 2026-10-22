@@ -110,14 +110,6 @@ def cle_texte(texte: str) -> str:
     return " ".join(sans_accents.lower().split())
 
 
-def de(description: str) -> str:
-    """« de » + description, avec contraction : « du mur », « des fenêtres », « de la porte »."""
-    for article, contraction in (("le ", "du "), ("les ", "des ")):
-        if description.lower().startswith(article):
-            return contraction + description[len(article):]
-    return "de " + description
-
-
 def horodatage(t: float) -> str:
     """Instant dans la vidéo au format m:ss."""
     t = max(0, int(round(t)))
@@ -187,7 +179,7 @@ class Manque:
     @property
     def libelle(self) -> str:
         if self.element and self.champ:
-            return f"{self.champ.libelle} {de(self.element.description)}"
+            return f"{self.element.description} : {self.champ.libelle}"
         if self.type == "mur":
             return "aucun mur décrit"
         return f"{TYPES[self.type].nom} : présence à confirmer"

@@ -82,6 +82,8 @@ Règles absolues :
 - Ne repose pas une question posée dans les 30 dernières secondes, sauf si la réponse n'était pas claire.
 - Si la phrase ne t'est pas adressée (il parle au propriétaire) ou s'il n'y a rien d'utile à demander : "dire" vide.
 - La transcription peut contenir des erreurs (« ça se meurt là » = « ce mur-là ») : interprète, mais cite le texte tel qu'il est écrit.
+- Si une phrase est incohérente ou douteuse (mots sans sens, probablement mal transcrits), n'enregistre rien à partir d'elle : demande de répéter ce point.
+- Des mesures de dimensions (« ça fait 4 mètres ») ne sont pas des épaisseurs ni des isolations : ne les range pas dans ces champs.
 
 L'état de la checklist est calculé par le serveur et t'est donné à chaque message : c'est lui qui dit ce qui manque, par priorité. Pose ta question sur le premier manque de la pièce courante, de préférence sur un élément visible dans la dernière image, désigné par ce qu'on voit. Si tu enregistres une réponse, ta question porte sur un manque qui reste APRÈS cet enregistrement. Utilise les identifiants (M1, F1…) des éléments déjà connus.
 
@@ -291,7 +293,7 @@ class ProcessusClaude:
             debut = time.perf_counter()
             await asyncio.to_thread(self._ecrire, ligne.encode("utf-8"))
             self.tours += 1
-            texte, premier_mot = "", None
+            texte, premier_mot, reflexion = "", None, False
             while True:
                 restant = delai_s - (time.perf_counter() - debut)
                 try:
@@ -303,6 +305,8 @@ class ProcessusClaude:
                     raise RuntimeError("Claude Code s'est arrêté : " + " | ".join(self.erreurs[-3:]))
                 if evenement.get("type") == "stream_event":
                     e = evenement.get("event", {})
+                    if e.get("type") == "content_block_start" and e.get("content_block", {}).get("type") == "thinking":
+                        reflexion = True
                     if e.get("type") == "content_block_delta" and e.get("delta", {}).get("type") == "text_delta":
                         if premier_mot is None:
                             premier_mot = time.perf_counter() - debut
@@ -314,8 +318,11 @@ class ProcessusClaude:
                     mesures = {
                         "premier_mot_s": round(premier_mot, 3) if premier_mot is not None else None,
                         "total_s": round(time.perf_counter() - debut, 3),
-                        "api_s": round((evenement.get("duration_api_ms") or 0) / 1000, 3),
+                        "api_cumule_s": round((evenement.get("duration_api_ms") or 0) / 1000, 3),  # depuis le lancement du processus
                         "etapes": evenement.get("num_turns"),
+                        # Claude Code fait toujours réfléchir Haiku 5.5 avant de répondre (mesuré le 22/10/2026 :
+                        # ni alwaysThinkingEnabled=false, ni MAX_THINKING_TOKENS=0 ne l'empêchent).
+                        "reflexion": reflexion,
                         "jetons_entree": usage.get("input_tokens"),
                         "jetons_cache_lus": usage.get("cache_read_input_tokens"),
                         "jetons_cache_ecrits": usage.get("cache_creation_input_tokens"),

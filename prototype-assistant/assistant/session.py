@@ -36,7 +36,7 @@ def rappel_fin(checklist: Checklist, maximum: int = 3) -> str:
     manques = checklist.manques_visite()
     if not manques:
         return "Tout est renseigné. Vous pouvez arrêter."
-    points = [f"{checklist.nom_piece(m.piece) if m.piece else 'logement'} : {m.libelle}" for m in manques[:maximum]]
+    points = [f"{checklist.nom_piece(m.piece) if m.piece else 'logement'}, {m.libelle}" for m in manques[:maximum]]
     texte = f"Avant d'arrêter, il manque {len(manques)} information{'s' if len(manques) > 1 else ''}. " + " ; ".join(points)
     if len(manques) > maximum:
         texte += f" ; et {len(manques) - maximum} autres, à l'écran"
@@ -62,8 +62,11 @@ class Session:
         self.t_video = 0.0
         self.muet = False
         self.termine = False
-        self._file: asyncio.Queue = asyncio.Queue()
-        self._occupe = False
+        # Deux postes en chaîne : la phrase suivante est transcrite pendant que le cerveau répond.
+        self._file: asyncio.Queue = asyncio.Queue()  # phrases à transcrire (son ou texte écrit)
+        self._file_textes: asyncio.Queue = asyncio.Queue()  # phrases transcrites, en attente du cerveau
+        self._transcription_en_cours = False
+        self._reponse_en_cours = False
         self._en_parole = False
         self._paroles = 0  # nombre de débuts de parole (sert à abandonner une question de veille périmée)
         self._fin_parole = 0.0
@@ -91,9 +94,16 @@ class Session:
         self.journaliser("debut", cerveau=self.cerveau.nom, transcription=self.transcripteur.nom, piece=piece)
         self._taches = [
             asyncio.create_task(self._demarrer_cerveaux()),
-            asyncio.create_task(self._boucle_phrases()),
+            asyncio.create_task(self._boucle_transcription()),
+            asyncio.create_task(self._boucle_reponses()),
             asyncio.create_task(self._boucle_veille()),
         ]
+
+    @property
+    def occupe(self) -> bool:
+        """Une phrase est en cours de traitement ou en attente."""
+        return (self._transcription_en_cours or self._reponse_en_cours
+                or not self._file.empty() or not self._file_textes.empty())
 
     def _cerveaux(self) -> list:
         """Cerveaux distincts (en simulation, réponses et veille sont le même objet)."""
@@ -211,43 +221,79 @@ class Session:
 
     # --- Phrases --------------------------------------------------------------------------------
 
-    async def _boucle_phrases(self) -> None:
+    async def _boucle_transcription(self) -> None:
         while True:
             genre, donnee, reference = await self._file.get()
-            self._occupe = True
+            self._transcription_en_cours = True
             try:
-                await self._traiter_phrase(genre, donnee, reference)
+                await self._transcrire(genre, donnee, reference)
             except Exception as e:
-                log.exception("Traitement d'une phrase")
-                self.journaliser("erreur", etape="phrase", message=str(e))
+                log.exception("Transcription d'une phrase")
+                self.journaliser("erreur", etape="transcription", message=str(e))
             finally:
-                self._occupe = False
+                self._transcription_en_cours = False
 
-    async def _traiter_phrase(self, genre: str, donnee, reference: float) -> None:
-        mesure: dict = {"source": genre, "fin_silence_s": self.reglages.fin_silence_s if genre == "audio" else 0.0}
+    async def _transcrire(self, genre: str, donnee, reference: float) -> None:
+        attente = time.monotonic() - reference
         if genre == "audio":
             phrase: Phrase = donnee
             debut = time.perf_counter()
             texte = await asyncio.to_thread(self.transcripteur.transcrire, phrase.audio)
-            mesure["transcription_s"] = round(time.perf_counter() - debut, 3)
+            duree = time.perf_counter() - debut
             t_debut, t_fin = phrase.t_debut, phrase.t_fin
-            mesure["duree_parole_s"] = round(phrase.duree, 2)
         else:
-            texte, t_debut, t_fin = donnee, self.t_video, self.t_video
-            mesure["transcription_s"] = 0.0
-        mesure.update(t=round(t_fin, 2), texte=texte)
+            texte, t_debut, t_fin, duree = donnee, self.t_video, self.t_video, 0.0
         if not texte:
-            self.journaliser("phrase_vide", **mesure)
+            self.journaliser("phrase_vide", t_phrase=round(t_fin, 2), transcription_s=round(duree, 3))
             return
+        ligne = f"[{horodatage(t_fin)}] Diagnostiqueur : « {texte} »"
         self.phrases.append((t_debut, t_fin, texte))
-        self.dialogue.append(f"[{horodatage(t_fin)}] Diagnostiqueur : « {texte} »")
+        self.dialogue.append(ligne)
         await self._envoyer({"type": "transcription", "t": round(t_fin, 2), "texte": texte})
+        await self._file_textes.put({
+            "source": genre, "texte": texte, "t_debut": t_debut, "t_fin": t_fin, "ligne": ligne, "reference": reference,
+            "attente_transcription_s": attente, "transcription_s": duree, "pret": time.monotonic(),
+        })
+
+    async def _boucle_reponses(self) -> None:
+        while True:
+            lot = [await self._file_textes.get()]
+            self._reponse_en_cours = True
+            try:
+                # Phrases transcrites pendant la réponse précédente : un seul appel au cerveau pour toutes,
+                # plutôt qu'une file d'attente qui retarde chaque réponse.
+                while not self._file_textes.empty():
+                    lot.append(self._file_textes.get_nowait())
+                await self._repondre(lot)
+            except Exception as e:
+                log.exception("Réponse à une phrase")
+                self.journaliser("erreur", etape="reponse", message=str(e))
+            finally:
+                self._reponse_en_cours = False
+
+    async def _repondre(self, lot: list[dict]) -> None:
+        # Les mesures portent sur la DERNIÈRE phrase du lot : c'est après elle que le diagnostiqueur attend.
+        dernier = lot[-1]
+        audio = dernier["source"] == "audio"
+        texte = " ".join(p["texte"] for p in lot)
+        mesure: dict = {
+            "source": dernier["source"],
+            "fin_silence_s": self.reglages.fin_silence_s if audio else 0.0,
+            "transcription_s": round(dernier["transcription_s"], 3),
+            "attente_s": round(dernier["attente_transcription_s"] + time.monotonic() - dernier["pret"], 3),
+            "t": round(dernier["t_fin"], 2),
+            "texte": texte,
+            "phrases_regroupees": len(lot),
+        }
+        lignes = {p["ligne"] for p in lot}
         contexte = Contexte(
-            mode="reponse", t=t_fin, checklist=self.checklist, dialogue=self.dialogue[-9:-1],
-            images=self._images_pour(t_debut, t_fin), phrase=texte, t_phrase=(t_debut, t_fin),
+            mode="reponse", t=dernier["t_fin"], checklist=self.checklist,
+            dialogue=[l for l in self.dialogue if l not in lignes][-8:],
+            images=self._images_pour(lot[0]["t_debut"], dernier["t_fin"]), phrase=texte,
+            t_phrase=(lot[0]["t_debut"], dernier["t_fin"]),
         )
         self.mesures.append(mesure)
-        await self._decider(self.cerveau, contexte, reference, mesure)
+        await self._decider(self.cerveau, contexte, dernier["reference"], mesure)
 
     def _images_pour(self, t_debut: float, t_fin: float) -> list[ImageInstant]:
         """Images de la phrase : la plus proche de la fin, du milieu et du début (3 au plus)."""
@@ -261,8 +307,9 @@ class Session:
                 choisies.append(image)
         return sorted(choisies, key=lambda i: i.t)
 
-    def _phrases_recentes(self, t: float) -> list[str]:
-        return [texte for _, t_fin, texte in self.phrases if t_fin >= t - 90]
+    def _phrases_recentes(self, contexte: Contexte) -> list[str]:
+        recentes = [texte for _, t_fin, texte in self.phrases if t_fin >= contexte.t - 90]
+        return recentes + ([contexte.phrase] if contexte.phrase else [])  # phrases regroupées : citation à cheval
 
     async def _decider(self, cerveau, contexte: Contexte, reference: float, mesure: dict) -> Decision:
         await self._pret.wait()
@@ -275,7 +322,7 @@ class Session:
         decision = await cerveau.decider(contexte, sur_dire if contexte.mode == "reponse" else None)
         mesure["cerveau_total_s"] = round(time.perf_counter() - debut, 3)
         mesure["cerveau"] = decision.mesures
-        resultats = appliquer(self.checklist, decision.actions, contexte.t, self._phrases_recentes(contexte.t))
+        resultats = appliquer(self.checklist, decision.actions, contexte.t, self._phrases_recentes(contexte))
         notes = [r for r in resultats if r["action"].get("outil") in ("enregistrer_reponse", "marquer_sans_objet")]
         self._compteurs["acceptees"] += sum(r["statut"] == "accepte" for r in notes)
         self._compteurs["refusees"] += sum(r["statut"] == "refuse" for r in notes)
@@ -324,7 +371,7 @@ class Session:
         while True:
             await asyncio.sleep(1)
             maintenant = time.monotonic()
-            if (self.muet or self._occupe or not self._file.empty() or self._en_parole or self.vad.ia_parle
+            if (self.muet or self.occupe or self._en_parole or self.vad.ia_parle
                     or maintenant - self._fin_parole < 2 or maintenant - self._derniere_question < 12):
                 continue
             if not (self._veille_bientot or maintenant - derniere >= self.reglages.veille_s):
@@ -348,7 +395,7 @@ class Session:
         decision = await self._decider(self.cerveau_veille, contexte, time.monotonic(), mesure)
         if not decision.dire:
             return
-        if self._paroles != paroles_avant or self._en_parole or not self._file.empty():
+        if self._paroles != paroles_avant or self._en_parole or self.occupe:
             self.journaliser("question_abandonnee", texte=decision.dire, raison="le diagnostiqueur a parlé entre-temps")
             return
         await self.dire(decision.dire, time.monotonic())
@@ -380,12 +427,15 @@ class Session:
             "cerveau": self.cerveau.nom,
             "transcription": self.transcripteur.nom,
             "duree_video_s": round(self.t_video, 1),
-            "phrases": len(phrases),
+            "phrases": len(self.phrases),
+            "appels_reponse": len(phrases),  # moins que de phrases quand des phrases ont été regroupées
+            "appels_avec_reflexion": sum(bool((m.get("cerveau") or {}).get("reflexion")) for m in self.mesures),
             **self._compteurs,
             "pieces": [{"nom": p.nom, "taux_remplissage": self.checklist.taux_remplissage(cle)} for cle, p in self.checklist.pieces.items()],
             "manques_visite": len(self.checklist.manques_visite()),
             "latences_s": {
                 "fin_de_phrase (silence attendu)": self.reglages.fin_silence_s,
+                "attente_dans_la_file": stats([m.get("attente_s") for m in audio]),
                 "transcription": stats([m.get("transcription_s") for m in audio]),
                 "claude_premier_mot": stats([(m.get("cerveau") or {}).get("premier_mot_s") for m in phrases]),
                 "claude_question_prete": stats([m.get("cerveau_dire_s") for m in phrases]),

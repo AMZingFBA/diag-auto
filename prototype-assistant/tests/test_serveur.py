@@ -55,7 +55,7 @@ def test_visite_par_texte_puis_video_et_bilan(client, tmp_path):
         actions = attendre(ws, "actions")
         assert {r["champ"]: r["statut"] for r in actions["resultats"]} == {"materiau": "accepte", "epaisseur": "accepte", "donne_sur": "accepte"}
         etat = attendre(ws, "etat")
-        assert etat["piece"] == "Cuisine" and etat["manques"][0] == "isolation du mur 1"
+        assert etat["piece"] == "Cuisine" and etat["manques"][0] == "le mur 1 : isolation"
         ws.send_json({"type": "fin"})
         rappel = attendre(ws, "dire")
         assert rappel["texte"].startswith("Avant d'arrêter, il manque")
@@ -118,8 +118,39 @@ def test_identifiants_et_code_d_acces(client, tmp_path):
 
 def test_rappel_de_fin():
     c = Checklist()
-    assert rappel_fin(c) == "Avant d'arrêter, il manque 3 informations. logement : générateur de chauffage : présence à confirmer ; logement : eau chaude sanitaire : présence à confirmer ; logement : ventilation : présence à confirmer."
+    assert rappel_fin(c) == ("Avant d'arrêter, il manque 3 informations. logement, générateur de chauffage : présence à confirmer ; "
+                             "logement, eau chaude sanitaire : présence à confirmer ; logement, ventilation : présence à confirmer.")
     c.definir_piece("séjour", 0)
     c.signaler_element("mur", "le mur du fond", 1)
-    assert rappel_fin(c).startswith("Avant d'arrêter, il manque 9 informations. Séjour : matériau du mur du fond ;")
+    assert rappel_fin(c).startswith("Avant d'arrêter, il manque 9 informations. Séjour, le mur du fond : matériau ;")
     assert rappel_fin(c).endswith("et 6 autres, à l'écran.")
+
+
+def test_phrases_regroupees_pendant_une_reponse(tmp_path):
+    import asyncio
+
+    from assistant.session import Session
+    from assistant.simulation import CerveauSimulation
+    from assistant.transcription import TranscripteurSimulation
+
+    class CerveauLent(CerveauSimulation):
+        vus: list[str] = []
+
+        async def decider(self, contexte, sur_dire=None):
+            await asyncio.sleep(0.3)
+            self.vus.append(contexte.phrase)
+            return await super().decider(contexte, sur_dire)
+
+    async def scenario():
+        cerveau = CerveauLent()
+        session = Session("essai", tmp_path, cerveau, cerveau, TranscripteurSimulation(), reglages(tmp_path))
+        await session.demarrer()
+        for texte in ["ici c'est la cuisine", "ce mur-là, brique", "30 cm"]:
+            await session.recevoir_controle({"type": "texte", "texte": texte})
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(1.2)
+        return cerveau.vus, await session.terminer()
+
+    vus, bilan = asyncio.run(scenario())
+    assert vus == ["ici c'est la cuisine", "ce mur-là, brique 30 cm"]
+    assert bilan["phrases"] == 3 and bilan["appels_reponse"] == 2

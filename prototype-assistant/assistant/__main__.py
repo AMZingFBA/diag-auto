@@ -12,6 +12,7 @@ import datetime
 import ipaddress
 import logging
 import socket
+import sys
 
 import uvicorn
 
@@ -65,6 +66,7 @@ def main() -> None:
     parser.add_argument("--hote", default="0.0.0.0", help="0.0.0.0 = joignable depuis le téléphone sur le même Wi-Fi")
     parser.add_argument("--sans-https", action="store_true", help="HTTP simple (derrière un tunnel HTTPS, ou pour l'ordinateur seul)")
     args = parser.parse_args()
+    sys.stdout.reconfigure(line_buffering=True)  # affichage immédiat, même lancé en arrière-plan
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s : %(message)s")
 
     from .serveur import creer_app
