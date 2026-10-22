@@ -851,6 +851,107 @@ plus de « pièce U » ni de changement de pièce proposé trop tôt. Détails e
 **Tests** : `tests/test_questionnaire.py` (19), `tests/test_capture.py` (3), scénarios de référence mis à jour. Le prototype
 compte 287 tests.
 
+## Étape 12 : carte des pièces de la vidéo, pièces revisitées, phrase → mur (22/10/2026)
+
+Après la visite, sur le serveur (dans `prototype-assistant`) :
+
+```
+..\.venv\Scripts\python -m assistant.carte sessions\<visite>
+```
+
+Sans dossier : la visite la plus récente qui a des images. `--sans-claude` : ne rien montrer à Claude. La commande écrit
+dans le dossier de la visite `carte.md` (à lire), `carte.json` et, si la visite a un état, `etat-consolide.json`, que
+`diagauto generer` lit en priorité.
+
+**Ce que fait la carte** (`assistant/carte.py`, `assistant/vision.py` ; OpenCV, licence Apache-2.0 ; sur le processeur) :
+1. **suivi continu du mouvement**, image par image (jusqu'à 30 images par seconde) : on sait quand la caméra tourne sur
+   place, quand elle avance, quand le suivi décroche ;
+2. **images clés** choisies par le mouvement (pas une photo toutes les n secondes), et **stations** : suites d'images où
+   le diagnostiqueur tourne sur place, donc dans une seule pièce ;
+3. **reconnaissance de lieu** : chaque image clé est comparée aux images qui lui ressemblent le plus (mots visuels), puis
+   la ressemblance est vérifiée par la géométrie (au moins 35 points communs cohérents ; un même modèle de porte ou de
+   fenêtre dans deux pièces en donne au plus une trentaine) ;
+4. **pièces**, dans l'ordre du temps : chaque station rejoint la pièce qu'elle reconnaît, sinon la pièce annoncée, sinon
+   reste dans la pièce en cours (on ne change pas de pièce en tournant sur place). Une image clé n'est **ancrée** (sûre)
+   que si l'image la relie, de proche en proche, au début de sa pièce ;
+5. **Claude** (abonnement, sans clé API) juge les passages non ancrés : une image toutes les 8 s, toutes les 2 s juste
+   avant l'annonce d'une pièce, comparée à 6 images ancrées de chaque pièce ; 32 images par appel, 3 appels au plus ;
+6. **cap de la caméra** : boussole et gyroscope du téléphone, sinon le suivi de la vidéo (les murs s'appellent alors
+   « mur A, B, C, D », jamais nord ou est inventés) ;
+7. **phrase → mur** : à l'instant du mot qui désigne (« ce mur »), la pièce reconnue et le cap donnent le mur visé, comparé
+   à l'élément choisi par l'assistant pendant la visite.
+
+**Pourquoi « ancrée »** (ce qu'ont montré les visites de Noah) :
+- **la voix retarde sur la porte** : la pièce est annoncée jusqu'à 15 s après y être entré. Cuisine filmée dès 3:03,
+  annoncée à 3:18 ; sortie de la cuisine vers 4:13, « pièce U » dite à 4:28 ;
+- **elle peut se tromper longtemps** : dans le rejeu de la visite de l'après-midi, l'assistant s'est cru dans la cuisine de
+  4:18 à 7:09, alors que Noah était revenu dans la première pièce ;
+- les images d'un tel passage se reconnaissent entre elles et portent le mauvais nom. Seules les images reliées au début de
+  la pièce prouvent quelque chose ; les autres sont montrées à Claude.
+
+**Garde-fous** :
+- jamais deux pièces pour le même endroit ;
+- pour contredire la pièce annoncée, il faut 4 liens vers des images ancrées. Quelques liens peuvent venir d'une porte :
+  depuis la pièce U, on voyait la chambre, et sans cette règle la chambre entière se rangeait dans U ;
+- une autre pièce vue par Claude (entrée, escalier) devient une **question**, jamais une pièce créée d'après une image ;
+- une pièce est **revisitée** si l'on en est sorti vers une autre pièce, puis revenu. Un coup d'œil de moins de 4 s ou des
+  images floues ne comptent pas.
+
+**Branchements** :
+- **état de l'assistant** : `etat-consolide.json` contient
+  - une seule pièce par endroit (« Pièce 1 » et « Séjour » fusionnées si c'est le même endroit) ;
+  - les murs nommés par repère et cap (« le mur nord, celui avec le tableau ») ;
+  - les éléments notés dans une pièce mais filmés dans une autre, signalés ;
+  - les questions de la carte ;
+- **`diagauto generer`** lit `etat-consolide.json` en priorité. Son rapport dit les pièces revisitées et liste les questions,
+  par exemple : « les 2 radiateurs (E1) : noté dans « Cuisine », mais filmé dans « Pièce 1 » : dans quelle pièce ? » ;
+- **état écrit à chaque changement**, et plus seulement à « Terminer » : la visite de l'après-midi, jamais terminée, n'avait
+  pas d'état.
+
+**Mesures** (ce PC, 12 cœurs, sans carte graphique ; vérité relevée image par image) :
+
+| Visite | Ce qu'il fallait trouver | Résultat |
+|---|---|---|
+| Noah, après-midi (`20261022-153605`, 11 min 43, images à 1 par seconde, boussole) | U, cuisine, U, chambre, U ; la voix en retard à chaque porte | 3 pièces, U revisitée ; **260 images clés justes sur 262** (à plus d'1 s d'une porte) ; 4 questions : entrée, escalier, 2 hésitations de Claude |
+| Rejeu de la même visite (`20261022-162157`) | pareil, mais l'assistant s'est cru dans la cuisine de 4:18 à 7:09 (retour non annoncé) | retour trouvé par Claude, **261 sur 262** ; les 2 radiateurs notés « cuisine » signalés |
+| Noah, matin (`20261022-120410`, 5 min 47, images à 1 par seconde, sans capteurs) | séjour, couloir, cuisine, retour au séjour à 5:39, non annoncé | séjour revisité **de 5:39 à 5:47** ; le couloir rangé avec la cuisine ; 1 question (escalier) |
+| Vidéo de synthèse (tests) | 2 pièces, 2 allers-retours, retour non annoncé | 2 pièces, jamais de doublon ; 5 phrases sur 5 au bon mur avec la boussole ; sans boussole, même lettre pour le même mur |
+| video-001 (séjour, 38 s, recompressée par WhatsApp) | 1 pièce | 1 pièce, 3 murs ; suivi tenu sur 97 % des images |
+
+**Temps** : visite de l'après-midi, 17 s de calcul, 55 s avec Claude (3 appels, 82 images) ; video-001 à 30 images par
+seconde, 17 s pour 38 s de film.
+
+Détails, avant/après et réponses de Claude : [rejeux/20261022-etape12-carte.md](rejeux/20261022-etape12-carte.md).
+
+**Limites, honnêtement** :
+- **Pas de carte 3D métrique** : ni plan, ni surfaces, ni longueurs de murs. C'est une carte des lieux (quelles images
+  montrent le même endroit). La suite est la reconstruction 3D (COLMAP/GLOMAP, docs/02-capture-video.md § 3.1).
+- **Aucune vidéo complète d'une vraie visite** : les visites de Noah n'ont que les images envoyées en direct (1 par
+  seconde) ; la vidéo complète n'est envoyée que depuis le 22/10 après-midi. À 1 image par seconde, le suivi décroche
+  souvent et peu d'images se relient : Claude juge alors une grande partie de la visite (82 images sur 11 min). Le suivi
+  continu n'est éprouvé que sur la vidéo de synthèse et video-001.
+- **Sans Claude**, un retour non annoncé qu'aucune image ne relie au premier passage n'est pas trouvé : il reste dans la
+  pièce dite par la voix.
+- **Aux portes**, la limite entre deux pièces est juste à 1 ou 2 s près ; un couloir qui mène à une pièce est souvent rangé
+  avec elle.
+- **Orientation des murs** : l'axe des murs d'une pièce est estimé d'après les caps où la caméra s'attarde. Avec la boussole
+  lue une fois par seconde, il a varié de 40° pour la pièce U d'un calcul à l'autre (images retenues différentes). Le
+  nord, l'est, le sud ou l'ouest d'un mur est donc à confirmer, en attendant les capteurs à 20 mesures par seconde et une
+  estimation par les lignes des murs dans l'image.
+- **Phrase → mur** : « ce mur », « celui-là » (le mur en face) ; pas encore « le deuxième mur » ni « à gauche ».
+- **Pièces identiques** (deux chambres pareilles) : vérification géométrique et questions ; pas encore essayé sur une vraie
+  visite.
+- Claude varie un peu d'un calcul à l'autre (une hésitation de plus ou de moins) ; ses réponses sont gardées dans
+  `carte.md`, tableau « Passages non reconnus ».
+
+**Tests** :
+- `tests/test_carte.py` (12) : synthèse ; lecture des réponses de Claude ; consolidation ; visites réelles de Noah et
+  video-001 quand elles sont présentes ;
+- `tests/scene_synthetique.py` : pièces texturées filmées en tournant et en marchant, boussole simulée, vérité terrain ;
+- `tests/test_pont.py` (racine du projet) : état consolidé lu par `diagauto generer`.
+
+Le prototype compte 299 tests.
+
 ## Réglages (variables d'environnement)
 
 | Variable | Défaut | Rôle |
@@ -911,6 +1012,8 @@ compte 287 tests.
 | `assistant/session.py` | Une visite : chaîne son → texte → pré-remplissage → Claude → voix (trois postes en file, sans blocage), pause, veille, journal, bilan. |
 | `assistant/serveur.py`, `assistant/__main__.py` | Serveur web et lancement. |
 | `assistant/rejouer.py` | Rejouer une vidéo de test. |
+| `assistant/vision.py` | Images de la visite (vidéo ou images reçues) : suivi du mouvement, points ORB, mots visuels, liens vérifiés par la géométrie (étape 12). |
+| `assistant/carte.py` | Carte des pièces après la visite : stations, pièces revisitées, ancrage, arbitrage par Claude, murs et cap, phrase → mur, état consolidé (étape 12). |
 | `web/` | La page du téléphone ; `web/boussole.js` : cap de la caméra par la matrice de rotation ; `web/liaison.js` : liaison avec le serveur (battement de cœur, reconnexion, rattrapage). |
 
 Tests (sans Claude ni réseau ; Claude Code y est remplacé par un faux programme) :
