@@ -19,7 +19,7 @@ def contexte(phrase="ce mur-là, brique, 30 cm", mode="reponse", checklist=None)
 
 def test_consignes_listent_tous_les_champs():
     texte = consignes()
-    assert "- mur (mur, pièce) : materiau = matériau, epaisseur = épaisseur" in texte
+    assert "- mur (mur, pièce) : donne_sur = donne sur, materiau = matériau, epaisseur = épaisseur, isolation = isolation, [longueur = longueur]" in texte
     assert "- ventilation (ventilation, logement) : type = type" in texte
     assert "{champs}" not in texte
 

@@ -7,7 +7,7 @@ appliquée.
 
 from __future__ import annotations
 
-from .checklist import Checklist, ErreurChecklist
+from .checklist import Checklist, ErreurChecklist, cle_texte
 from .citations import citation_trouvee
 
 
@@ -53,6 +53,15 @@ def appliquer_action(checklist: Checklist, action: dict, t: float, phrases: list
                 resultat["element"] = element.id
             else:
                 checklist.marquer_sans_objet(**commun)
+        elif outil in ("cloturer", "copier"):
+            citation = _texte(action, "citation")
+            if not citation_trouvee(citation, phrases):
+                raise ErreurChecklist("citation introuvable dans ce qui a été dit")
+            if outil == "cloturer":  # « pas d'autre mur » : la liste de la pièce est complète
+                checklist.cloturer(_texte(action, "type"), citation, t)
+            else:  # « plafond pareil que le séjour »
+                source = cle_texte(_texte(action, "piece_source"))
+                resultat["element"] = checklist.copier(_texte(action, "type"), source, citation, t).id
         else:
             raise ErreurChecklist(f"outil inconnu : {outil!r}")
     except ErreurChecklist as e:

@@ -12,7 +12,9 @@ def codes(manques):
 def test_piece_neuve_demande_d_abord_un_mur_puis_les_presences():
     c = Checklist()
     c.definir_piece("chambre 1", 3.0)
-    assert codes(c.manques_piece()) == ["presence:mur", "presence:fenetre", "presence:emetteur"]
+    # Le plafond et le plancher existent toujours : on ne demande pas s'ils sont là, mais sur quoi ils donnent.
+    assert codes(c.manques_piece()) == [
+        "presence:mur", "PL1.donne_sur", "PL1.isolation", "PB1.donne_sur", "PB1.isolation", "presence:fenetre", "presence:emetteur"]
     assert c.taux_remplissage() == 0.0
 
 
@@ -35,7 +37,7 @@ def test_enregistrer_cree_l_element_et_garde_la_citation():
     c.enregistrer(type_element="mur", champ="epaisseur", valeur="30 cm", citation="brique, 30 cm", t=12.4, element_id=mur.id)
     assert mur.id == "M1"
     assert mur.valeur("materiau").citation == "ce mur-là, brique, 30 cm"
-    assert codes(c.manques_piece()) == ["M1.isolation", "M1.donne_sur", "presence:fenetre", "presence:emetteur"]
+    assert [code for code in codes(c.manques_piece()) if code.startswith("M")] == ["M1.donne_sur", "M1.isolation"]
 
 
 def test_valeur_sans_citation_refusee():
@@ -43,7 +45,7 @@ def test_valeur_sans_citation_refusee():
     c.definir_piece("séjour", 0)
     with pytest.raises(ErreurChecklist, match="citation"):
         c.enregistrer(type_element="mur", champ="epaisseur", valeur="20 cm", citation=" ", t=1, description="le mur")
-    assert c.elements == []
+    assert not [e for e in c.elements if e.type == "mur"]
 
 
 def test_champ_ou_type_inconnu_refuse():
@@ -51,7 +53,7 @@ def test_champ_ou_type_inconnu_refuse():
     with pytest.raises(ErreurChecklist):
         c.enregistrer(type_element="mur", champ="vitrage", valeur="double", citation="double", t=1)
     with pytest.raises(ErreurChecklist):
-        c.signaler_element("plafond", "le plafond", 1)
+        c.signaler_element("toiture", "la toiture", 1)
     c.definir_piece("séjour", 0)
     fenetre = c.signaler_element("fenetre", "la fenêtre", 1)
     with pytest.raises(ErreurChecklist, match="pas un mur"):
@@ -76,7 +78,9 @@ def test_sans_objet_et_absences():
     e = c.signaler_element("emetteur", "le sèche-serviettes", 4)
     c.enregistrer(type_element="emetteur", champ="type", valeur="sèche-serviettes électrique", citation="sèche-serviettes électrique", t=5, element_id=e.id)
     c.marquer_sans_objet(type_element="emetteur", champ="temperature", citation="électrique, sans objet", t=5, element_id=e.id)
-    assert codes(c.manques_piece()) == ["presence:mur", "E1.annee"]
+    # Électrique : la température n'a pas de sens ; l'année est un détail secondaire (demandé pour le logement).
+    assert codes(c.manques_piece()) == ["presence:mur", "PL1.donne_sur", "PL1.isolation", "PB1.donne_sur", "PB1.isolation"]
+    assert list(c.manques_secondaires()) == [("emetteur", "annee")]
     with pytest.raises(ErreurChecklist):
         c.marquer_sans_objet(type_element="mur", champ="presence", citation="pas de mur", t=6)
 
@@ -100,7 +104,7 @@ def test_manques_visite_piece_courante_d_abord():
     c.definir_piece("cuisine", 0)
     c.signaler_element("mur", "le mur de l'évier", 1)
     c.definir_piece("chambre", 50)
-    assert codes(c.manques_visite())[:3] == ["presence:mur", "presence:fenetre", "presence:emetteur"]
+    assert codes(c.manques_visite())[:2] == ["presence:mur", "PL2.donne_sur"]  # la chambre d'abord
     assert "M1.materiau" in codes(c.manques_visite())
 
 
@@ -110,9 +114,10 @@ def test_resume_et_dict():
     c.enregistrer(type_element="mur", champ="materiau", valeur="brique", citation="brique", t=70, description="le mur avec la télé")
     resume = c.resume_pour_ia()
     assert "Pièce courante : Séjour (entrée à 1:01)" in resume
-    assert "M1 mur « le mur avec la télé » (dit) : matériau = brique, épaisseur = ?" in resume
+    assert "M1 mur « le mur avec la télé » (dit) : donne sur = ?, matériau = brique, épaisseur = ?, isolation = ?" in resume
     d = c.vers_dict()
-    assert d["pieces"][0]["elements"][0]["champs"]["materiau"]["valeur"]["citation"] == "brique"
+    mur = next(e for e in d["pieces"][0]["elements"] if e["id"] == "M1")
+    assert mur["champs"]["materiau"]["valeur"]["citation"] == "brique"
     assert 0 < d["pieces"][0]["taux_remplissage"] < 1
 
 
@@ -131,3 +136,42 @@ def test_lexique_corrige_les_confusions_du_premier_test():
     assert corriger("ça se meure là, brique") == "ce mur-là, brique"
     assert est_hallucination("Sous-titres réalisés par la communauté d'Amara.org")
     assert not est_hallucination("double vitrage")
+
+
+def test_paroi_sur_local_chauffe_rien_d_autre_a_demander():
+    c = Checklist()
+    c.definir_piece("chambre", 0)
+    mur = c.signaler_element("mur", "le mur du couloir", 1)
+    c.enregistrer(type_element="mur", champ="donne_sur", valeur="local chauffé", citation="il donne sur le couloir chauffé", t=2, element_id=mur.id)
+    assert mur.champs_manquants() == []  # hypothèse : paroi non déperditive en 3CL
+    plafond = c.element_de_piece("plafond")
+    c.enregistrer(type_element="plafond", champ="donne_sur", valeur="local chauffé (logement au-dessus)", citation="logement au-dessus", t=3, element_id=plafond.id)
+    assert plafond.champs_manquants() == [] and not plafond.est_utile("isolation")
+
+
+def test_temperature_seulement_pour_les_radiateurs_a_eau():
+    c = Checklist()
+    c.definir_piece("séjour", 0)
+    eau = c.signaler_element("emetteur", "les radiateurs", 1, nombre=2)
+    elec = c.signaler_element("emetteur", "le convecteur", 1)
+    assert not eau.est_utile("temperature")  # type pas encore dit
+    c.enregistrer(type_element="emetteur", champ="type", valeur="radiateur à eau", citation="à eau", t=2, element_id=eau.id)
+    c.enregistrer(type_element="emetteur", champ="type", valeur="convecteur électrique", citation="convecteur", t=2, element_id=elec.id)
+    assert c.manques_secondaires()[("emetteur", "temperature")] == [eau]
+    assert c.manques_secondaires()[("emetteur", "annee")] == [eau, elec]
+
+
+def test_liste_close_et_plafond_pareil():
+    c = Checklist()
+    c.definir_piece("séjour", 0)
+    c.cloturer("mur", "pas d'autre mur", 5)
+    assert "mur" in c.pieces["sejour"].clos
+    c.enregistrer(type_element="plafond", champ="donne_sur", valeur="combles perdus", citation="combles perdus", t=6, element_id="PL1")
+    c.enregistrer(type_element="plafond", champ="isolation", valeur="isolé laine de verre 30 cm", citation="laine 30", t=7, element_id="PL1")
+    c.definir_piece("cuisine", 20)
+    plafond = c.copier("plafond", "sejour", "pareil", 21)
+    assert plafond.id == "PL2" and plafond.valeur("isolation").valeur == "isolé laine de verre 30 cm"
+    assert plafond.valeur("donne_sur").note == "pareil que Séjour"
+    assert c.signaler_element("plafond", "un autre plafond", 22) is plafond  # un seul plafond par pièce
+    with pytest.raises(ErreurChecklist):
+        c.copier("plancher", "sejour", "pareil", 23)  # rien à recopier

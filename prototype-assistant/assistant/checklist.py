@@ -8,8 +8,14 @@ Règles :
   citation et son horodatage (instant dans la vidéo, en secondes) ;
 - une valeur redite différemment n'écrase rien : l'historique est gardé et le champ passe
   « à vérifier » (orange à l'écran de validation) ;
-- les champs viennent de docs/checklist-dpe.md, réduits au périmètre de V1bis (murs, fenêtres,
-  émetteurs de la pièce ; chauffage, ECS et ventilation du logement).
+- les champs viennent de docs/checklist-dpe.md, réduits au périmètre du prototype ;
+- seuls les champs UTILES au DPE sont réclamés (retour de Noah du 22/10/2026) :
+  - « principal » : réclamé pour chaque élément (isolation, matériau, vitrage…) ;
+  - « secondaire » : demandé une seule fois pour tout le logement (date et température des
+    radiateurs, date du ballon), et plus du tout après « je ne sais pas » ;
+  - « facultatif » : noté s'il est dit, jamais réclamé (longueur d'un mur, dimensions d'une fenêtre) ;
+- hypothèse (à faire valider) : une paroi qui donne sur un local chauffé n'est pas déperditive en
+  3CL-2021 ; son matériau, son épaisseur et son isolation ne sont donc pas réclamés.
 """
 
 from __future__ import annotations
@@ -26,8 +32,11 @@ class ErreurChecklist(ValueError):
 class Champ:
     cle: str
     libelle: str
-    question: str  # complète « Pour <élément>, … »
-    obligatoire: bool = True  # un champ facultatif est noté s'il est dit, jamais réclamé
+    importance: str = "principal"  # « principal », « secondaire » ou « facultatif »
+
+    @property
+    def obligatoire(self) -> bool:
+        return self.importance == "principal"
 
 
 @dataclass(frozen=True)
@@ -37,74 +46,70 @@ class TypeElement:
     prefixe: str  # préfixe des identifiants : M1, F2…
     niveau: str  # « piece » ou « logement »
     champs: tuple[Champ, ...]
-    question_presence: str  # posée quand aucun élément de ce type n'est encore signalé
     designation: str  # avec article, pour les descriptions par défaut : « la fenêtre »
 
 
 TYPES: dict[str, TypeElement] = {
     t.cle: t
     for t in (
-        TypeElement(
-            "mur", "mur", "M", "piece",
-            (
-                Champ("materiau", "matériau", "quel matériau ?"),
-                Champ("epaisseur", "épaisseur", "quelle épaisseur ?"),
-                Champ("isolation", "isolation", "isolé par l'intérieur, par l'extérieur, ou pas isolé ?"),
-                Champ("donne_sur", "donne sur", "il donne sur l'extérieur, un local non chauffé ou un local chauffé ?"),
-                Champ("longueur", "longueur", "quelle longueur ?", obligatoire=False),
-            ),
-            "Décrivez un premier mur : matériau, épaisseur, isolation, et sur quoi il donne.", "le mur",
-        ),
-        TypeElement(
-            "fenetre", "fenêtre", "F", "piece",
-            (
-                Champ("menuiserie", "menuiserie", "quelle menuiserie : PVC, bois ou alu ?"),
-                Champ("vitrage", "vitrage", "simple, double ou triple vitrage ?"),
-                Champ("volets", "volets", "quels volets, ou pas de volet ?"),
-                Champ("dimensions", "dimensions", "quelles dimensions ?", obligatoire=False),
-            ),
-            "Y a-t-il une fenêtre dans cette pièce ?", "la fenêtre",
-        ),
-        TypeElement(
-            "emetteur", "émetteur de chauffage", "E", "piece",
-            (
-                Champ("type", "type", "quel type : radiateur à eau, convecteur électrique, plancher chauffant ?"),
-                Champ("temperature", "température", "basse ou haute température ?"),
-                Champ("annee", "année", "quelle année d'installation, à peu près ?"),
-            ),
-            "Y a-t-il un radiateur ou un autre émetteur de chauffage dans cette pièce ?", "l'émetteur",
-        ),
-        TypeElement(
-            "chauffage", "générateur de chauffage", "CH", "logement",
-            (
-                Champ("energie", "énergie", "quelle énergie : gaz, fioul, électricité, bois, pompe à chaleur ?"),
-                Champ("type", "type", "quel type de générateur ?"),
-                Champ("annee", "année", "quelle année, ou bien filmez la plaque ?"),
-            ),
-            "Où est le chauffage principal du logement ?", "le chauffage",
-        ),
-        TypeElement(
-            "ecs", "eau chaude sanitaire", "ECS", "logement",
-            (
-                Champ("systeme", "système", "quel système : chaudière, ballon électrique, thermodynamique ?"),
-                Champ("energie", "énergie", "quelle énergie ?"),
-                Champ("annee", "année", "quelle année, ou bien filmez la plaque ?"),
-            ),
-            "Comment est produite l'eau chaude ?", "l'eau chaude",
-        ),
-        TypeElement(
-            "ventilation", "ventilation", "V", "logement",
-            (Champ("type", "type", "quel type : naturelle, VMC simple flux, hygro, double flux ?"),),
-            "Quelle est la ventilation du logement ?", "la ventilation",
-        ),
+        # « donne sur » d'abord : sur un local chauffé, le reste de la paroi n'est pas réclamé.
+        TypeElement("mur", "mur", "M", "piece", (
+            Champ("donne_sur", "donne sur"),
+            Champ("materiau", "matériau"),
+            Champ("epaisseur", "épaisseur"),
+            Champ("isolation", "isolation"),
+            Champ("longueur", "longueur", "facultatif"),
+        ), "le mur"),
+        TypeElement("plafond", "plafond", "PL", "piece", (
+            Champ("donne_sur", "donne sur"),
+            Champ("isolation", "isolation"),
+            Champ("structure", "structure", "facultatif"),
+        ), "le plafond"),
+        TypeElement("plancher", "plancher", "PB", "piece", (
+            Champ("donne_sur", "donne sur"),
+            Champ("isolation", "isolation"),
+            Champ("structure", "structure", "facultatif"),
+        ), "le plancher"),
+        TypeElement("fenetre", "fenêtre", "F", "piece", (
+            Champ("menuiserie", "menuiserie"),
+            Champ("vitrage", "vitrage"),
+            Champ("volets", "volets"),
+            Champ("dimensions", "dimensions", "facultatif"),
+        ), "la fenêtre"),
+        TypeElement("porte", "porte extérieure", "PO", "piece", (
+            Champ("type", "type"),
+            Champ("donne_sur", "donne sur"),
+        ), "la porte"),
+        TypeElement("emetteur", "émetteur de chauffage", "E", "piece", (
+            Champ("type", "type"),
+            Champ("temperature", "température", "secondaire"),
+            Champ("annee", "année", "secondaire"),
+        ), "le radiateur"),
+        TypeElement("chauffage", "générateur de chauffage", "CH", "logement", (
+            Champ("energie", "énergie"),
+            Champ("type", "type"),
+            Champ("annee", "année"),
+        ), "le chauffage"),
+        TypeElement("ecs", "eau chaude sanitaire", "ECS", "logement", (
+            Champ("systeme", "système"),
+            Champ("energie", "énergie"),
+            Champ("annee", "année", "secondaire"),
+        ), "l'eau chaude"),
+        TypeElement("ventilation", "ventilation", "V", "logement", (
+            Champ("type", "type"),
+        ), "la ventilation"),
     )
 }
 
-# Pièce par défaut quand un élément de pièce arrive avant qu'une pièce soit nommée.
-PIECE_PAR_DEFAUT = "Pièce 1"
-# Ordre des contrôles de présence dans une pièce, puis dans le logement.
+PAROIS = ("mur", "plafond", "plancher")
+# Présent dans toute pièce, créé automatiquement : on ne demande pas s'il existe.
+TOUJOURS_PRESENTS = ("plafond", "plancher")
+# Présences à confirmer dans une pièce (le mur est forcément là), puis dans le logement.
 PRESENCES_PIECE = ("mur", "fenetre", "emetteur")
 PRESENCES_LOGEMENT = ("chauffage", "ecs", "ventilation")
+# Pièce par défaut quand un élément de pièce arrive avant qu'une pièce soit nommée.
+PIECE_PAR_DEFAUT = "Pièce 1"
+VALEUR_INCONNUE = "inconnu"  # « je ne sais pas » : champ rempli (on n'y revient pas) mais à vérifier
 
 
 def cle_texte(texte: str) -> str:
@@ -117,9 +122,6 @@ def horodatage(t: float) -> str:
     """Instant dans la vidéo au format m:ss."""
     t = max(0, int(round(t)))
     return f"{t // 60}:{t % 60:02d}"
-
-
-VALEUR_INCONNUE = "inconnu"  # « je ne sais pas » : champ rempli (on n'y revient pas) mais à vérifier
 
 
 @dataclass
@@ -137,7 +139,7 @@ class Element:
     description: str
     piece: str | None  # None pour un équipement du logement
     t: float
-    source: str  # « image » (signalé par l'IA) ou « voix » (cité par le diagnostiqueur)
+    source: str  # « image » (signalé par l'IA), « voix » (cité par le diagnostiqueur), « auto » (plafond, plancher)
     nombre: int = 1  # éléments identiques décrits ensemble : « trois fenêtres en bois »
     valeurs: dict[str, list[Valeur]] = field(default_factory=dict)
     sans_objet: dict[str, Valeur] = field(default_factory=dict)
@@ -159,8 +161,32 @@ class Element:
     def est_rempli(self, champ: str) -> bool:
         return champ in self.sans_objet or bool(self.valeurs.get(champ))
 
+    @property
+    def sur_local_chauffe(self) -> bool:
+        """Paroi qui donne sur un local chauffé (hypothèse : non déperditive en 3CL-2021)."""
+        v = self.valeur("donne_sur")
+        return self.type in PAROIS and v is not None and cle_texte(v.valeur).startswith("local chauffe")
+
+    def est_utile(self, champ: str) -> bool:
+        """Faut-il connaître ce champ pour le DPE, vu ce qu'on sait déjà de l'élément ?"""
+        if self.sur_local_chauffe and champ != "donne_sur":
+            return False
+        if self.type == "emetteur" and champ == "temperature":
+            # Basse / haute température : n'a de sens que pour des émetteurs à eau.
+            type_dit = self.valeur("type")
+            return type_dit is not None and any(m in cle_texte(type_dit.valeur) for m in ("eau", "plancher chauffant"))
+        if self.type == "ecs" and champ == "annee":
+            # Date d'un ballon ; une eau chaude faite par la chaudière a la date de la chaudière.
+            systeme = self.valeur("systeme")
+            return systeme is not None and "chaudiere" not in cle_texte(systeme.valeur)
+        return True
+
     def champs_manquants(self) -> list[Champ]:
-        return [c for c in self.type_element.champs if c.obligatoire and not self.est_rempli(c.cle)]
+        """Champs principaux encore à demander pour cet élément, dans l'ordre."""
+        return [c for c in self.type_element.champs if c.obligatoire and self.est_utile(c.cle) and not self.est_rempli(c.cle)]
+
+    def champs_secondaires_manquants(self) -> list[Champ]:
+        return [c for c in self.type_element.champs if c.importance == "secondaire" and self.est_utile(c.cle) and not self.est_rempli(c.cle)]
 
 
 @dataclass
@@ -169,6 +195,7 @@ class Piece:
     t: float
     citation: str = ""
     absences: dict[str, Valeur] = field(default_factory=dict)  # type -> « pas de fenêtre » cité
+    clos: dict[str, Valeur] = field(default_factory=dict)  # type -> « pas d'autre mur » cité
 
 
 @dataclass
@@ -194,12 +221,6 @@ class Manque:
             return "aucun mur décrit"
         return f"{TYPES[self.type].nom} : présence à confirmer"
 
-    @property
-    def question(self) -> str:
-        if self.element and self.champ:
-            return f"Pour {self.element.description}, {self.champ.question}"
-        return TYPES[self.type].question_presence
-
 
 class Checklist:
     def __init__(self) -> None:
@@ -212,14 +233,19 @@ class Checklist:
     # --- Pièces ---------------------------------------------------------------------------
 
     def definir_piece(self, nom: str, t: float, citation: str = "") -> Piece:
-        """Change de pièce. Revenir dans une pièce déjà vue la reprend, sans doublon."""
+        """Change de pièce. Revenir dans une pièce déjà vue la reprend, sans doublon. Une pièce
+        neuve reçoit son plafond et son plancher, toujours présents."""
         nom = " ".join(nom.split())
         if not nom:
             raise ErreurChecklist("nom de pièce vide")
         cle = cle_texte(nom)
-        if cle not in self.pieces:
+        neuve = cle not in self.pieces
+        if neuve:
             self.pieces[cle] = Piece(nom=nom[0].upper() + nom[1:], t=t, citation=citation)
         self.piece_courante = cle
+        if neuve:
+            for type_element in TOUJOURS_PRESENTS:
+                self.signaler_element(type_element, TYPES[type_element].designation, t, source="auto")
         return self.pieces[cle]
 
     def _piece_pour_element(self) -> str:
@@ -229,6 +255,28 @@ class Checklist:
 
     def nom_piece(self, cle: str | None) -> str:
         return self.pieces[cle].nom if cle in self.pieces else "Logement"
+
+    def cloturer(self, type_element: str, citation: str, t: float) -> None:
+        """« Pas d'autre mur » : la liste de ce type est complète dans la pièce courante."""
+        self._type(type_element)
+        citation = " ".join(citation.split())
+        if not citation:
+            raise ErreurChecklist("clôture refusée : aucune citation du diagnostiqueur")
+        self.pieces[self._piece_pour_element()].clos[type_element] = Valeur("complet", citation, t)
+
+    def copier(self, type_element: str, piece_source: str, citation: str, t: float) -> Element:
+        """« Plafond pareil que le séjour » : recopie les valeurs de l'élément de l'autre pièce."""
+        source = next((e for e in self.elements_de(piece_source) if e.type == type_element), None)
+        if source is None or not source.valeurs:
+            raise ErreurChecklist(f"rien à recopier : pas de {TYPES[type_element].nom} décrit dans {self.nom_piece(piece_source)}")
+        cible = next((e for e in self.elements_de(self._piece_pour_element()) if e.type == type_element), None)
+        if cible is None:
+            cible = self.signaler_element(type_element, TYPES[type_element].designation, t, source="voix")
+        for champ, historique in source.valeurs.items():
+            note = f"pareil que {self.nom_piece(piece_source)}"
+            self.enregistrer(type_element=type_element, champ=champ, valeur=historique[-1].valeur, citation=citation, t=t,
+                             element_id=cible.id, note=note)
+        return cible
 
     # --- Éléments -------------------------------------------------------------------------
 
@@ -246,6 +294,11 @@ class Checklist:
     def elements_de(self, piece: str | None) -> list[Element]:
         return [e for e in self.elements if e.piece == piece]
 
+    def element_de_piece(self, type_element: str, piece: str | None = None) -> Element | None:
+        """Le (dernier) élément de ce type dans la pièce, par exemple son plafond."""
+        piece = piece if piece is not None else self.piece_courante
+        return next((e for e in reversed(self.elements_de(piece)) if e.type == type_element), None)
+
     @staticmethod
     def _verifier_nombre(nombre: int | None) -> int | None:
         if nombre is None:
@@ -257,13 +310,13 @@ class Checklist:
     def signaler_element(self, type_element: str, description: str, t: float, source: str = "image", nombre: int | None = None) -> Element:
         """Ajoute un élément à décrire (ex. « le mur avec la télé »), éventuellement en plusieurs
         exemplaires identiques (« trois fenêtres »). Une description déjà connue dans la même pièce
-        renvoie l'élément existant."""
+        renvoie l'élément existant ; le plafond et le plancher sont uniques dans une pièce."""
         te = self._type(type_element)
         nombre = self._verifier_nombre(nombre)
         description = " ".join(description.split()) or te.designation
         piece = self._piece_pour_element() if te.niveau == "piece" else None
         for element in self.elements_de(piece):
-            if element.type == te.cle and cle_texte(element.description) == cle_texte(description):
+            if element.type == te.cle and (te.cle in TOUJOURS_PRESENTS or cle_texte(element.description) == cle_texte(description)):
                 if nombre:
                     element.nombre = nombre
                 return element
@@ -342,8 +395,8 @@ class Checklist:
         if not citation:
             raise ErreurChecklist("« sans objet » refusé : aucune citation du diagnostiqueur")
         if champ == "presence":
-            if te.cle == "mur":
-                raise ErreurChecklist("une pièce a toujours des murs")
+            if te.cle == "mur" or te.cle in TOUJOURS_PRESENTS:
+                raise ErreurChecklist(f"une pièce a toujours un {te.nom}")
             if te.niveau == "piece":
                 self.pieces[self._piece_pour_element()].absences[te.cle] = Valeur("absent", citation, t)
             else:
@@ -360,22 +413,39 @@ class Checklist:
         return [Manque(type=t, piece=piece) for t in types if t not in presents and t not in absences]
 
     def manques_piece(self, piece: str | None = None) -> list[Manque]:
-        """Manques d'une pièce (la pièce courante par défaut), par ordre de priorité :
-        « aucun mur décrit », puis les champs des éléments déjà commencés, puis les présences."""
+        """Manques principaux d'une pièce (la pièce courante par défaut), dans l'ordre du parcours :
+        murs, plafond, plancher, fenêtres et portes, émetteurs."""
         piece = piece if piece is not None else self.piece_courante
         if piece is None or piece not in self.pieces:
             return []
-        presences = self._manques_presence(PRESENCES_PIECE, piece, self.pieces[piece].absences)
-        manques = [m for m in presences if m.type == "mur"]
-        for element in self.elements_de(piece):
-            manques += [Manque(element.type, piece, element, c) for c in element.champs_manquants()]
-        return manques + [m for m in presences if m.type != "mur"]
+        presences = {m.type: m for m in self._manques_presence(PRESENCES_PIECE, piece, self.pieces[piece].absences)}
+        manques: list[Manque] = []
+        for type_element in ("mur", "plafond", "plancher", "fenetre", "porte", "emetteur"):
+            if type_element in presences:
+                manques.append(presences[type_element])
+            for element in self.elements_de(piece):
+                if element.type == type_element:
+                    manques += [Manque(element.type, piece, element, c) for c in element.champs_manquants()]
+        return manques
 
     def manques_logement(self) -> list[Manque]:
         manques: list[Manque] = []
-        for element in self.elements_de(None):
-            manques += [Manque(element.type, None, element, c) for c in element.champs_manquants()]
-        return manques + self._manques_presence(PRESENCES_LOGEMENT, None, self.absences_logement)
+        for type_element in PRESENCES_LOGEMENT:
+            elements = [e for e in self.elements_de(None) if e.type == type_element]
+            if not elements and type_element not in self.absences_logement:
+                manques.append(Manque(type=type_element, piece=None))
+            for element in elements:
+                manques += [Manque(element.type, None, element, c) for c in element.champs_manquants()]
+        return manques
+
+    def manques_secondaires(self) -> dict[tuple[str, str], list[Element]]:
+        """Détails secondaires manquants, regroupés pour être demandés une seule fois pour le
+        logement : (type, champ) -> éléments concernés."""
+        groupes: dict[tuple[str, str], list[Element]] = {}
+        for element in self.elements:
+            for champ in element.champs_secondaires_manquants():
+                groupes.setdefault((element.type, champ.cle), []).append(element)
+        return groupes
 
     def manques_visite(self) -> list[Manque]:
         """Tout ce qui manque : pièce courante d'abord, puis les autres pièces, puis le logement."""
@@ -386,13 +456,18 @@ class Checklist:
             manques += self.manques_piece(cle)
         return manques + self.manques_logement()
 
+    def piece_terminee(self, piece: str | None = None) -> bool:
+        piece = piece if piece is not None else self.piece_courante
+        return piece in self.pieces and not self.manques_piece(piece)
+
     def taux_remplissage(self, piece: str | None = None) -> float:
-        """Part des informations attendues dans la pièce qui sont renseignées (0 à 1)."""
+        """Part des informations utiles attendues dans la pièce qui sont renseignées (0 à 1)."""
         piece = piece if piece is not None else self.piece_courante
         if piece is None or piece not in self.pieces:
             return 0.0
-        elements = self.elements_de(piece)
-        attendus = sum(sum(c.obligatoire for c in e.type_element.champs) for e in elements) + len(PRESENCES_PIECE)
+        attendus = len(PRESENCES_PIECE)
+        for e in self.elements_de(piece):
+            attendus += sum(c.obligatoire and e.est_utile(c.cle) for c in e.type_element.champs)
         return round(1 - len(self.manques_piece(piece)) / attendus, 3) if attendus else 0.0
 
     # --- Restitution -----------------------------------------------------------------------
@@ -406,9 +481,13 @@ class Checklist:
             elif v:
                 note = " (déjà demandé, à vérifier plus tard : ne pas redemander)" if element.a_verifier(c.cle) else ""
                 champs.append(f"{c.libelle} = {v.valeur}{note}")
-            elif c.obligatoire:
+            elif not element.est_utile(c.cle):
+                champs.append(f"{c.libelle} = inutile pour le DPE")
+            elif c.importance == "principal":
                 champs.append(f"{c.libelle} = ?")
-        origine = "vu à l'image" if element.source == "image" else "dit"
+            elif c.importance == "secondaire":
+                champs.append(f"{c.libelle} = ? (secondaire)")
+        origine = {"image": "vu à l'image", "auto": "toujours présent"}.get(element.source, "dit")
         nombre = f" ×{element.nombre}" if element.nombre > 1 else ""
         return f"- {element.id} {element.type_element.nom}{nombre} « {element.description} » ({origine}) : " + ", ".join(champs)
 
@@ -424,6 +503,9 @@ class Checklist:
             absents = ", ".join(TYPES[t].nom for t in piece.absences)
             if absents:
                 lignes.append(f"Absents (dit) : {absents}")
+            clos = ", ".join(TYPES[t].nom + "s" for t in piece.clos)
+            if clos:
+                lignes.append(f"Listes complètes (dit) : {clos}")
             manques = self.manques_piece()
             codes = ", ".join(f"{m.code} ({m.libelle})" for m in manques[:max_manques])
             lignes.append(f"Manques de la pièce, par priorité : {codes or 'aucun'}")
@@ -457,6 +539,8 @@ class Checklist:
                 "champs": {
                     c.cle: {
                         "libelle": c.libelle,
+                        "importance": c.importance,
+                        "utile": e.est_utile(c.cle),
                         "valeur": valeur(e.valeur(c.cle)) if e.valeur(c.cle) else None,
                         "historique": [valeur(v) for v in e.valeurs.get(c.cle, [])],
                         "sans_objet": valeur(e.sans_objet[c.cle]) if c.cle in e.sans_objet else None,
@@ -477,6 +561,7 @@ class Checklist:
                     "t": round(p.t, 2),
                     "taux_remplissage": self.taux_remplissage(cle),
                     "absences": {t: valeur(v) for t, v in p.absences.items()},
+                    "clos": {t: valeur(v) for t, v in p.clos.items()},
                     "elements": [element(e) for e in self.elements_de(cle)],
                     "manques": [manque(m) for m in self.manques_piece(cle)],
                 }
