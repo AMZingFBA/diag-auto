@@ -34,17 +34,17 @@ C'est le serveur qui décide de la question suivante, dans un ordre fixe, pièce
    - Quand un mur est fini : « Un autre mur dans cette pièce ? », jusqu'à ce que le diagnostiqueur réponde non.
 2. **Le plafond, puis le plancher.** S'ils sont déjà décrits dans une autre pièce, l'assistant propose « Plafond pareil que dans le séjour ? ».
 3. **Les fenêtres et portes restantes**, puis « D'autres fenêtres, ou une porte vers l'extérieur ? ».
-4. **Les radiateurs** : leur type seulement.
+4. **Les radiateurs** : leur type seulement. Leur date et leur température ne sont jamais demandées, mais toujours notées quand elles sont dites (étape 4).
 5. **Une seule fois pour tout le logement** :
    - le chauffage, l'eau chaude et la ventilation ;
-   - puis les détails secondaires (date et température des radiateurs), et plus jamais après « je ne sais pas ».
+   - puis la date du ballon d'eau chaude, s'il y en a un, et plus jamais après « je ne sais pas ».
 6. **« Pièce terminée. Quelle est la pièce suivante ? »**
 
 **Seulement les questions utiles au DPE** :
 - les questions sont courtes, 10 mots au plus ;
-- une question restée sans réponse n'est pas reposée : elle revient dans le rappel de fin de visite ;
+- une question restée sans réponse n'est pas reposée : elle revient dans le rappel de fin de visite. Seule exception : si le diagnostiqueur a parlé d'autre chose (une correction), elle est reposée une fois juste après (étape 4) ;
 - **hypothèse à faire valider** : un mur, un plafond ou un plancher qui donne sur un **local chauffé** n'est pas une paroi déperditive en DPE 3CL. On ne demande donc ni son matériau ni son isolation ;
-- la température n'est demandée que pour des radiateurs à eau, et la date du ballon seulement s'il y a un ballon ;
+- la date du ballon n'est demandée que s'il y a un ballon ;
 - une fenêtre n'a pas d'« épaisseur » : on demande la menuiserie, le vitrage et les volets ;
 - « Par la chaudière », pour l'eau chaude : son énergie est celle de la chaudière. Elle est notée comme **déduite**, avec sa source.
 
@@ -63,7 +63,8 @@ C'est **notre serveur** qui tient la checklist et calcule ce qui manque, pas l'I
 
 Périmètre de la checklist dans ce prototype (tiré de [docs/checklist-dpe.md](../docs/checklist-dpe.md)) :
 - **par pièce** : murs (donne sur, matériau, épaisseur, isolation), plafond et plancher (donne sur, isolation), fenêtres (menuiserie, vitrage, volets), portes vers l'extérieur, radiateurs (type) ;
-- **pour le logement** : chauffage, eau chaude, ventilation ; détails secondaires des radiateurs et du ballon.
+- **pour le logement** : chauffage, eau chaude, ventilation ; date du ballon.
+- **noté s'il est dit, jamais demandé** : date et température des radiateurs, longueur d'un mur, dimensions d'une fenêtre.
 
 ## Important : Claude passe par l'abonnement Claude Max, sans clé API
 
@@ -161,7 +162,7 @@ cd prototype-assistant
 
 ## Évaluer sur une pièce complète à 4 murs
 
-Le script joue la visite complète d'un séjour à 4 murs, en 21 phrases de diagnostiqueur (avec des « je ne sais pas »), puis le passage à la cuisine. Les phrases passent par toute la chaîne : extraction immédiate, parcours, Claude, garde-fous. Pour chaque phrase, il affiche :
+Le script joue la visite complète d'un séjour à 4 murs, en 19 phrases de diagnostiqueur (avec des « je ne sais pas »), puis le passage à la cuisine. Depuis l'étape 4, il n'y a plus les deux questions sur la date et la température des radiateurs. Les phrases passent par toute la chaîne : extraction immédiate, parcours, Claude, garde-fous. Pour chaque phrase, il affiche :
 - ce qui a été noté ;
 - la question posée, comparée à la question attendue ;
 - le temps de chaque étape.
@@ -356,6 +357,61 @@ set DIAGAUTO_TRANSCRIPTION=fastconformer
 ..\.venv\Scripts\python -m assistant
 ```
 
+## Étape 4 : un assistant qui s'adapte (22/10/2026)
+
+Demande de Noah : un assistant qui s'adapte au logement réel, pas un questionnaire rigide. **Rien n'est supposé identique s'il n'a pas été dit.**
+
+**Groupes et exceptions.**
+- Un élément peut regrouper plusieurs objets identiques. Chaque groupe a ses propres valeurs.
+- Chaque groupe porte un nom parlant, qui sert dans les questions.
+
+| Ce que dit le diagnostiqueur | Ce qui est noté |
+|---|---|
+| « Il y a 9 radiateurs électriques basse température et 1 électrique haute température » | 2 groupes : « les 9 radiateurs basse température » et « le radiateur haute température » |
+| « 3 radiateurs à eau, 2 en fonte de 1975 et 1 en acier de 2010 » | 2 groupes à eau : « les 2 radiateurs de 1975 » et « le radiateur de 2010 » |
+| « Quatre fenêtres en PVC double vitrage, dont une en simple vitrage » | 3 fenêtres en double vitrage et 1 en simple vitrage, toutes en PVC |
+| Question « Les 3 fenêtres : PVC, bois ou alu ? », réponse « Deux en PVC et une en bois » | Le groupe est séparé en « les 2 fenêtres en PVC » et « la fenêtre en bois ». Chacun a ensuite sa propre question sur les volets |
+| « Toutes sauf une ont des volets roulants » | 2 fenêtres à volets roulants, puis la question « L'autre fenêtre : des volets ? » |
+| « Un des radiateurs est électrique » | Ce radiateur est séparé du groupe ; les autres restent à eau |
+| « Toutes les fenêtres sont en bois, sauf celle de la chambre qui est en PVC » | Une **règle du logement**. Elle vaut pour les fenêtres déjà décrites et pour celles des pièces visitées ensuite ; la chambre reçoit PVC |
+| « Sauf celle de la chambre, qui est en PVC », dit après coup | Exception ajoutée à la règle |
+| « Dans la cuisine, il y a aussi un radiateur électrique », dit depuis la chambre | Le radiateur va dans la cuisine ; on reste dans la chambre |
+| « Le premier mur, en fait c'est du béton », « Le mur 2 donne sur le garage, pas dehors » | Correction de cet élément-là, même s'il a été décrit bien avant |
+| « En fait il y a 3 radiateurs, pas 2 » | Nombre corrigé |
+
+Une partie séparée d'un groupe garde les valeurs déjà dites pour le groupe. À l'écran de validation, elles sont marquées « comme son groupe ».
+
+Une valeur dite pour un élément l'emporte sur celle reprise d'un groupe ou d'une règle. C'est une exception, pas une contradiction.
+
+**Contradictions : la dernière valeur est gardée, et c'est signalé.**
+- L'assistant le dit tout de suite, avant sa question suivante : « Noté : béton au lieu de brique. Un autre mur dans cette pièce ? ».
+- L'ancienne valeur reste dans l'historique. Le champ est « à vérifier » à l'écran de validation, et la liste des contradictions est dans le bilan de la visite.
+- La question restée en attente (ici « Un autre mur ? ») est reposée une fois après la correction.
+
+**Date et température des radiateurs** : jamais demandées, mais toujours notées quand elles sont dites, groupe par groupe. Par exemple : « tous les radiateurs sont en basse température sauf un ».
+
+**Questions construites selon le logement réel** :
+- Chaque groupe a ses questions, sous son nom : « La fenêtre en bois : des volets ? ».
+- « Pareil » ou « aussi » reprend la valeur du groupe précédent de la pièce. « Toutes » vaut aussi pour les autres fenêtres de la pièce dont on n'a rien dit.
+- Ce qui est connu par une règle n'est pas redemandé.
+- Pour le chauffage, la question dépend de l'énergie dite :
+  - gaz : « Chaudière à condensation, basse température ou standard ? » ;
+  - bois : « Poêle, insert ou chaudière ? » ;
+  - électricité : « Radiateurs électriques ou pompe à chaleur ? ».
+- Une réponse trop générale pour le DPE (« pompe à chaleur », « chaudière ») est notée, puis précisée une fois : « Pompe à chaleur air/eau ou air/air ? ».
+- Chauffage à l'électricité et tous les radiateurs électriques :
+  - le chauffage est noté « radiateurs électriques (effet Joule) » ;
+  - cette valeur est marquée **déduite**, avec sa source ;
+  - la date de la « chaudière » n'est pas demandée.
+- « Le radiateur sous la fenêtre est électrique » : la fenêtre situe le radiateur, elle ne devient pas un nouvel élément.
+
+**Tests** : `tests/test_groupes.py` contient 27 scénarios et un dialogue complet. Les scénarios couvrent les groupes mixtes, les exceptions, les règles du logement, les ajouts après coup, les corrections tardives et les contradictions. Le prototype compte maintenant 133 tests.
+
+**Limites de cette étape** :
+- Les murs restent décrits un par un. « Les deux murs du fond donnent sur les voisins » ou « le reste donne sur l'intérieur » relèvent de l'étape 5.
+- « Tous les radiateurs sont électriques » vaut pour la pièce. Pour tout le logement, il faut le dire (« du logement », « partout ») ou excepter une autre pièce.
+- Les phrases trop compliquées pour les règles sont confiées à Claude. Il dispose des mêmes outils : séparer un groupe, changer un nombre, poser une règle.
+
 ## Réglages (variables d'environnement)
 
 | Variable | Défaut | Rôle |
@@ -379,7 +435,7 @@ set DIAGAUTO_TRANSCRIPTION=fastconformer
 - **L'extraction immédiate** ne connaît que le vocabulaire listé dans `assistant/extraction.py`.
   - Le reste est compris par Claude, en relecture de la phrase.
   - Mais la question du parcours part avant cette relecture : un mot inconnu des règles peut donc entraîner une question sur ce qui vient d'être dit. Le vocabulaire est à enrichir au fil des tests.
-- **Le parcours a un ordre fixe** (murs, plafond, plancher, fenêtres, radiateurs). Le diagnostiqueur peut décrire dans l'ordre qu'il veut, tout est noté ; seules les questions suivent cet ordre.
+- **Le parcours suit un ordre** (murs, plafond, plancher, fenêtres, radiateurs). Le diagnostiqueur peut décrire dans l'ordre qu'il veut, tout est noté. Seules les questions suivent cet ordre ; leur contenu s'adapte à ce qui a été dit (étape 4).
 - **Hypothèse à faire valider par un diagnostiqueur** : une paroi sur local chauffé n'est pas déperditive en 3CL, donc ses détails ne sont pas demandés.
 - **Certificat fait maison** :
   - l'avertissement du navigateur est à accepter à chaque nouveau téléphone ;
@@ -391,14 +447,15 @@ set DIAGAUTO_TRANSCRIPTION=fastconformer
 - Les **capteurs** (boussole, gyroscope) ne sont pas encore enregistrés.
 - **Deux processus Claude Code par visite** : un pour les réponses, un pour la veille, pour que la veille ne retarde jamais une réponse.
 - Différences avec le plan § 3.6 :
-  - **Pas d'« outils » au sens de l'API** : Claude répond en JSON (question + actions), et le serveur applique les actions après vérification. Les actions sont `piece_courante`, `signaler_element`, `enregistrer_reponse` et `marquer_sans_objet`.
+  - **Pas d'« outils » au sens de l'API** : Claude répond en JSON (question + actions), et le serveur applique les actions après vérification. Les actions sont `piece_courante`, `signaler_element`, `enregistrer_reponse`, `marquer_sans_objet`, `cloturer`, `copier`, et depuis l'étape 4 `scinder`, `compter`, `regle` et `exception`.
   - **`champs_manquants` n'existe plus** : la liste des manques est envoyée à chaque message, ce qui évite un aller-retour.
 
 ## Organisation du code
 
 | Fichier | Rôle |
 |---|---|
-| `assistant/checklist.py` | La checklist DPE et le calcul de ce qui manque. |
+| `assistant/checklist.py` | La checklist DPE et le calcul de ce qui manque ; groupes, parties séparées, règles du logement, contradictions. |
+| `assistant/groupes.py` | Découpage d'une phrase en groupes, quantités et exceptions (« 9 … et 1 … », « dont une », « tous sauf un »). |
 | `assistant/citations.py`, `assistant/actions.py` | Vérification des citations ; application des actions proposées. |
 | `assistant/lexique.py` | Lexique métier pour la transcription, corrections connues (« parpin » → parpaing). |
 | `assistant/vad.py`, `assistant/transcription.py` | Fin de phrase ; transcription faster-whisper. |
