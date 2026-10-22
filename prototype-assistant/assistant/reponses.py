@@ -82,6 +82,7 @@ OUI_NON = [("Oui", "oui"), ("Non", "non")]
 # Questions du parcours qui ne portent pas sur une information précise : réponses en mots que les règles comprennent
 # (le bouton envoie ce mot, comme s'il avait été dit).
 PRESENCES = {
+    "mur": OPTIONS[("mur", "donne_sur")],  # « Ce mur donne sur quoi ? » (étape 13)
     "fenetre": OUI_NON,
     "emetteur": [(libelle, valeur) for libelle, valeur in OPTIONS[("emetteur", "type")]] + [("Aucun", "non")],
     "chauffage": OPTIONS[("chauffage", "energie")],
@@ -103,6 +104,10 @@ def options_pour(cible: Cible | None) -> list[dict]:
             paires = [("Oui, c'est ça", "oui"), ("Non", "non")]
     elif cible.genre == "presence":
         paires = PRESENCES.get(cible.type, [])
+    elif cible.genre == "suite" and cible.type == "mur":
+        # « Et côtés nord et sud, le logement donne sur quoi ? » (étape 13) : le plus souvent des voisins ; sinon la réponse
+        # se dit, côté par côté. « C'est tout » : rien d'autre ne donne dehors ni sur un local non chauffé.
+        paires = [("Des voisins", "les autres donnent sur des voisins"), ("Non, c'est tout", "non")]
     elif cible.genre == "suite":
         paires = [("Oui, un autre", "oui"), ("Non, c'est tout", "non")]
     elif cible.genre == "pareil":

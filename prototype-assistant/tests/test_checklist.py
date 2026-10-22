@@ -9,13 +9,16 @@ def codes(manques):
     return [m.code for m in manques]
 
 
-def test_piece_neuve_demande_d_abord_un_mur_puis_les_presences():
+def test_logement_neuf_les_cotes_le_plafond_le_plancher_puis_les_equipements():
+    # Étape 13 : le DPE du logement, sans aucune pièce. Le plafond et le plancher du logement existent toujours : on ne
+    # demande pas s'ils sont là, mais sur quoi ils donnent ; ce sont les côtés du logement qui manquent, pas des murs par pièce.
     c = Checklist()
-    c.definir_piece("chambre 1", 3.0)
-    # Le plafond et le plancher existent toujours : on ne demande pas s'ils sont là, mais sur quoi ils donnent.
-    assert codes(c.manques_piece()) == [
-        "presence:mur", "PL1.donne_sur", "PL1.isolation", "PB1.donne_sur", "PB1.isolation", "presence:fenetre", "presence:emetteur"]
-    assert c.taux_remplissage() == 0.0
+    assert codes(c.manques_visite()) == [
+        "cote:nord", "cote:est", "cote:sud", "cote:ouest", "PL1.donne_sur", "PL1.isolation", "PB1.donne_sur", "PB1.isolation",
+        "presence:chauffage", "presence:emetteur", "presence:ecs", "presence:ventilation"]
+    assert c.taux_dpe() == 0.0 and c.piece_courante is None and not c.pieces
+    c.definir_piece("cuisine", 40.0)  # une pièce dite : notée, elle n'ajoute rien à demander
+    assert [e.id for e in c.enveloppe()] == ["PL1", "PB1"] and len(c.manques_visite()) == 12
 
 
 def test_revenir_dans_une_piece_ne_cree_pas_de_doublon():
@@ -79,7 +82,7 @@ def test_sans_objet_et_absences():
     c.enregistrer(type_element="emetteur", champ="type", valeur="sèche-serviettes électrique", citation="sèche-serviettes électrique", t=5, element_id=e.id)
     c.marquer_sans_objet(type_element="emetteur", champ="temperature", citation="électrique, sans objet", t=5, element_id=e.id)
     # Date et température des radiateurs : jamais demandées (étape 4), même pour le logement.
-    assert codes(c.manques_piece()) == ["presence:mur", "PL1.donne_sur", "PL1.isolation", "PB1.donne_sur", "PB1.isolation"]
+    assert codes(c.manques_piece()) == ["PL1.donne_sur", "PL1.isolation", "PB1.donne_sur", "PB1.isolation"]
     assert list(c.manques_secondaires()) == []
     with pytest.raises(ErreurChecklist):
         c.marquer_sans_objet(type_element="mur", champ="presence", citation="pas de mur", t=6)
@@ -90,22 +93,34 @@ def test_equipements_du_logement_hors_piece():
     ch = c.signaler_element("chauffage", "la chaudière", 30)
     assert ch.piece is None and c.piece_courante is None
     c.marquer_sans_objet(type_element="ventilation", champ="presence", citation="pas de VMC", t=31)
-    assert codes(c.manques_logement()) == ["CH1.energie", "CH1.type", "CH1.annee", "presence:ecs"]
+    assert codes(c.manques_logement()) == ["CH1.energie", "CH1.type", "CH1.annee", "presence:emetteur", "presence:ecs"]
+    c.enregistrer(type_element="chauffage", champ="type", valeur="radiateurs électriques (effet Joule)", citation="grille-pain",
+                  t=32, element_id=ch.id)
+    assert "presence:emetteur" not in codes(c.manques_logement())  # les radiateurs sont le chauffage lui-même
 
 
-def test_element_de_piece_sans_piece_nommee_va_dans_piece_1():
+def test_sans_piece_dite_rien_n_est_range_dans_une_piece():
+    # Étape 13 : la pièce ne compte pas pour le DPE ; aucune « Pièce 1 » n'est créée d'office.
     c = Checklist()
-    c.signaler_element("mur", "le mur de gauche", 2)
-    assert c.nom_piece(c.piece_courante) == "Pièce 1"
+    mur = c.signaler_element("mur", "le mur de gauche", 2)
+    fenetre = c.signaler_element("fenetre", "la fenêtre", 3, support=mur.id)
+    radiateur = c.signaler_element("emetteur", "le radiateur", 4)
+    assert c.piece_courante is None and not c.pieces
+    assert (mur.piece, mur.pieces, fenetre.piece, fenetre.support, radiateur.piece) == (None, [], None, mur.id, None)
+    c.definir_piece("séjour", 5)
+    autre = c.signaler_element("fenetre", "la fenêtre du séjour", 6)
+    assert autre.pieces == ["sejour"]  # une pièce dite : notée pour le repérage
 
 
-def test_manques_visite_piece_courante_d_abord():
+def test_manques_visite_l_enveloppe_puis_les_equipements():
     c = Checklist()
     c.definir_piece("cuisine", 0)
     c.signaler_element("mur", "le mur de l'évier", 1)
     c.definir_piece("chambre", 50)
-    assert codes(c.manques_visite())[:2] == ["presence:mur", "PL2.donne_sur"]  # la chambre d'abord
-    assert "M1.materiau" in codes(c.manques_visite())
+    visite = codes(c.manques_visite())
+    assert visite[:4] == ["M1.donne_sur", "M1.materiau", "M1.epaisseur", "M1.isolation"]  # le mur, quelle que soit la pièce
+    assert visite.index("cote:nord") < visite.index("PL1.donne_sur") < visite.index("presence:chauffage")
+    assert len(visite) == len(set(visite))
 
 
 def test_resume_et_dict():
@@ -113,11 +128,14 @@ def test_resume_et_dict():
     c.definir_piece("séjour", 61)
     c.enregistrer(type_element="mur", champ="materiau", valeur="brique", citation="brique", t=70, description="le mur avec la télé")
     resume = c.resume_pour_ia()
-    assert "Pièce courante : Séjour (entrée à 1:01)" in resume
-    assert "M1 mur « le mur avec la télé » (dit) : donne sur = ?, matériau = brique, épaisseur = ?, isolation = ?" in resume
+    assert "Pièce en cours (dite par le diagnostiqueur, simple repère : sans effet sur le DPE) : Séjour" in resume
+    assert ("côté inconnu (orientation à trouver) : M1 mur « le mur avec la télé » (dit, vu dans Séjour) : donne sur = ?, "
+            "matériau = brique, épaisseur = ?, isolation = ?") in resume
+    assert "Côtés du logement pas encore décrits : nord, est, sud, ouest" in resume
     d = c.vers_dict()
-    mur = next(e for e in d["pieces"][0]["elements"] if e["id"] == "M1")
-    assert mur["champs"]["materiau"]["valeur"]["citation"] == "brique"
+    mur = next(e for e in d["enveloppe"]["murs"] if e["id"] == "M1")
+    assert mur["champs"]["materiau"]["valeur"]["citation"] == "brique" and mur["pieces"] == ["Séjour"]
+    assert not d["pieces"][0]["elements"]  # le mur est celui du logement, pas de la pièce
     assert 0 < d["pieces"][0]["taux_remplissage"] < 1
 
 
@@ -163,7 +181,7 @@ def test_date_et_temperature_des_radiateurs_jamais_demandees_mais_notees():
     assert elec.valeur("annee").valeur == "1985"  # dit : toujours noté
 
 
-def test_liste_close_et_plafond_pareil():
+def test_liste_close_et_plafond_du_logement():
     c = Checklist()
     c.definir_piece("séjour", 0)
     c.cloturer("mur", "pas d'autre mur", 5)
@@ -171,9 +189,10 @@ def test_liste_close_et_plafond_pareil():
     c.enregistrer(type_element="plafond", champ="donne_sur", valeur="combles perdus", citation="combles perdus", t=6, element_id="PL1")
     c.enregistrer(type_element="plafond", champ="isolation", valeur="isolé laine de verre 30 cm", citation="laine 30", t=7, element_id="PL1")
     c.definir_piece("cuisine", 20)
-    plafond = c.copier("plafond", "sejour", "pareil", 21)
-    assert plafond.id == "PL2" and plafond.valeur("isolation").valeur == "isolé laine de verre 30 cm"
-    assert plafond.valeur("donne_sur").note == "pareil que Séjour"
-    assert c.signaler_element("plafond", "un autre plafond", 22) is plafond  # un seul plafond par pièce
+    # Étape 13 : le plafond est celui du logement ; dans la cuisine, rien à redemander.
+    assert c.element_de_piece("plafond").id == "PL1" and not [m for m in c.manques_piece() if m.type == "plafond"]
+    plafond = c.copier("plafond", "sejour", "pareil", 21)  # « pareil que le séjour » : la même partie
+    assert plafond.id == "PL1" and plafond.valeur("isolation").valeur == "isolé laine de verre 30 cm"
+    assert c.signaler_element("plafond", "un autre plafond", 22) is plafond  # un seul plafond pour la pièce
     with pytest.raises(ErreurChecklist):
         c.copier("plancher", "sejour", "pareil", 23)  # rien à recopier

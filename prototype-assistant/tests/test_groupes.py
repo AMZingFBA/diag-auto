@@ -175,7 +175,8 @@ def test_12_regle_du_logement_sauf_celle_de_la_chambre():
     for phrase in ("On passe dans la chambre.", "Il y a une fenêtre double vitrage.", "On passe dans la cuisine.",
                    "Une fenêtre double vitrage."):
         dire(c, phrase)
-    menuiseries = {c.nom_piece(e.piece): e.valeur("menuiserie") for e in c.elements if e.type == "fenetre"}
+    # Étape 13 : une fenêtre est celle du logement, notée dans la pièce où elle a été vue (repérage).
+    menuiseries = {c.nom_piece(e.pieces[0]): e.valeur("menuiserie") for e in c.elements if e.type == "fenetre"}
     assert {piece: v.valeur for piece, v in menuiseries.items()} == {"Séjour": "bois", "Chambre": "PVC", "Cuisine": "bois"}
     assert all(v.origine == "regle" for v in menuiseries.values())
     assert not [m for m in c.manques_visite() if m.champ and m.champ.cle == "menuiserie"]  # rien à redemander
@@ -200,24 +201,31 @@ def test_13_exception_dite_apres_la_regle():
     assert question(c, "fenetre") == "Cette fenêtre : PVC, bois ou alu ?"
 
 
-def test_14_regle_de_la_piece_pour_les_radiateurs_ajoutes_ensuite():
+def test_14_regle_des_radiateurs_pour_ceux_ajoutes_ensuite():
+    """Étape 13 : les radiateurs sont ceux du logement ; « tous les radiateurs » vaut où qu'on soit, même pour ceux
+    dits ensuite dans une autre pièce. Une valeur dite pour l'un d'eux l'emporte, sans contradiction."""
     c = sejour()
     dire(c, "Tous les radiateurs sont électriques.")
     dire(c, "Oui, trois.", cible="presence:emetteur")
     assert groupes(c, "emetteur") == [(3, "les 3 radiateurs", {"type": "radiateur électrique"})]
     dire(c, "On passe dans la cuisine.")
-    dire(c, "Un radiateur.")
-    assert c.element_de_piece("emetteur").valeur("type") is None  # règle de la pièce : la cuisine n'est pas concernée
+    dire(c, "Il y a aussi un radiateur basse température.")
+    radiateur = c.trouver_element("E2")
+    assert radiateur.piece is None and radiateur.valeur("type").origine == "regle"
+    assert groupes(c, "emetteur")[1] == (1, "le radiateur 2", {"type": "radiateur électrique", "temperature": "basse"})
+    dire(c, "Et un radiateur à eau dans la salle de bains.")
+    assert groupes(c, "emetteur")[2][2] == {"type": "radiateur à eau"} and not c.signalements
 
 
 # --- 4. Éléments ajoutés après coup ---------------------------------------------------------------------
 
-def test_15_radiateur_ajoute_dans_une_autre_piece():
+def test_15_radiateur_dit_d_une_autre_piece():
+    """Étape 13 : un radiateur est celui du logement, où qu'il soit ; dire où il est ne change pas de pièce."""
     c = sejour()
     dire(c, "On passe dans la chambre.")
     dire(c, "Dans la cuisine, il y a aussi un radiateur électrique.")
     radiateur = next(e for e in c.elements if e.type == "emetteur")
-    assert c.nom_piece(radiateur.piece) == "Cuisine" and radiateur.valeur("type").valeur == "radiateur électrique"
+    assert radiateur.piece is None and radiateur.valeur("type").valeur == "radiateur électrique"
     assert c.nom_piece(c.piece_courante) == "Chambre"  # on n'a pas changé de pièce
 
 
@@ -341,6 +349,20 @@ def test_26_chauffage_electrique_deduit_des_radiateurs_electriques():
     assert not chauffage.champs_manquants()  # ni type, ni date de « chaudière » à demander
 
 
+def test_26b_chauffage_electrique_dit_avant_les_radiateurs():
+    """Étape 13 : le chauffage est demandé avant les radiateurs ; la déduction se fait aussi dans cet ordre, et se retire
+    si un radiateur à eau est dit ensuite (rien n'est supposé)."""
+    c = sejour()
+    dire(c, "Électrique.", cible="presence:chauffage")
+    assert question(c, "chauffage") == "Radiateurs électriques ou pompe à chaleur ?"
+    dire(c, "Deux radiateurs électriques.")
+    chauffage = c.trouver_element("CH1")
+    assert chauffage.valeur("type").valeur == "radiateurs électriques (effet Joule)" and not chauffage.champs_manquants()
+    dire(c, "Et un radiateur à eau dans la salle de bains.")
+    assert chauffage.valeur("type") is None and not c.signalements
+    assert question(c, "chauffage") == "Radiateurs électriques ou pompe à chaleur ?"
+
+
 @pytest.mark.parametrize("phrase, attendu", [
     ("Il y a deux fenêtres, une en PVC et une en bois.", [(1, "la fenêtre en PVC"), (1, "la fenêtre en bois")]),
     ("Une fenêtre en PVC et une autre en bois.", [(1, "la fenêtre en PVC"), (1, "la fenêtre en bois")]),
@@ -363,7 +385,7 @@ def test_ce_qui_situe_un_element_n_en_cree_pas_un_autre():
     assert groupes(c, "emetteur") == [(1, "le radiateur 1", {"type": "radiateur électrique"})] and not groupes(c, "fenetre")
     dire(c, "On passe dans la chambre.")
     dire(c, "Il y a aussi un radiateur électrique.")  # « il y a aussi » : pas un bégaiement (« a… aussi »)
-    assert c.nom_piece(c.elements[-1].piece) == "Chambre"
+    assert [n for n, _, _ in groupes(c, "emetteur")] == [1, 1]  # un autre radiateur du logement
 
 
 def test_tous_les_deux_ne_deborde_pas_sur_les_autres_radiateurs():
@@ -384,22 +406,28 @@ def test_au_moins_15_scenarios_d_exceptions():
 # --- 7. Dialogue complet : l'assistant s'adapte ------------------------------------------------------------
 
 def test_dialogue_qui_s_adapte(tmp_path):
+    # Étape 13 : le DPE du logement, côté par côté, sans jamais demander la pièce (ici sans boussole).
     echanges = [
-        ("Ici c'est le séjour.", "Décrivez le premier mur."),
-        ("Ce mur donne dehors, brique 30 cm, isolé par l'intérieur.", "D'autres murs sur l'extérieur ou un local non chauffé ?"),
-        # Mur sur une pièce chauffée : rien d'autre à demander, et pas de nouvelle question sur les murs.
-        ("Oui, celui-ci donne sur une pièce chauffée.", "Au-dessus du plafond : combles, terrasse ou logement ?"),
-        # Correction tardive : gardée, signalée, puis la question restée en attente est reposée.
-        ("Le premier mur, en fait c'est du béton.", "Je remplace brique. Au-dessus du plafond : combles, terrasse ou logement ?"),
-        ("Logement au-dessus.", "Sous le plancher : terre-plein, vide sanitaire, cave ou logement ?"),
-        ("Logement en dessous.", "Des fenêtres dans cette pièce ?"),
+        ("Ici c'est le séjour.", "Ce mur donne sur quoi ?"),
+        ("Ce mur donne dehors, brique 30 cm, isolé par l'intérieur.", "Des fenêtres ou une porte sur ce mur ?"),
         ("Oui, trois, double vitrage.", "Les 3 fenêtres : PVC, bois ou alu ?"),
         ("Deux en PVC et une en bois.", "Les 2 fenêtres en PVC : des volets ?"),
         ("Volets roulants.", "La fenêtre en bois : des volets ?"),
-        ("Pareil.", "D'autres fenêtres, ou une porte vers l'extérieur ?"),
-        ("Non.", "Des radiateurs dans cette pièce ?"),
-        ("Oui, 9 électriques basse température et 1 électrique haute température.", "Quel est le chauffage principal ?"),
-        ("Électrique.", "Et l'eau chaude, comment est-elle produite ?"),
+        ("Pareil.", "Les autres côtés du logement donnent sur quoi ?"),
+        ("Les autres côtés donnent sur des voisins.", "Au-dessus du logement : combles, terrasse ou un autre logement ?"),
+        # Correction tardive : gardée, signalée, puis la question restée en attente est reposée.
+        ("Le premier mur, en fait c'est du béton.", "Je remplace brique. Au-dessus du logement : combles, terrasse ou un autre logement ?"),
+        ("Logement au-dessus.", "Sous le logement : terre-plein, vide sanitaire, cave ou un autre logement ?"),
+        # Un mur entre deux pièces : il ne compte pas pour le DPE, rien n'est demandé sur lui ; la question est reposée.
+        ("Ce mur-là donne sur une pièce chauffée.", "Sous le logement : terre-plein, vide sanitaire, cave ou un autre logement ?"),
+        ("Logement en dessous.", "Quel est le chauffage principal ?"),
+        ("Électrique.", "Radiateurs électriques ou pompe à chaleur ?"),
+        # Tous les radiateurs électriques : ce sont eux, le chauffage (déduit), même dits après lui.
+        ("Neuf radiateurs électriques basse température et un électrique haute température.",
+         "Et l'eau chaude, comment est-elle produite ?"),
+        ("Un ballon électrique.", "Ventilation : VMC ou naturelle ?"),
+        ("VMC hygro B.", "Le ballon d'eau chaude date de quand ?"),
+        ("Je ne sais pas.", "C'est complet pour le DPE."),
     ]
     session, questions_apres, _ = asyncio.run(visite(tmp_path, [phrase for phrase, _ in echanges]))
     for (phrase, attendue), posees in zip(echanges, questions_apres):
@@ -410,4 +438,8 @@ def test_dialogue_qui_s_adapte(tmp_path):
         (1, "le radiateur haute température", {"type": "radiateur électrique", "temperature": "haute"}),
     ]
     assert [v["volets"] for _, _, v in groupes(c, "fenetre")] == ["roulants", "roulants"]
-    assert session.bilan()["contradictions_signalees"] == ["Je remplace brique."]
+    assert {f.support for f in c.elements if f.type == "fenetre"} == {"M1"}  # les trois sur le mur décrit
+    assert [(m.description, m.valeur("donne_sur").valeur) for m in c.enveloppe("mur")] == [
+        ("le mur 1", "extérieur"), ("les autres murs", "local chauffé (voisin)")]  # la cloison n'en fait pas partie
+    assert c.trouver_element("CH1").valeur("type").note == "déduit : émetteurs tous électriques (E1, E2)"  # refaite à chaque radiateur
+    assert session.bilan()["contradictions_signalees"] == ["Je remplace brique."] and c.taux_dpe() == 1.0

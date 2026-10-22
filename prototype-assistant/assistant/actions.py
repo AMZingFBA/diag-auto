@@ -49,6 +49,16 @@ def _valeurs(action: dict, cle: str = "valeurs") -> dict[str, str]:
     return {c.strip(): v.strip() for c, v in valeurs.items()}
 
 
+def _par_description(checklist: Checklist, type_element: str, description: str, piece: str | None) -> str:
+    """Un élément créé par la même phrase, retrouvé par son nom : dans la pièce, ou parmi les murs du logement (étape 13)."""
+    nom = cle_texte(description)
+    candidats = checklist.enveloppe(type_element, interieurs=True) + list(reversed(checklist.elements_de(piece)))
+    element = next((e for e in candidats if e.type == type_element and cle_texte(e.description) == nom), None)
+    if element is None:
+        raise ErreurChecklist("élément introuvable")
+    return element.id
+
+
 def _piece(checklist: Checklist, action: dict, t: float) -> str | None:
     """« Le radiateur de la cuisine » : la pièce nommée (créée si besoin, sans y entrer), sinon la pièce courante."""
     nom = _texte(action, "piece")
@@ -85,15 +95,8 @@ def appliquer_action(checklist: Checklist, action: dict, t: float, phrases: list
                                                      repere=_texte(action, "repere"), support=_texte(action, "support"))
             resultat["element"] = element.id
         elif outil == "orienter":  # « non, c'est le mur ouest » (étape 6)
-            ident = _texte(action, "element_id")
-            if not ident:  # élément créé par la même phrase : retrouvé par son nom dans la pièce
-                piece = _piece(checklist, action, t) or checklist.piece_courante
-                nom = cle_texte(_texte(action, "description"))
-                element = next((e for e in reversed(checklist.elements_de(piece)) if e.type == _texte(action, "type")
-                                and cle_texte(e.description) == nom), None)
-                if element is None:
-                    raise ErreurChecklist("élément à orienter introuvable")
-                ident = element.id
+            ident = _texte(action, "element_id") or _par_description(  # élément créé par la même phrase
+                checklist, _texte(action, "type"), _texte(action, "description"), _piece(checklist, action, t) or checklist.piece_courante)
             resultat["element"] = checklist.orienter(ident, _texte(action, "orientation"), citation, t).id
         elif outil == "fusionner":  # « C'est le même mur ? » « Oui. » : doublon confirmé par le diagnostiqueur (étape 9)
             resultat["element"] = checklist.fusionner(_texte(action, "element_id"), _texte(action, "meme_que")).id
@@ -108,16 +111,17 @@ def appliquer_action(checklist: Checklist, action: dict, t: float, phrases: list
                 element = checklist.enregistrer(valeur=_texte(action, "valeur"), nombre=_nombre(action), note=_texte(action, "note"),
                                                 piece=_piece(checklist, action, t), **commun)
                 resultat["element"] = element.id
-            else:
-                checklist.marquer_sans_objet(**commun)
+            else:  # « pas de fenêtre sur ce mur » : `support` (étape 13)
+                checklist.marquer_sans_objet(support=_texte(action, "support"), **commun)
         elif outil == "cloturer":  # « pas d'autre mur » : la liste de la pièce est complète
             checklist.cloturer(_texte(action, "type"), citation, t)
         elif outil == "copier":  # « plafond pareil que le séjour »
             source = cle_texte(_texte(action, "piece_source"))
             resultat["element"] = checklist.copier(_texte(action, "type"), source, citation, t).id
-        elif outil == "scinder":  # « dont une en bois », « tous sauf un »
-            element = checklist.scinder(_texte(action, "element_id"), _nombre(action) or 1, _texte(action, "description"), t, citation,
-                                        _valeurs(action))
+        elif outil == "scinder":  # « dont une en bois », « tous sauf un » ; « mur est : 60 % voisin, 40 % dehors » (étape 13)
+            ident = _texte(action, "element_id") or _par_description(
+                checklist, _texte(action, "type"), _texte(action, "de"), _piece(checklist, action, t) or checklist.piece_courante)
+            element = checklist.scinder(ident, _nombre(action) or 1, _texte(action, "description"), t, citation, _valeurs(action))
             resultat["element"] = element.id
         elif outil == "compter":  # nouveau nombre d'un groupe
             if not _nombre(action):

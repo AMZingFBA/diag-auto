@@ -48,7 +48,7 @@ def test_visite_par_texte_puis_video_et_bilan(client, tmp_path):
         ws.send_bytes(binaire(1, 0.0, np.zeros(1600, "<i2").tobytes()))
         ws.send_json({"type": "texte", "texte": "ici c'est la cuisine"})
         dire = attendre(ws, "dire")
-        assert dire["texte"] == "Décrivez le premier mur."
+        assert dire["texte"] == "Ce mur donne sur quoi ?"
         attendre(ws, "etat")  # fin du traitement de la 1re phrase
         ws.send_json({"type": "tts", "etat": "debut", "id": dire["id"]})
         ws.send_json({"type": "texte", "texte": "ce mur-là, brique, 30 cm, il donne sur l'extérieur"})
@@ -59,7 +59,7 @@ def test_visite_par_texte_puis_video_et_bilan(client, tmp_path):
         question = attendre(ws, "dire")  # posée tout de suite par le parcours du serveur
         assert question["texte"] == "Ce mur est isolé ?" and question["latence_s"] >= 0
         etat = attendre(ws, "etat")
-        assert etat["piece"] == "Cuisine" and etat["manques"][0] == "le mur 1 : isolation"
+        assert etat["piece"] == "Cuisine" and etat["manques"][0] == "le mur extérieur : isolation"  # son nom parlant, jamais « le mur 1 »
         # Écrit à chaque changement : une visite jamais terminée (page fermée, serveur redémarré) garde son état.
         en_cours = json.loads((tmp_path / statut["session"] / "etat.json").read_text(encoding="utf-8"))
         assert en_cours["pieces"][0]["nom"] == "Cuisine" and "brique" in json.dumps(en_cours, ensure_ascii=False)
@@ -126,11 +126,12 @@ def test_identifiants_et_code_d_acces(client, tmp_path):
 
 def test_rappel_de_fin():
     c = Checklist()
-    assert rappel_fin(c) == ("Avant d'arrêter, il manque 3 informations. logement, générateur de chauffage : présence à confirmer ; "
-                             "logement, eau chaude sanitaire : présence à confirmer ; logement, ventilation : présence à confirmer.")
+    # Étape 13 : ce qui manque au DPE du logement ; les côtés dont rien n'est dit, en un seul point.
+    assert rappel_fin(c) == ("Avant d'arrêter, il manque 9 informations. Côtés nord, est, sud et ouest du logement : sur quoi ils "
+                             "donnent ; le plafond : donne sur ; le plafond : isolation ; et 6 autres, à l'écran.")
     c.definir_piece("séjour", 0)
     c.signaler_element("mur", "le mur du fond", 1)
-    assert rappel_fin(c).startswith("Avant d'arrêter, il manque 13 informations. Séjour, le mur du fond : donne sur ;")
+    assert rappel_fin(c).startswith("Avant d'arrêter, il manque 13 informations. Le mur du fond : donne sur ;")
     assert rappel_fin(c).endswith("et 10 autres, à l'écran.")
 
 

@@ -158,8 +158,9 @@ def test_claude_probable_donne_une_confirmation_et_pas_une_valeur(tmp_path):
 
         session.envoyer = envoyer
         await session.demarrer()
-        for phrase in ("Ici c'est le séjour.", "Ce mur donne dehors, brique 30, non isolé.", "Non.", "Comble perdue, isolé 30 cm.",
-                       "Terre plein non isolé.", "Non.", "Oui, deux.", "Oh !", "Oui."):
+        for phrase in ("Ici c'est le séjour.", "Ce mur donne dehors, brique 30, non isolé.", "Non.", "Le reste donne sur des voisins.",
+                       "Comble perdue, isolé 30 cm.", "Terre plein non isolé.", "Chaudière gaz à condensation de 2015.",
+                       "Deux radiateurs.", "Oh !", "Oui."):
             await session.recevoir_controle({"type": "texte", "texte": phrase})
             await asyncio.sleep(0.02)
             while session.occupe:
@@ -169,7 +170,7 @@ def test_claude_probable_donne_une_confirmation_et_pas_une_valeur(tmp_path):
 
     session, dits, cerveau = asyncio.run(scenario())
     assert dits[-3:] == ["Les 2 radiateurs : à eau ou électrique ?", "J'ai compris radiateur à eau, c'est bien ça ?",
-                         "Quel est le chauffage principal ?"]
+                         "Et l'eau chaude, comment est-elle produite ?"]
     assert session.checklist.trouver_element("E1").valeur("type").note == "confirmé : « radiateur à eau »"
     contexte = cerveau.contextes[-1]
     assert "radiateur à eau" in contexte.valeurs_attendues and contexte.derniere_question.startswith("E1.type")

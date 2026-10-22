@@ -19,9 +19,10 @@ from __future__ import annotations
 
 import re
 
-from .checklist import TOUJOURS_PRESENTS, Element, cle_texte, description_auto, nom_de
+from .checklist import TOUJOURS_PRESENTS, TYPES, Element, cle_texte, description_auto, nom_de
 
 _ORDINAUX = ["premier", "deuxième", "troisième", "quatrième", "cinquième", "sixième", "septième", "huitième"]
+POSITIONS_CAMERA = ("de gauche", "de droite", "de derrière", "d'en face", "du fond")
 
 
 def _demonstratif(element: Element) -> str:
@@ -59,7 +60,7 @@ def _valeur(element: Element, champ: str) -> str:
 def indices(element: Element, fenetres: list[Element]) -> list[str]:
     """Ce qui permet de reconnaître l'élément, du plus parlant au moins parlant."""
     resultat: list[str] = []
-    if element.repere:
+    if element.repere and not (element.orientation and element.repere in POSITIONS_CAMERA):
         resultat.append(element.repere)
     if element.type == "mur":
         portees = [f for f in fenetres if f.support == element.id]
@@ -82,8 +83,11 @@ def _nom_oriente(element: Element, voisins: list[Element], fenetres: list[Elemen
     parois), puis le repère visuel. Deux murs nord (pièce en L) : ce qui les distingue en plus. Vide si rien ne les
     distingue (le nom habituel est alors utilisé)."""
     nom = f"le mur {element.orientation}"
-    # Le repère : dit (« avec la télé ») ou dans le nom donné à l'image (« le mur avec le miroir »).
+    # Le repère : dit (« avec la télé ») ou dans le nom donné à l'image (« le mur avec le miroir »). Une position par rapport
+    # à la caméra (« de gauche ») ne vaut qu'à l'instant où elle est dite : le côté la remplace (étape 13).
     repere = element.repere or ("" if numerote or not element.description.startswith("le mur ") else element.description[7:])
+    if repere in POSITIONS_CAMERA:
+        repere = ""
     memes = [v for v in voisins if v is not element and v.type == "mur" and v.orientation == element.orientation]
     if not memes:
         return f"{nom}, celui {repere}" if repere else nom
@@ -94,10 +98,12 @@ def _nom_oriente(element: Element, voisins: list[Element], fenetres: list[Elemen
     return ""
 
 
-def nom_parlant(element: Element, voisins: list[Element], fenetres: list[Element], courant: bool) -> str:
-    """Le nom à dire. `voisins` : les autres éléments du même type dans la pièce ; `courant` : on vient
-    d'en parler (« ce mur »)."""
-    if element.type in TOUJOURS_PRESENTS or element.piece is None:
+def nom_parlant(element: Element, voisins: list[Element], fenetres: list[Element], courant: bool,
+                rangs: list[Element] | None = None) -> str:
+    """Le nom à dire. `voisins` : les autres éléments du même type dans la pièce (pour un mur, dans le logement : étape
+    13) ; `courant` : on vient d'en parler (« ce mur ») ; `rangs` : ceux parmi lesquels compter son rang, en dernier
+    recours (un mur : les murs vus dans la même pièce, jamais « le septième mur » du logement)."""
+    if element.type in TOUJOURS_PRESENTS or TYPES[element.type].niveau == "logement":
         return element.description
     # Seuls les noms numérotés donnés par le serveur (« le mur 3 », « la fenêtre 2 ») sont remplacés ; « les 3
     # fenêtres » ou « le mur avec le miroir » (vu à l'image) sont déjà parlants.
@@ -121,7 +127,8 @@ def nom_parlant(element: Element, voisins: list[Element], fenetres: list[Element
     feminin = base.startswith("la ")
     if element.image:
         return f"{base} affichée" if feminin else f"{base} affiché"  # la vignette est à l'écran avec la question
-    rang = voisins.index(element) if element in voisins else 0
+    rangs = voisins if rangs is None else rangs
+    rang = rangs.index(element) if element in rangs else 0
     if rang < len(_ORDINAUX) and base.startswith(("le ", "la ")):
         article, nom = base.split(" ", 1)
         return f"{article} {'première' if feminin and rang == 0 else _ORDINAUX[rang]} {nom}"

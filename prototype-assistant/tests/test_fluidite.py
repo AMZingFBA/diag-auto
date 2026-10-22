@@ -110,7 +110,7 @@ def test_reponse_coupee_par_un_bruit_redite(tmp_path):
     session, recus = asyncio.run(scenario())
     assert any(m["type"] == "parole_debut" for m in recus)  # l'assistant s'est tu…
     # … puis, ce n'était qu'un bruit : la suite de sa réponse est redite, et « . » n'est jamais allé à Claude.
-    assert dits(recus) == ["Une fuite de chaleur.", "Souvent aux jonctions.", "Décrivez le premier mur."]
+    assert dits(recus) == ["Une fuite de chaleur.", "Souvent aux jonctions.", "Ce mur donne sur quoi ?"]
     assert "." not in cerveau.phrases
 
 
@@ -143,7 +143,7 @@ def test_toujours_une_voix_en_moins_de_2_s(tmp_path):
     cerveau = ClaudeLent(poli({"Comment ça va ?": "Très bien, merci."}))
     _, apres, _ = asyncio.run(visite(tmp_path, ["Ici c'est le séjour.", "Comment ça va ?", "Ce mur donne dehors.", "Euh."], cerveau))
     # Rien de noté : « Alors… » au bout de 1,4 s, puis la réponse de Claude enchaîne sans couper.
-    assert dits(apres[1])[0] in RELANCES and dits(apres[1])[1:] == ["Très bien, merci.", "Décrivez le premier mur."]
+    assert dits(apres[1])[0] in RELANCES and dits(apres[1])[1:] == ["Très bien, merci.", "Ce mur donne sur quoi ?"]
     assert suites(apres[1]) == [False, True, True]
     relance = next(m for m in apres[1] if m["type"] == "dire")
     assert RELANCE_S <= relance["latence_s"] < 1.6
@@ -267,30 +267,25 @@ def test_piece_reconnue_sur_les_images_pas_proposee_tant_que_la_piece_n_est_pas_
     assert question == [] and session.checklist.piece_courante == "sejour"
 
 
-def test_piece_reconnue_sur_les_images_demandee_puis_confirmee_une_fois_la_piece_finie(tmp_path):
-    from assistant.evaluer import PIECE_A_4_MURS
-
+def test_piece_reconnue_sur_les_images_jamais_demandee(tmp_path):
+    # Étape 13 (Noah) : « qu'on soit dans le séjour ou la chambre, pour le DPE on s'en fiche ». Une pièce reconnue sur les
+    # images n'est ni demandée (« On est dans la cuisine ? ») ni décidée.
     veille = CerveauScenario(lambda contexte: ("", "", [{"outil": "piece_courante", "nom": "Cuisine", "citation": ""}]))
     cerveau = CerveauScenario(poli(defaut=""))
 
     async def scenario():
         session, recus = await ouvrir(tmp_path, cerveau, cerveau_veille=veille)
-        for phrase, _ in PIECE_A_4_MURS[:-2]:  # le séjour décrit en entier
+        for phrase in ("Ici c'est le séjour.", "Ce mur donne dehors, brique 30 cm, isolé par l'intérieur.", "Non."):
             await parler(session, phrase)
             await attendre(session)
-        assert not session.checklist.manques_piece()
         debut = len(recus)
         await session._veiller()
-        question = dits(recus[debut:])
-        assert session.checklist.piece_courante == "sejour"  # pas décidé par l'image seule
-        await parler(session, "Oui.")
-        await attendre(session)
         await session.terminer()
-        return session, question
+        return session, dits(recus[debut:])
 
-    session, question = asyncio.run(scenario())
-    assert question == ["On est dans la cuisine ?"]
-    assert session.checklist.piece_courante == "cuisine"
+    session, dit = asyncio.run(scenario())
+    assert not [q for q in dit if "pièce" in q or "cuisine" in q.lower()]
+    assert session.checklist.piece_courante == "sejour"
 
 
 # --- 6. « Ce mur, ce mur et ce mur » -------------------------------------------------------------------------------

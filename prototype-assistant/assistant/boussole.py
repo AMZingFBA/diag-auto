@@ -112,6 +112,20 @@ class Visee:
     stable: bool  # la caméra n'a pas balayé la pièce pendant la phrase
 
 
+# « Le mur de gauche » : pas celui que la caméra regarde, mais celui à sa gauche (étape 13 : face au nord, c'est le mur
+# ouest). Le cap croît vers la droite (nord 0°, est 90°), le lacet du gyroscope aussi.
+DECALAGES = {"de gauche": -90.0, "de droite": 90.0, "de derrière": 180.0, "d'en face": 0.0, "du fond": 0.0}
+
+
+def visee_decalee(visee: Visee, position: str) -> Visee:
+    """La visée du mur désigné par sa position par rapport à la caméra (« de gauche », « de droite », « de derrière »)."""
+    decalage = DECALAGES.get(position, 0.0)
+    if not decalage:
+        return visee
+    return Visee(None if visee.cap is None else (visee.cap + decalage) % 360,
+                 None if visee.lacet is None else (visee.lacet + decalage) % 360, visee.stable)
+
+
 class Boussole:
     """Les mesures reçues du téléphone pendant la visite."""
 

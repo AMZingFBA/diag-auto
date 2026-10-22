@@ -1,4 +1,4 @@
-"""Évaluation de bout en bout sur une pièce complète à 4 murs (étape 2 de Noah) : extraction
+"""Évaluation de bout en bout sur une visite de deux pièces décrite par côté (étapes 2 et 13 de Noah) : extraction
 immédiate + parcours du serveur + Claude Code (abonnement) quand les règles n'ont pas compris.
 Affiche, phrase par phrase, ce qui est noté, la question posée et la latence de chaque étape.
 
@@ -28,39 +28,52 @@ from .session import Session
 from .simulation import CerveauSimulation
 from .transcription import TranscripteurSimulation
 
-# (phrase du diagnostiqueur, question attendue juste après) : une pièce à 4 murs, puis la pièce suivante.
-# Les tests (tests/test_dialogue.py) vérifient ce même parcours question par question.
-PIECE_A_4_MURS = [
-    ("Ici c'est le séjour.", "Décrivez le premier mur."),
-    # « D'autres murs qui donnent dehors… ? » : une fois, puis seulement après un nouveau mur dehors ou sur un local non
-    # chauffé (test de Noah du 22/10 après-midi : « Un autre mur dans cette pièce ? » posé 10 fois).
-    ("Ce mur donne dehors, brique 30 cm, isolé par l'intérieur.", "D'autres murs sur l'extérieur ou un local non chauffé ?"),
-    ("Oui, en parpaing de 20, non isolé, sur le garage.", "D'autres murs sur l'extérieur ou un local non chauffé ?"),
-    ("Oui, le troisième mur donne dehors.", "Ce mur est en quoi ?"),  # jamais « le mur 3 » (étape 5)
-    ("Brique.", "Quelle épaisseur ?"),
-    ("30 centimètres.", "Il est isolé ?"),
-    ("Je ne sais pas.", "D'autres murs sur l'extérieur ou un local non chauffé ?"),
-    # Un mur sur une pièce chauffée : rien d'autre à demander, et pas de nouvelle question sur les murs.
-    ("Oui, le dernier mur donne sur une pièce chauffée.", "Au-dessus du plafond : combles, terrasse ou logement ?"),
-    ("Des combles perdus, isolés avec 30 cm de laine de verre.", "Sous le plancher : terre-plein, vide sanitaire, cave ou logement ?"),
-    ("Terre-plein, pas isolé.", "Des fenêtres dans cette pièce ?"),
-    ("En tout trois fenêtres, toutes pareilles, en PVC double vitrage.", "Les 3 fenêtres : des volets ?"),
-    ("Volets roulants.", "D'autres fenêtres, ou une porte vers l'extérieur ?"),
-    ("Non.", "Des radiateurs dans cette pièce ?"),
-    ("Oui, deux, à eau.", "Quel est le chauffage principal ?"),
-    ("Une chaudière gaz à condensation de 2015.", "Et l'eau chaude, comment est-elle produite ?"),
-    ("Par la chaudière.", "Ventilation : VMC ou naturelle ?"),
-    # Date et température des radiateurs : plus jamais demandées (étape 4), mais notées si elles sont dites.
-    ("VMC hygro B.", "Pièce terminée. Quelle est la pièce suivante ?"),
-    ("La cuisine.", "Décrivez le premier mur."),
+# Étape 13 (Noah) : le DPE décrit l'enveloppe du logement, par côté, pas pièce par pièce ; la pièce où l'on est ne compte
+# pas (« qu'on soit dans le séjour ou la chambre, pour le DPE on s'en fiche ») et n'est jamais demandée. Une visite
+# téléphone en main : (phrase du diagnostiqueur, cap de la caméra pendant la phrase — 0 = nord, 90 = est — ou None,
+# question attendue juste après, ou None si l'assistant n'a rien à demander). Les tests (tests/test_dialogue.py)
+# vérifient ce même parcours question par question.
+VISITE_PAR_COTES = [
+    ("On commence.", None, "Ce mur donne sur quoi ?"),  # « ce mur donne sur quoi ? », jamais « dans quelle pièce ? »
+    ("Sur la rue, brique 30 cm, isolé par l'intérieur.", 272, "Des fenêtres ou une porte sur ce mur ?"),
+    ("Oui, trois fenêtres PVC double vitrage.", 272, "Les 3 fenêtres : des volets ?"),
+    ("Volets roulants.", 272, "Et côtés nord, est et sud, le logement donne sur quoi ?"),
+    ("Au nord le voisin, à l'est la cage d'escalier.", 0, "Le mur est, il est en quoi ?"),  # un voisin : rien d'autre
+    ("Parpaing de 20, pas isolé.", 0, "Le mur est : des fenêtres ou une porte ?"),
+    # Sur un mur qui donne sur les parties communes, la porte donne sur le palier : déduit, pas demandé.
+    ("La porte d'entrée, en bois.", 90, "Et côté sud, le logement donne sur quoi ?"),
+    ("Au sud la cour, brique 30 cm, isolé par l'intérieur, avec une porte-fenêtre alu double vitrage.", 180,
+     "Cette porte-fenêtre : des volets ?"),
+    ("Aucun.", 180, "Au-dessus du logement : combles, terrasse ou un autre logement ?"),
+    ("Des combles perdus, isolés avec 30 cm de laine de verre.", 270,
+     "Sous le logement : terre-plein, vide sanitaire, cave ou un autre logement ?"),
+    ("Terre-plein, pas isolé.", 270, "Quel est le chauffage principal ?"),
+    ("Une chaudière gaz à condensation de 2015.", 90, "Et les radiateurs : à eau ou électriques ?"),
+    ("À eau.", 90, "Et l'eau chaude, comment est-elle produite ?"),
+    ("Par la chaudière.", 90, "Ventilation : VMC ou naturelle ?"),
+    # Date et température des radiateurs : jamais demandées (étape 4), mais notées si elles sont dites.
+    ("VMC hygro B.", 90, "C'est complet pour le DPE."),
+    # Il continue dans une autre pièce : rien n'est redemandé des murs, du plafond ni du plancher. Ce qu'il dit de nouveau
+    # est rangé : face au nord, « le mur de gauche » est le mur ouest, ici sur le voisin (une autre partie du mur ouest).
+    ("On passe dans la chambre.", 0, None),
+    ("Le mur de gauche donne sur le voisin.", 0, None),
+    ("Encore une fenêtre en bois, simple vitrage, sans volet.", 182, None),
 ]
+
+
+async def phrase_filmee(session: Session, texte: str, cap: float | None, t: float) -> None:
+    """Une phrase dite en filmant : la boussole du téléphone (cap et lacet) à l'instant de la phrase, puis la phrase."""
+    session.t_video = t
+    if cap is not None:
+        await session.recevoir_controle({"type": "capteurs", "t": t, "cap": cap, "lacet": cap, "inclinaison": 90.0})
+    await session.recevoir_controle({"type": "texte", "texte": texte})
 
 
 # Réponses que les règles ne peuvent pas trancher seules : Claude doit les interpréter par rapport à la
 # question posée (étape 3 de Noah). (champ visé par la dernière question, question, transcription)
 CAS_DIFFICILES = [
-    ("PL1.donne_sur", "Au-dessus du plafond : combles, terrasse ou logement ?", "Au-dessus c'est le voisin, il est chauffé."),
-    ("PB1.donne_sur", "Sous le plancher : terre-plein, vide sanitaire, cave ou logement ?", "En dessous y a le parking de l'immeuble."),
+    ("PL1.donne_sur", "Au-dessus du logement : combles, terrasse ou un autre logement ?", "Au-dessus c'est le voisin, il est chauffé."),
+    ("PB1.donne_sur", "Sous le logement : terre-plein, vide sanitaire, cave ou un autre logement ?", "En dessous y a le parking de l'immeuble."),
     ("E1.type", "Les 2 radiateurs : à eau ou électrique ?", "Oh !"),
     ("E1.type", "Les 2 radiateurs : à eau ou électrique ?", "Ils sont branchés sur la chaudière."),
     ("M1.materiau", "Le mur avec la télé est en quoi ?", "C'est du, euh, comment on dit, du bloc creux."),
@@ -71,16 +84,15 @@ CAS_DIFFICILES = [
 # Étape 7 : une VRAIE conversation. Une visite en cours (séjour décrit, cuisine commencée), puis 30 phrases libres que
 # des règles ne peuvent pas prévoir : Claude, cerveau de chaque phrase, doit y répondre et reprendre la visite.
 MISE_EN_PLACE = [
-    "Ici c'est le séjour.",
+    "Ici c'est le séjour.",  # une pièce dite : notée (repère), jamais demandée (étape 13)
     "Ce mur donne dehors, brique 30 cm, isolé par l'intérieur, il y a deux fenêtres PVC double vitrage dessus.",
-    "Un autre mur donne sur le voisin.",
+    "Volets roulants.",
+    "Un mur donne sur le voisin.",
     "Pas d'autre mur.",
     "Au-dessus, des combles perdus isolés avec 30 cm de laine de verre.",
     "Terre-plein, pas isolé.",
-    "Volets roulants.",
-    "Pas d'autre fenêtre.",
-    "Deux radiateurs à eau.",
     "Une chaudière gaz à condensation de 2015.",
+    "Deux radiateurs à eau.",
     "On passe dans la cuisine.",
     "Ce mur donne dehors, parpaing de 20, non isolé.",
 ]
@@ -274,9 +286,9 @@ async def evaluer(simulation: bool) -> dict:
     await session._pret.wait()
     print()
     conformes = 0
-    for numero, (phrase, attendue) in enumerate(PIECE_A_4_MURS, 1):
+    for numero, (phrase, cap, attendue) in enumerate(VISITE_PAR_COTES, 1):
         avant = len(recus)
-        await session.recevoir_controle({"type": "texte", "texte": phrase})
+        await phrase_filmee(session, phrase, cap, 10.0 * numero)
         await asyncio.sleep(0.05)
         while session.occupe:
             await asyncio.sleep(0.05)
@@ -287,11 +299,12 @@ async def evaluer(simulation: bool) -> dict:
                  for m in nouveaux if m["type"] == "actions" for r in m["resultats"]
                  if r["statut"] == "accepte" and r["outil"] in ("enregistrer_reponse", "marquer_sans_objet", "cloturer", "copier")]
         questions = [m["texte"] for m in nouveaux if m["type"] == "dire"]
-        conformes += questions == [attendue]
+        conformes += questions == ([attendue] if attendue else [])
         claude = f" | Claude appelé : {_s(mesure.get('cerveau_total_s'))} s" if "cerveau_total_s" in mesure else ""
         print(f"{numero:2d}. « {phrase} »")
         print(f"    noté   : {', '.join(notes) or 'rien'}")
-        print(f"    dit    : {' / '.join(questions) or '(rien)'}{'' if questions == [attendue] else f'   ← attendu : {attendue}'}")
+        print(f"    dit    : {' / '.join(questions) or '(rien)'}"
+              f"{'' if questions == ([attendue] if attendue else []) else f'   ← attendu : {attendue or "(rien)"}'}")
         print(f"    temps  : extraction {mesure.get('extraction_ms')} ms | question {_s(mesure.get('question_s'))} s{claude}", flush=True)
     bilan = await session.terminer()
 
@@ -300,16 +313,16 @@ async def evaluer(simulation: bool) -> dict:
         return _s(statistics.median(valeurs)) if valeurs else "—"
 
     questions = [m["texte"] for m in recus if m["type"] == "dire"]
-    reviennent = {"D'autres murs sur l'extérieur ou un local non chauffé ?", "Décrivez le premier mur.",
-                  "D'autres fenêtres, ou une porte vers l'extérieur ?"}
+    reviennent = {"Des fenêtres ou une porte sur ce mur ?", "Ce mur donne sur quoi ?",
+                  "D'autres fenêtres, ou une porte vers l'extérieur ?"}  # étape 13 : à chaque mur
     uniques = [q for q in questions if q not in reviennent]
     print("\nRésumé :")
-    print(f"  questions conformes au parcours : {conformes}/{len(PIECE_A_4_MURS)} ; valeurs notées {bilan['acceptees']},"
-          f" refusées {bilan['refusees']} ; taux de remplissage du séjour {round(100 * session.checklist.taux_remplissage('sejour'))} %")
+    print(f"  questions conformes au parcours : {conformes}/{len(VISITE_PAR_COTES)} ; valeurs notées {bilan['acceptees']},"
+          f" refusées {bilan['refusees']} ; DPE rempli à {round(100 * session.checklist.taux_dpe())} %")
     print(f"  questions avec « répét » / « pardon » : {sum(('répét' in q.lower()) or ('pardon' in q.lower()) for q in questions)}"
           f" ; questions doubles (2 « ? ») : {sum(q.count('?') > 1 for q in questions)}"
           f" ; même question reposée : {len(uniques) - len(set(uniques))} (hors celles qui reviennent à chaque mur ou pièce)")
-    print(f"  Claude appelé pour {sum('cerveau_total_s' in m for m in session.mesures)} phrase(s) non comprise(s) sur {len(PIECE_A_4_MURS)},"
+    print(f"  Claude appelé pour {sum('cerveau_total_s' in m for m in session.mesures)} phrase(s) non comprise(s) sur {len(VISITE_PAR_COTES)},"
           f" et {bilan['relectures_claude']} relecture(s) en arrière-plan de phrases longues")
     print(f"  latence médiane : extraction {mediane('extraction_ms')} ms, question {mediane('question_s')} s")
     print("  + sur téléphone : ~0,7 s de silence de fin de phrase et ~2,3 s de transcription (mesurés à part)")
@@ -317,7 +330,7 @@ async def evaluer(simulation: bool) -> dict:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Évaluation de l'assistant sur une pièce complète à 4 murs")
+    parser = argparse.ArgumentParser(description="Évaluation de l'assistant sur une visite de deux pièces décrite par côté")
     parser.add_argument("--simulation", action="store_true", help="sans Claude (règles et parcours seulement)")
     parser.add_argument("--comprehension", action="store_true", help="réponses difficiles interprétées par Claude selon la question")
     parser.add_argument("--conversation", action="store_true", help="30 phrases libres : Claude cerveau de chaque phrase (étape 7)")

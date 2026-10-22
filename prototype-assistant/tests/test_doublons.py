@@ -132,16 +132,17 @@ def test_09_fenetre_annoncee_puis_decrite(tmp_path):
     assert len(fenetres) == 1 and fenetres[0].valeur("menuiserie").valeur == "bois"  # une seule, et pas supprimée
 
 
-def test_10_meme_orientation_demandee(tmp_path):
-    # Deux murs orientés nord dans la même pièce : peut-être le même ; demandé, jamais réuni sans son « oui ».
+def test_10_meme_cote_c_est_le_mur_du_logement(tmp_path):
+    # Étape 13 : deux murs au nord qui donnent dehors sont le mur nord du logement. Ils sont réunis sans rien perdre (les
+    # valeurs s'additionnent) ; le « doublon » proposé par Claude n'a plus lieu d'être demandé.
     nord = [{"outil": "orienter", "element_id": "M2", "orientation": "nord", "citation": "plein nord"},
             {"outil": "doublon", "element_id": "M2", "meme_que": "M1", "preuve": "même orientation"}]
     session, apres, _ = jouer(tmp_path, ["Ici c'est le séjour.", "Ce mur donne dehors, plein nord.", "Un autre mur donne dehors, plein nord."],
                               {"Ce mur donne dehors, plein nord.": ("", [{"outil": "orienter", "element_id": "M1", "orientation": "nord",
                                                                           "citation": "plein nord"}]),
                                "Un autre mur donne dehors, plein nord.": ("", nord)})
-    assert murs(session) == ["M1", "M2"]
-    assert dits(apres[2])[-1].startswith("C'est le même mur que")
+    assert murs(session) == ["M1"] and session.checklist.trouver_element("M2").id == "M1"
+    assert not any(d.startswith("C'est le même mur que") for d in dits(apres[2]))
 
 
 def test_suppression_seulement_quand_il_la_demande(tmp_path):

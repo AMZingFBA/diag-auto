@@ -61,8 +61,8 @@ def test_chaque_question_arrive_avec_ses_reponses_en_boutons(tmp_path):
         return recus
 
     q = questions(asyncio.run(scenario()))
-    assert [(m["texte"], m["cible"]) for m in q] == [("Décrivez le premier mur.", "presence:mur"), ("Ce mur est en quoi ?", "M1.materiau")]
-    assert q[0]["options"] == []  # « Décrivez le premier mur » : réponse libre
+    assert [(m["texte"], m["cible"]) for m in q] == [("Ce mur donne sur quoi ?", "presence:mur"), ("Ce mur est en quoi ?", "M1.materiau")]
+    assert {"libelle": "Extérieur", "valeur": "extérieur"} in q[0]["options"]  # étape 13 : sur quoi il donne
     assert {"libelle": "Brique", "valeur": "brique"} in q[1]["options"] and len(q[1]["options"]) <= 12
 
 
@@ -100,6 +100,9 @@ def test_oui_non_piece_et_fiche_cochees(tmp_path):
         await parler(session, "Ce mur donne dehors, brique 30 cm, non isolé.")
         await attendre(session)
         debut = len(recus)
+        await session.recevoir_controle({"type": "reponse", "cible": "fenetres:M1", "valeur": "non", "libelle": "Non"})
+        apres_fenetres = dits(recus[debut:])
+        debut = len(recus)
         await session.recevoir_controle({"type": "reponse", "cible": "suite:mur", "valeur": "non", "libelle": "Non, c'est tout"})
         apres_murs = dits(recus[debut:])
         # Fiche de la pièce : correction d'un champ déjà rempli, sans changer la question en cours.
@@ -108,11 +111,12 @@ def test_oui_non_piece_et_fiche_cochees(tmp_path):
                                          "libelle": "Parpaing"})
         apres_fiche = dits(recus[debut:])
         await session.terminer()
-        return session, apres_murs, apres_fiche
+        return session, apres_fenetres, apres_murs, apres_fiche
 
-    session, apres_murs, apres_fiche = asyncio.run(scenario())
+    session, apres_fenetres, apres_murs, apres_fiche = asyncio.run(scenario())
     c = session.checklist
-    assert "mur" in c.pieces["sejour"].clos and apres_murs == ["Au-dessus du plafond : combles, terrasse ou logement ?"]
+    assert "fenetre" in c.trouver_element("M1").absences and apres_fenetres == ["Les autres côtés du logement donnent sur quoi ?"]
+    assert "mur" in c.clos and apres_murs == ["Au-dessus du logement : combles, terrasse ou un autre logement ?"]
     assert c.trouver_element("M1").valeur("materiau").valeur == "parpaing" and apres_fiche == []
 
 
@@ -149,7 +153,8 @@ def test_boutons_selon_la_question():
         return [o["libelle"] for o in options_pour(Cible.depuis_code(code, c))]
 
     assert libelles("presence:fenetre") == ["Oui", "Non"]
-    assert libelles("suite:mur") == ["Oui, un autre", "Non, c'est tout"]
+    assert libelles("suite:mur") == ["Des voisins", "Non, c'est tout"]  # « Et côtés nord et sud… ? » (étape 13)
+    assert libelles("suite:fenetre") == ["Oui, un autre", "Non, c'est tout"]
     assert "VMC simple flux" in libelles("presence:ventilation") and "Aucune" in libelles("presence:ventilation")
     assert libelles("piece:suivante")[:2] == ["Séjour", "Cuisine"]
     assert options_pour(None) == []
@@ -251,7 +256,7 @@ def test_reponse_coupee_par_deux_bruits_de_suite_redite(tmp_path):
 
     apres = asyncio.run(scenario())
     assert sum(m["type"] == "parole_debut" for m in apres) == 2  # coupé deux fois…
-    assert dits(apres)[-2:] == ["Souvent aux jonctions.", "Décrivez le premier mur."]  # … puis redit en entier
+    assert dits(apres)[-2:] == ["Souvent aux jonctions.", "Ce mur donne sur quoi ?"]  # … puis redit en entier
     assert "A." not in cerveau.phrases
 
 
@@ -260,7 +265,7 @@ def test_reponse_coupee_par_deux_bruits_de_suite_redite(tmp_path):
 
 def test_un_autre_mur_jamais_repose_par_claude_sous_une_autre_forme(tmp_path):
     # Au test, Claude reposait « Un autre mur dans cette pièce ? » (10 fois) : la question du parcours et la sienne ont
-    # maintenant la même clé.
+    # maintenant la même clé. Étape 13 : une question sur la pièce n'est de toute façon jamais posée.
     def repondre(contexte):
         if contexte.phrase.startswith("Celui-ci"):
             return "Un autre mur dans cette pièce ?", "suite:mur", []
@@ -276,8 +281,8 @@ def test_un_autre_mur_jamais_repose_par_claude_sous_une_autre_forme(tmp_path):
         return recus
 
     toutes = dits(asyncio.run(scenario()))
-    assert toutes.count("D'autres murs sur l'extérieur ou un local non chauffé ?") == 1
-    assert "Un autre mur dans cette pièce ?" not in toutes
+    assert "Un autre mur dans cette pièce ?" not in toutes and not [q for q in toutes if "pièce" in q]
+    assert len([q for q in toutes if "autres côtés" in q]) <= 1
 
 
 def test_c_est_le_meme_mur_reunit_les_deux_murs():
@@ -358,7 +363,7 @@ def test_non_coche_a_une_proposition_passe_a_la_question_suivante(tmp_path):
 
     session, apres = asyncio.run(scenario())
     assert session.checklist.piece_courante == "sejour"
-    assert apres == ["Au-dessus du plafond : combles, terrasse ou logement ?"]  # la visite continue dans le séjour
+    assert apres == ["Au-dessus du logement : combles, terrasse ou un autre logement ?"]  # la visite continue
 
 
 def test_reponse_courte_incomprise_reecoutee_meme_avec_des_mots_connus(tmp_path):

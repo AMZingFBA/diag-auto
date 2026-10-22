@@ -35,10 +35,13 @@ UNITES = {"cm": "centimetres", "centimetre": "centimetres", "m": "metres", "metr
 
 
 def mots_porteurs(texte: str) -> list[str]:
-    """Les mots porteurs de sens d'un texte, sous une forme comparable (« trente centimètres » = « 30 cm »)."""
+    """Les mots porteurs de sens d'un texte, sous une forme comparable (« trente centimètres » = « 30 cm »). Le nombre
+    d'un groupe fait partie de son nom (« les 2 fenêtres : des volets ? ») : il n'est pas compté."""
     mots = []
-    for mot in re.findall(r"[a-z0-9]+", cle_texte(texte).replace("'", " ")):
-        mot = UNITES.get(mot, NOMBRES.get(mot, mot))
+    tous = [UNITES.get(m, NOMBRES.get(m, m)) for m in re.findall(r"[a-z0-9]+", cle_texte(texte).replace("'", " "))]
+    for k, mot in enumerate(tous):
+        if mot.isdigit() and k + 1 < len(tous) and tous[k + 1] in NOMS_ELEMENTS:
+            continue
         if mot in MOTS_VIDES or mot in NOMS_ELEMENTS or (len(mot) < 2 and not mot.isdigit()):
             continue
         mots.append(mot[:-1] if len(mot) > 3 and mot.endswith("s") and not mot.isdigit() else mot)  # pluriel simple

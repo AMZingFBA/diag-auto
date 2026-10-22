@@ -29,7 +29,7 @@ from .citations import citation_trouvee
 from .cerveau import Contexte, Decision, ImageInstant, phrases_finies
 from .checklist import ORIENTABLES, TOUJOURS_PRESENTS, Checklist, Element, cle_texte, horodatage
 from .extraction import VOCABULAIRE, Cible, confirme_meme, extraire, normaliser, question_posee, valeur_normalisee
-from .boussole import MEME_COTE, Boussole, Mesure, ecart
+from .boussole import CAP_DU_POINT, MEME_COTE, Boussole, Mesure, Visee, ecart, visee_decalee
 from .decor import Decor
 from .repetition import mots_repetes, reformulation
 from .reponses import options_pour, suspecte
@@ -64,6 +64,9 @@ def valeurs_attendues(cible: Cible | None) -> list[str]:
         return []
     if cible.genre == "presence" and cible.type in ("emetteur", "chauffage", "ecs", "ventilation"):
         return list(dict.fromkeys(o["valeur"] for o in options_pour(cible) if o["valeur"] not in ("non", "inconnu"))) + ["non"]
+    if cible.type == "mur" and cible.genre in ("presence", "suite"):
+        # « Ce mur donne sur quoi ? », « Et côtés nord et sud… ? » (étape 13) : ce sur quoi il donne, pas oui / non.
+        return list(dict.fromkeys(v for _, v in VOCABULAIRE.get(("mur", "donne_sur"), [])))
     if cible.genre in ("presence", "suite", "pareil"):
         return ["oui", "non"]
     if cible.genre == "orientation":
@@ -78,6 +81,11 @@ def _de(nom: str) -> str:
         if nom.startswith(article):
             return contraction + nom[len(article):]
     return "de " + nom
+
+
+def _visee_du_repere(visee: Visee, repere: str) -> Visee:
+    """« Le mur de gauche » : la caméra regarde devant, le mur visé est à sa gauche (étape 13)."""
+    return visee_decalee(visee, repere)
 
 
 def _normaliser(actions) -> list[dict]:
@@ -116,20 +124,6 @@ def sans_accuse(phrase: str) -> str:
     if not reste or _ACCUSE_SEUL.match(reste):
         return ""
     return reste[:1].upper() + reste[1:]
-
-
-_MASCULINS = {"sejour", "salon", "couloir", "degagement", "bureau", "cellier", "garage", "grenier", "dressing"}
-
-
-def _avec_article(nom: str) -> str:
-    """« Cuisine » → « la cuisine », « Séjour » → « le séjour », « Entrée » → « l'entrée », « Combles » → « les combles »."""
-    bas = nom[:1].lower() + nom[1:] if not nom.isupper() else nom
-    cle = cle_texte(nom).split()[0] if nom.strip() else ""
-    if cle in ("combles", "toilettes", "wc"):
-        return f"les {bas}"
-    if cle[:1] in "aeiouyh":
-        return f"l'{bas}"
-    return f"{'le' if cle in _MASCULINS else 'la'} {bas}"
 
 
 # Claude affirme un doublon (« je l'avais déjà noté », « je retire mon doublon ») : jamais dit sans preuve (étape 9).
@@ -180,10 +174,20 @@ def rappel_fin(checklist: Checklist, maximum: int = 3) -> str:
     manques = checklist.manques_visite()
     if not manques:
         return "Tout est renseigné. Vous pouvez arrêter."
-    points = [f"{checklist.nom_piece(m.piece) if m.piece else 'logement'}, {m.libelle}" for m in manques[:maximum]]
-    texte = f"Avant d'arrêter, il manque {len(manques)} information{'s' if len(manques) > 1 else ''}. " + " ; ".join(points)
-    if len(manques) > maximum:
-        texte += f" ; et {len(manques) - maximum} autres, à l'écran"
+    # Étape 13 : ce qui manque au logement, pas à une pièce ; les côtés dont rien n'est dit, en un seul point.
+    cotes = [m.cote for m in manques if m.cote]
+    points: list[str] = []
+    for m in manques:
+        if not m.cote:
+            points.append(checklist.libelle(m))
+        elif m.cote == cotes[0]:
+            noms = cotes[0] if len(cotes) == 1 else f"{', '.join(cotes[:-1])} et {cotes[-1]}"
+            points.append(f"côtés {noms} du logement : sur quoi ils donnent" if len(cotes) > 1
+                          else f"côté {noms} du logement : sur quoi il donne")
+    liste = " ; ".join(points[:maximum])
+    texte = f"Avant d'arrêter, il manque {len(points)} information{'s' if len(points) > 1 else ''}. {liste[:1].upper()}{liste[1:]}"
+    if len(points) > maximum:
+        texte += f" ; et {len(points) - maximum} autres, à l'écran"
     return texte + "."
 
 
@@ -352,14 +356,14 @@ class Session:
         os.replace(provisoire, self.dossier / "etat.json")
 
     async def envoyer_etat(self) -> None:
-        manques = self.checklist.manques_piece()
+        manques = self.checklist.manques_visite()  # étape 13 : ce qui manque au DPE du logement, pas à une pièce
         etat = self.checklist.vers_dict()
         self._sauver_etat(etat)
         await self._envoyer({
             "type": "etat",
             "piece": self.checklist.nom_piece(self.checklist.piece_courante) if self.checklist.piece_courante else None,
-            "taux": self.checklist.taux_remplissage(),
-            "manques": [m.libelle for m in manques[:8]],
+            "taux": self.checklist.taux_dpe(),
+            "manques": [self.checklist.libelle(m) for m in manques[:8]],
             "nb_manques_visite": len(self.checklist.manques_visite()),
             "checklist": etat,
         })
@@ -838,15 +842,13 @@ class Session:
         actions = [{**a, "note": a.get("note") or "interprété par Claude, à vérifier"}
                    if a.get("certitude") == "probable" and a.get("outil") == "enregistrer_reponse" else a for a in actions]
         probables: list[dict] = []
-        if self.checklist.piece_courante and self.checklist.manques_piece():
-            # Pièce reconnue sur l'image par Claude (rien n'a été dit) alors que la pièce en cours n'est pas finie : on ne
-            # change pas de pièce (test de Noah du 22/10 après-midi : il a dû revenir finir la première pièce).
-            dites = self._phrases_recentes(contexte)
-            reportees = [a for a in actions if a.get("outil") == "piece_courante"
-                         and not citation_trouvee(str(a.get("citation") or ""), dites)]
-            if reportees:
-                actions = [a for a in actions if a not in reportees]
-                self.journaliser("piece_proposee_reportee", noms=[str(a.get("nom") or "") for a in reportees])
+        # Pièce reconnue sur l'image par Claude, sans que rien n'ait été dit : ignorée. La pièce ne compte pas pour le DPE
+        # (Noah, étape 13 : « qu'on soit dans le séjour ou la chambre, on s'en fiche ») ; seule une pièce dite est notée.
+        dites = self._phrases_recentes(contexte)
+        devinees = [a for a in actions if a.get("outil") == "piece_courante" and not citation_trouvee(str(a.get("citation") or ""), dites)]
+        if devinees:
+            actions = [a for a in actions if a not in devinees]
+            self.journaliser("piece_devinee_ignoree", noms=[str(a.get("nom") or "") for a in devinees])
         actions, invraisemblables, ecartees = plausibilite.filtrer(_normaliser(actions))
         signales = len(self.checklist.signalements)
         resultats = appliquer(self.checklist, actions, contexte.t, self._phrases_recentes(contexte))
@@ -1018,8 +1020,9 @@ class Session:
             element = self.checklist.trouver_element(ident)
         except ValueError:
             return self._cible
-        if element.piece is not None and element.piece != self.checklist.piece_courante:
-            return self._cible  # il a changé de pièce : le mur du séjour n'est plus « en cours »
+        if (self.checklist.piece_courante is not None and element.pieces and element.enveloppe
+                and not self.checklist.dans_la_piece(element, self.checklist.piece_courante)):
+            return self._cible  # il a dit changer de pièce : le mur vu au séjour n'est plus « en cours »
         return Cible("element", element.type, "", element.id)
 
     def _texte_en_cours(self) -> str:
@@ -1035,8 +1038,7 @@ class Session:
         phrase), sauf si la caméra visait un mur déjà connu. Claude reçoit ces images et donne à chacun un repère."""
         normalise = normaliser(texte)
         trouves = list(_DESIGNATION_MUR.finditer(normalise))
-        if (len(trouves) < 2 or self.checklist.piece_courante is None
-                or any(r["statut"] == "accepte" and r["action"].get("type") == "mur" for r in resultats)):
+        if len(trouves) < 2 or any(r["statut"] == "accepte" and r["action"].get("type") == "mur" for r in resultats):
             return []
         audio = lot[-1]["source"] == "audio"
         debut = lot[0]["t_debut"] + (self.vad.reglages.pre_roll_s if audio else 0.0)
@@ -1045,10 +1047,10 @@ class Session:
         for m in trouves:
             t = debut + (fin - debut) * (m.start() + m.end()) / 2 / max(1, len(normalise))
             visee = self.boussole.visee(t - 0.5, t + 0.5)
-            murs = [e for e in self.checklist.elements_de(self.checklist.piece_courante) if e.type == "mur"]
+            murs = self.checklist.murs_de_la_piece() if self.checklist.piece_courante else self.checklist.enveloppe("mur")
             if visee is not None and visee.cap is not None and any(
                     e.cap is not None and abs(ecart(e.cap, visee.cap)) < MEME_COTE for e in murs):
-                continue  # la caméra visait un mur déjà connu
+                continue  # la caméra visait un mur déjà vu dans la pièce
             numero = sum(e.type == "mur" for e in self.checklist.elements) + 1
             element = self.checklist.signaler_element("mur", f"le mur {numero}", t, source="voix")
             image = min(self.images, key=lambda i: abs(i.t - t), default=None)
@@ -1056,8 +1058,8 @@ class Session:
                 element.image = image.chemin.name
                 if image not in images:
                     images.append(image)
-            if visee is not None:
-                self.checklist.mesurer(element.id, visee)
+            if visee is not None:  # orienté, il rejoint le mur du même côté du logement s'il est déjà décrit (étape 13)
+                element = self.checklist.mesurer(element.id, visee)
             lignes.append(f"{element.id} désigné à {horodatage(t)}" + (f" (image de {horodatage(image.t)})" if image else ""))
             nouveaux.append({"action": {"outil": "signaler_element", "type": "mur", "description": element.description,
                                         "source": "voix", "citation": texte}, "statut": "accepte", "raison": "", "element": element.id})
@@ -1196,8 +1198,8 @@ class Session:
             element = self.checklist.trouver_element(element_id)
         except ValueError:
             return False
-        if element.type in TOUJOURS_PRESENTS:  # le plafond et le plancher existent toujours : on oublie leurs valeurs
-            element.valeurs.clear()
+        if element.type in TOUJOURS_PRESENTS and not element.parent:  # le plafond et le plancher du logement existent
+            element.valeurs.clear()  # toujours : on oublie leurs valeurs (la partie propre à une pièce, elle, disparaît)
         else:
             self.checklist.retirer(element_id)
         return True
@@ -1331,8 +1333,9 @@ class Session:
                 liste = ", ".join(manques[:-1]) + f" et {manques[-1]}" if len(manques) > 1 else "".join(manques)
                 annonce = f"Pour {nom}, il me manque {liste}." if manques else f"Pour {nom}, j'ai tout."
         elif demande == "manques":
-            manques = self.checklist.manques_piece()
-            annonce = f"Dans cette pièce, il me manque {len(manques)} informations, à l'écran." if manques else "Rien ne manque ici."
+            manques = self.checklist.manques_visite()
+            annonce = (f"Pour le DPE, il me manque {len(manques)} information{'s' if len(manques) > 1 else ''}, à l'écran."
+                       if manques else "Rien ne manque pour le DPE.")
         elif self._cible is not None and self._cible.type == "mur":
             annonce = "Un mur qu'on n'a pas encore décrit."  # « Il reste un mur… » « Quel mur ? »
         return annonce
@@ -1360,19 +1363,24 @@ class Session:
         visee = self.boussole.visee(t_debut, t_fin)
         image = min(self.images, key=lambda i: abs(i.t - t_fin), default=None)
         for r in resultats:
-            if r["statut"] != "accepte" or not r.get("element"):
-                continue
+            if r["statut"] != "accepte" or not r.get("element") or r["action"].get("cote"):
+                continue  # « au nord, le voisin » : un côté dit à l'oral, pas le mur que filme la caméra (étape 13)
             try:
                 element = self.checklist.trouver_element(r["element"])
             except ValueError:
                 continue
-            if element.piece is None or element.type in ("plafond", "plancher"):
+            if element.type in ("plafond", "plancher") or (element.piece is None and element.type not in ORIENTABLES):
                 continue
             if not element.image and image is not None and image.chemin is not None:
                 element.image = image.chemin.name
             if visee is not None and element.type in ORIENTABLES and element.cap is None and element.lacet is None:
-                # Filmé de face depuis l'intérieur : son orientation est le cap de la caméra (boussole.py).
-                self.checklist.mesurer(element.id, visee)
+                # Filmé de face depuis l'intérieur : son orientation est le cap de la caméra (boussole.py). Un mur rejoint
+                # alors le mur du même côté du logement, s'il est déjà décrit (étape 13).
+                vise = _visee_du_repere(visee, element.repere)
+                if (element.orientation_source == "dit" and vise.cap is not None
+                        and abs(ecart(vise.cap, CAP_DU_POINT[element.orientation])) > 45):
+                    continue  # un côté dit (« à l'est, la cage d'escalier ») que la caméra ne regarde pas : pas sa visée
+                self.checklist.mesurer(element.id, vise)
                 if self.checklist.boussole_fiabilite == "faible" and not self._calibration_demandee:
                     self._calibration_demandee = True
                     self._annonce = f"{self._annonce} Boussole perturbée : faites un 8 avec le téléphone.".strip()
@@ -1467,7 +1475,9 @@ class Session:
             await self._confirmer({**_normaliser(probables)[0], "note": "interprété par Claude"}, reference, mesure)
         if invraisemblables and not mesure.get("question_dite") and (proposition := self._resoudre(invraisemblables[0])):
             await self._confirmer(proposition, reference, mesure)
-        if any(r["statut"] == "accepte" for r in resultats) and not mesure.get("question_dite"):
+        # Début de visite (aucune question encore posée) : sans pièce à nommer (étape 13), c'est la première question du
+        # parcours qui ouvre la visite (« Ce mur donne sur quoi ? »), même si la phrase n'apprend rien.
+        if (any(r["statut"] == "accepte" for r in resultats) or self.questions.aucune()) and not mesure.get("question_dite"):
             if not await self._question_du_parcours(reference, mesure) and not await self._annoncer(reference, mesure) and notes:
                 await self._bip()
         self.journaliser("decision", mode=contexte.mode, dire=decision.dire, cible=decision.cible, filtrees=filtrees,
@@ -1550,6 +1560,7 @@ class Session:
             # s'il avait été dit en réponse à cette question.
             extraction = extraire(valeur, self.checklist, cible)
             resultats = appliquer(self.checklist, extraction.actions, t, [valeur])
+        self._situer(resultats, t - 1.0, t)  # « Ce mur donne sur quoi ? » « Extérieur » coché : le mur filmé, et son côté
         self._suivre(resultats)
         self.journaliser("reponse_cochee", cible=cible.code, valeur=valeur, libelle=libelle,
                          resultats=[{"outil": r["action"].get("outil"), "statut": r["statut"], "element": r.get("element"),
@@ -1607,8 +1618,7 @@ class Session:
         debut = time.perf_counter()
         decision = await self.cerveau_veille.decider(contexte, None)
         actions = [a for a in decision.actions if a.get("outil") == "signaler_element"]
-        # Une autre pièce reconnue sur les images : elle n'est pas décidée par l'image seule, on la lui demande.
-        propositions = [str(a.get("nom") or "").strip() for a in decision.actions if a.get("outil") == "piece_courante"]
+        # Une pièce reconnue sur les images n'est ni décidée ni demandée : la pièce ne compte pas pour le DPE (étape 13).
         resultats = appliquer(self.checklist, actions, contexte.t, self._phrases_recentes(contexte))
         self._compter(resultats)
         self.journaliser("decision", mode="veille", resultats=resultats, erreur=decision.erreur, brut=decision.brut[:2000],
@@ -1616,20 +1626,6 @@ class Session:
         if resultats:
             await self._envoyer_actions(resultats, "veille")
             await self.envoyer_etat()
-        for nom in propositions:
-            if nom and self.checklist.trouver_piece(nom) != self.checklist.piece_courante and not self._en_parole:
-                await self._proposer_piece(nom)
-                break
-
-    async def _proposer_piece(self, nom: str) -> None:
-        """« On est dans la cuisine ? » : la pièce que Claude reconnaît sur les images, à confirmer (étape 8). « Oui »
-        change de pièce ; une seule fois par pièce proposée."""
-        cible = Cible("piece", champ="proposee", source=nom)
-        question, cible, raison, cle = self.questions.filtrer(f"On est dans {_avec_article(nom)} ?", cible.code, self.checklist,
-                                                              time.monotonic())
-        if not raison:
-            self.journaliser("piece_proposee", nom=nom)
-            await self.dire(question, time.monotonic(), None, cible=cible, cle=cle, une_fois=True)
 
     # --- Fin et bilan ---------------------------------------------------------------------------
 
@@ -1637,7 +1633,7 @@ class Session:
         texte = rappel_fin(self.checklist)
         await self.dire(texte, time.monotonic(), forcer=True)
         await self._envoyer({"type": "bilan", "bilan": self.bilan(), "manques": [
-            {"piece": self.checklist.nom_piece(m.piece) if m.piece else "Logement", "libelle": m.libelle}
+            {"piece": self.checklist.nom_piece(m.piece) if m.piece else "Logement", "libelle": self.checklist.libelle(m)}
             for m in self.checklist.manques_visite()
         ]})
 

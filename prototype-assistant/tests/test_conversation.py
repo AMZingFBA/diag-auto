@@ -122,11 +122,11 @@ def test_chaque_phrase_va_a_claude_qui_repond_a_tout_puis_reprend_la_visite(tmp_
     session, apres, _ = asyncio.run(visite(tmp_path, phrases, cerveau))
     assert cerveau.phrases == phrases  # chaque phrase, comprise par les règles ou non
     # Lue phrase par phrase dès qu'elle arrive (« suite » : la voix enchaîne sans couper), une seule question, à la fin.
-    assert dits(apres[1]) == ["Une fuite de chaleur.", "Souvent aux jonctions entre mur et plancher.", "Décrivez le premier mur."]
+    assert dits(apres[1]) == ["Une fuite de chaleur.", "Souvent aux jonctions entre mur et plancher.", "Ce mur donne sur quoi ?"]
     assert suites(apres[1]) == [False, True, True]
     # La question restée sans réponse est reposée après chaque digression : la visite reprend.
-    assert dits(apres[2]) == ["Très bien, merci.", "Décrivez le premier mur."]
-    assert "« Décrivez le premier mur. »" in cerveau.messages[2]
+    assert dits(apres[2]) == ["Très bien, merci.", "Ce mur donne sur quoi ?"]
+    assert "« Ce mur donne sur quoi ? »" in cerveau.messages[2]
     # Une question posée à l'assistant ne pré-remplit rien : pas de « noté » (bip).
     assert not [m for messages in apres[1:] for m in messages if m["type"] == "bip"]
     assert len(session.checklist.elements) == 2  # le plafond et le plancher du séjour, rien d'autre
@@ -159,11 +159,12 @@ def test_navigation_reviens_au_sejour(tmp_path):
     phrases = ["Ici c'est le séjour.", "Ce mur donne dehors, brique 30 cm.", "On passe à la cuisine.", "Attends, reviens au séjour."]
     session, apres, _ = asyncio.run(visite(tmp_path, phrases, cerveau))
     assert session.checklist.piece_courante == "sejour"
-    # Les règles ont changé de pièce avant Claude : la question proposée est déjà celle du séjour (l'isolation du mur a
-    # déjà été demandée une fois : elle restera dans les manques de fin de visite).
-    assert "Pièce courante : Séjour" in cerveau.messages[3] and "[PL1.donne_sur]" in cerveau.messages[3]
+    # Les règles ont changé de pièce avant Claude. Étape 13 : la pièce n'est qu'un repère, elle ne change pas la question
+    # (le mur du logement reste à finir) ; restée sans réponse, elle est reposée.
+    assert ("Pièce en cours (dite par le diagnostiqueur, simple repère : sans effet sur le DPE) : Séjour" in cerveau.messages[3]
+            and "[M1.isolation]" in cerveau.messages[3])
     # « On revient au séjour. » reprend ce qu'il vient de dire : pas dit (étape 9) ; la question vient directement.
-    assert dits(apres[3]) == ["Au-dessus du plafond : combles, terrasse ou logement ?"]
+    assert dits(apres[3]) == ["Il est isolé ?"]
 
 
 def test_claude_corrige_le_pre_remplissage_sans_contradiction(tmp_path):
@@ -177,7 +178,9 @@ def test_claude_corrige_le_pre_remplissage_sans_contradiction(tmp_path):
     # Même avec son type, la valeur de Claude n'est pas ramenée à un seul mot du vocabulaire (« brique »).
     assert valeur_normalisee("mur", "materiau", "pierre et brique") == "pierre et brique"
     assert valeur_normalisee("mur", "donne_sur", "les toilettes") == "local chauffé : WC"
-    assert "nouvel élément M1 (« le mur 1 », pièce Séjour)" in cerveau.messages[1] and "M1.materiau = brique" in cerveau.messages[1]
+    assert "nouvel élément M1 (« le mur 1 », logement)" in cerveau.messages[1] and "M1.materiau = brique" in cerveau.messages[1]
+    valeurs = next(ligne for ligne in cerveau.messages[1].splitlines() if ligne.startswith("Valeurs possibles"))
+    assert "extérieur" in valeurs and "oui" not in valeurs  # « Ce mur donne sur quoi ? » : pas oui / non (étape 13)
 
 
 def test_annuler_ce_que_les_regles_ont_cree_ou_ce_qu_il_faut_oublier(tmp_path):
@@ -265,7 +268,7 @@ def test_question_du_parcours_si_claude_n_en_pose_pas(tmp_path):
     # pose la question suivante.
     cerveau = CerveauScenario(lambda contexte: ("Noté.", "", []))
     _, apres, _ = asyncio.run(visite(tmp_path, ["Ici c'est le séjour.", "Ce mur donne dehors, brique 30 cm."], cerveau))
-    assert dits(apres[0]) == ["Décrivez le premier mur."]
+    assert dits(apres[0]) == ["Ce mur donne sur quoi ?"]
     assert dits(apres[1]) == ["Ce mur est isolé ?"] and [m["type"] for m in apres[1]].count("bip") == 1
 
 
@@ -279,7 +282,7 @@ def test_consigne_de_claude_comptee_comme_sa_question(tmp_path):
 def test_claude_indisponible_le_parcours_continue(tmp_path):
     cerveau = CerveauScenario(lambda contexte: Decision(erreur="pas de réponse de Claude en 25 s"))
     _, apres, recus = asyncio.run(visite(tmp_path, ["Ici c'est le séjour.", "Ce mur donne dehors, brique 30 cm.", "Quel mur ?"], cerveau))
-    assert dits(apres[0]) == ["Décrivez le premier mur."]
+    assert dits(apres[0]) == ["Ce mur donne sur quoi ?"]
     assert dits(apres[1]) == ["Ce mur est isolé ?"]
     assert len(dits(apres[2])) == 1 and dits(apres[2])[0].startswith("Je parle du mur") and dits(apres[2])[0].endswith("isolé ?")
     assert any(m["type"] == "erreur" for m in recus)

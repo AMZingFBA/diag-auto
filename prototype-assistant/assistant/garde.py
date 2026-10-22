@@ -15,6 +15,9 @@ DELAI_REDEMANDE_S = 120.0
 # « Le mur 3 », « le quatrième mur » : le diagnostiqueur ne sait pas lequel c'est (test réel de Noah, étape 5).
 _NOM_ABSTRAIT = re.compile(r"\b(?:murs?|fen[eê]tres?|radiateurs?)\s+(?:n°\s*)?\d+\b"
                            r"|\b(?:deuxi[eè]me|troisi[eè]me|quatri[eè]me|cinqui[eè]me|sixi[eè]me)\s+mur\b", re.IGNORECASE)
+# « Un autre mur dans cette pièce ? », « Dans quelle pièce sommes-nous ? » : la pièce ne compte pas pour le DPE, on ne la
+# demande jamais (Noah, étape 13).
+_PIECE = re.compile(r"\bpi[eè]ces?\b", re.IGNORECASE)
 _REPETER = re.compile(
     r"r[ée]p[ée]t|\bpardon\b|pas (?:bien )?(?:compris|entendu|saisi|clair)|\bredi(?:re|tes)\b|reformul|je n'ai pas (?:compris|entendu)",
     re.IGNORECASE,
@@ -27,12 +30,22 @@ def champ_rempli(cible: Cible, checklist: Checklist) -> bool:
     if cible.genre == "presence":
         if cible.type in TOUJOURS_PRESENTS:
             return True
+        if cible.type == "mur":  # « Ce mur donne sur quoi ? » : un mur du logement est décrit, quelle que soit la pièce (étape 13)
+            return bool(checklist.enveloppe("mur")) or "mur" in checklist.clos
+        if cible.type == "fenetre" and cible.source:  # « Des fenêtres ou une porte sur ce mur ? » : dites, ou aucune
+            try:
+                mur = checklist.trouver_element(cible.source)
+            except ErreurChecklist:
+                return True
+            return bool(checklist.fenetres_du_mur(mur)) or "fenetre" in mur.absences or "fenetre" in checklist.absences_logement
         niveau_piece = TYPES[cible.type].niveau == "piece"
         absences = (piece.absences if piece else {}) if niveau_piece else checklist.absences_logement
         lieu = checklist.piece_courante if niveau_piece else None
         return cible.type in absences or any(e.type == cible.type for e in checklist.elements_de(lieu))
     if cible.genre == "suite":
-        return piece is not None and (cible.type in piece.clos or (cible.type == "mur" and checklist.murs_complets()))
+        if cible.type == "mur":  # les côtés du logement : tous décrits, ou « pas d'autre mur »
+            return "mur" in checklist.clos or not checklist.orientations_manquantes()
+        return cible.type in checklist.clos
     if cible.genre == "pareil":
         element = checklist.element_de_piece(cible.type)
         return element is not None and element.est_rempli("donne_sur")
@@ -106,6 +119,10 @@ class Questions:
                 codes.append(code)
         return list(dict.fromkeys(codes))
 
+    def aucune(self) -> bool:
+        """Aucune question encore posée : le début de la visite."""
+        return not self._posees
+
     def autoriser_encore(self, cle: str) -> None:
         """« Quel mur ? » : le diagnostiqueur demande lui-même qu'on précise ; la question peut être reposée."""
         self._reposees.discard(cle)
@@ -127,6 +144,8 @@ class Questions:
             return "", None, "demande de répétition interdite", ""
         if cle is None and nom_abstrait(texte):  # question de Claude : le parcours la reposera avec un nom parlant
             return "", None, "nom abstrait interdit (« le mur 3 »)", ""
+        if cle is None and "?" in texte and _PIECE.search(texte[: texte.index("?") + 1]):
+            return "", None, "question sur la pièce interdite (étape 13)", ""
         if "?" in texte:
             texte = texte[: texte.index("?") + 1]  # une seule question : ce qui suit le premier « ? » est coupé
         cible = Cible.depuis_code(code_cible, checklist) if code_cible else None

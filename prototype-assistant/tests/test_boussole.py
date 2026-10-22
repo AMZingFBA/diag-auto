@@ -100,7 +100,7 @@ def test_murs_orientes_par_la_boussole_et_murs_opposes():
     assert nord.orientation == oppose(sud.orientation)  # face à face (lacets à 180°) : nord ↔ sud
     assert nord.orientation_note == "cap 0°" and nord.cap == 0 and nord.lacet == 340  # cap brut gardé
     assert [c.nom(m, demonstratif=False) for m in (nord, est, sud)] == ["le mur nord", "le mur est, celui avec la télé", "le mur sud"]
-    d = c.vers_dict()["pieces"][0]["elements"]
+    d = c.vers_dict()["enveloppe"]["murs"]  # les murs du logement (étape 13)
     assert next(e for e in d if e["id"] == nord.id)["orientation"] == {"point": "nord", "source": "boussole", "note": "cap 0°",
                                                                       "cap_brut": 0, "lacet": 340}
 
@@ -186,12 +186,16 @@ def test_reponses_a_la_question_d_orientation(reponse, attendu):
 # --- Noms par orientation ------------------------------------------------------------------------------
 
 def test_nom_par_orientation_puis_repere():
+    # Étape 13 : deux murs filmés du même côté qui donnent sur la même chose sont le même mur du logement (rien n'est
+    # redemandé) ; un mur du même côté qui donne sur autre chose en reste distinct, et se nomme par son repère.
     c = sejour(correction=0.0)
     tele, _ = mur_filme(c, "Le mur avec la télé donne dehors, en brique.", lacet=2)
     fond, _ = mur_filme(c, "Le mur du fond donne dehors, en brique.", lacet=358)  # pièce en L : deux murs nord
+    assert c.trouver_element(fond.id) is tele  # le même mur nord du logement
+    placard, _ = mur_filme(c, "Le mur du placard donne sur le garage.", lacet=1)
     mur_filme(c, "Un autre mur donne dehors.", lacet=180)
     assert c.nom(tele, demonstratif=False) == "le mur nord, celui avec la télé"
-    assert c.nom(fond, demonstratif=False) == "le mur nord, celui du fond"
+    assert c.nom(placard, demonstratif=False) == "le mur nord, celui avec le placard"
     texte = next(q.texte for q in parcours.questions(c) if q.code == f"{tele.id}.epaisseur")
     assert texte == "Le mur nord, celui avec la télé, quelle épaisseur ?"
 

@@ -114,19 +114,21 @@ def test_un_seul_mur_exterieur_et_le_reste_sur_l_interieur():
     assert [(m.description, m.valeur("donne_sur").valeur) for m in murs] == [
         ("le mur 1", "extérieur"), ("le mur 2", "local chauffé"), ("les autres murs", "local chauffé")]
     assert c.murs_complets() and not [m for m in c.manques_piece() if m.type == "mur"]
-    assert questions(c)[0] == "Au-dessus du plafond : combles, terrasse ou logement ?"
+    # Étape 13 : les fenêtres du mur qui donne dehors, puis le plafond du logement.
+    assert questions(c)[:2] == ["Le mur extérieur : des fenêtres ou une porte ?",
+                                "Au-dessus du logement : combles, terrasse ou un autre logement ?"]
 
 
 def test_la_piece_fait_quatre_murs():
+    # Étape 13 : le nombre de murs d'une pièce est noté pour son plan, mais le DPE ne se fait pas pièce par pièce : on
+    # demande ce qui entoure le logement, jamais « il reste 2 murs ».
     c = sejour()
     dire(c, "Ce mur donne dehors, brique 30 cm, isolé.")
     dire(c, "Un autre mur donne sur le voisin.")
     dire(c, "En fait, cette pièce fait quatre murs.")
-    assert questions(c)[0] == "Il reste 2 murs : le suivant donne sur quoi ?"
-    dire(c, "Dehors, parpaing de 20, pas isolé.", cible="suite:mur")
-    assert questions(c)[0] == "Il reste un mur : il donne sur quoi ?"
-    dire(c, "Sur la cuisine.", cible="suite:mur")
-    assert c.murs_complets() and questions(c)[0].startswith("Au-dessus du plafond")
+    assert c.pieces["sejour"].nombre_murs.valeur == "4"
+    assert not [q for q in questions(c) if "reste" in q or "pièce" in q]
+    assert "Les autres côtés du logement donnent sur quoi ?" in questions(c)
 
 
 def test_pareil_pour_celui_la():
@@ -273,7 +275,7 @@ def test_second_avis_de_whisper_seulement_si_pas_compris(tmp_path):
     session, transcripteur, cerveau, dits = asyncio.run(scenario())
     assert transcripteur.second == 2  # seulement pour les phrases que les règles n'ont pas comprises
     assert session.checklist.trouver_element("M1").valeur("donne_sur").valeur == "extérieur"
-    assert dits == ["Décrivez le premier mur.", "Ce mur est en quoi ?"]
+    assert dits == ["Ce mur donne sur quoi ?", "Ce mur est en quoi ?"]
     assert cerveau.appels == 0  # ni pour la phrase rattrapée par Whisper, ni pour le bruit
 
 
@@ -329,10 +331,10 @@ def test_visite_reelle_de_noah(tmp_path):
     assert (mur.valeur("materiau").valeur, mur.valeur("epaisseur").valeur) == ("brique", "30 cm")
     assert mur.valeur("longueur") is None  # « trente mètres » n'est pas noté comme une longueur de mur
     assert c.element_de_piece("plafond").valeur("isolation").valeur == "non isolé"
-    assert c.element_de_piece("plancher").valeur("donne_sur").valeur == "sous-sol / cave"
     assert c.murs_complets()
-    # « Il te faut quoi d'autre sur ce mur ? » : réponse, puis la question en attente reposée ; « Un sous-sol » y répond.
-    assert questions_apres[8] == ["Pour le mur des 3 fenêtres, j'ai tout. Sous le plancher : terre-plein, vide sanitaire, cave ou logement ?"]
-    assert questions_apres[9] == ["Le plancher est isolé ?"]
-    assert questions_apres[12] == ["Il reste un mur : il donne sur quoi ?"]
-    assert questions_apres[13] == ["Un mur qu'on n'a pas encore décrit. Il reste un mur : il donne sur quoi ?"]
+    # « Il te faut quoi d'autre sur ce mur ? » : réponse, puis la question en attente reposée. Étape 13 : les fenêtres du mur
+    # sont demandées avant le plancher ; « Un sous-sol », dit alors (il répondait à l'ancien parcours), n'est pas pris
+    # pour des volets : une confirmation est demandée, rien n'est noté.
+    assert questions_apres[8] == ["Pour le mur des 3 fenêtres, j'ai tout. Des volets ?"]
+    assert c.trouver_element("F1").valeur("volets") is None
+    assert questions_apres[13] == ["Je parle du plancher. Sous le logement : terre-plein, vide sanitaire, cave ou un autre logement ?"]
