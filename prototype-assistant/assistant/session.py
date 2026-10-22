@@ -23,14 +23,19 @@ from typing import Awaitable, Callable
 from .actions import appliquer
 from .cerveau import Contexte, Decision, ImageInstant
 from .checklist import Checklist, cle_texte, horodatage
+from . import parcours
 from .extraction import Cible, extraire
 from .garde import Questions, champ_rempli
+from .simulation import CerveauSimulation
 from .reglages import Reglages
 from .vad import TAUX, DetecteurPhrases, Phrase, ReglagesVad
 
 log = logging.getLogger(__name__)
 
 Envoyer = Callable[[dict], Awaitable[None]]
+
+# Phrase assez longue pour que Claude la relise en arrière-plan après les règles (description libre).
+MOTS_POUR_COMPLEMENT = 8
 
 # Derniers mots qui montrent que la phrase n'est pas finie (« Il est… », « Et il fait… »).
 _SUSPENDUS = {"est", "fait", "de", "du", "des", "la", "le", "les", "et", "en", "avec", "a", "au", "aux", "sur", "par",
@@ -94,7 +99,9 @@ class Session:
         self.questions = Questions()  # pour ne jamais redemander la même chose
         self._cible: Cible | None = None  # champ visé par la dernière question (pour comprendre « bas ! »)
         self._derniere_question_texte = ""
-        self._compteurs = {"acceptees": 0, "refusees": 0, "questions": 0, "retenues": 0, "veilles": 0, "bips": 0}
+        self._dernier_element_id: str | None = None  # « Il est isolé ? » plutôt que « Le mur 2 est isolé ? »
+        self._complements: set[asyncio.Task] = set()  # relectures de Claude en arrière-plan
+        self._compteurs = {"acceptees": 0, "refusees": 0, "questions": 0, "retenues": 0, "veilles": 0, "bips": 0, "relectures_claude": 0}
         self._pret = asyncio.Event()
         self._journal = open(dossier / "journal.jsonl", "a", encoding="utf-8")
         self._wav = wave.open(str(dossier / "audio.wav"), "wb")
@@ -120,7 +127,7 @@ class Session:
     @property
     def occupe(self) -> bool:
         """Une phrase est en cours de traitement ou en attente."""
-        return (self._transcription_en_cours or self._reponse_en_cours
+        return (self._transcription_en_cours or self._reponse_en_cours or bool(self._complements)
                 or not self._file.empty() or not self._file_textes.empty())
 
     def _cerveaux(self) -> list:
@@ -144,7 +151,7 @@ class Session:
         if self.termine:
             return self.bilan()
         self.termine = True
-        for tache in self._taches:
+        for tache in [*self._taches, *self._complements]:
             tache.cancel()
         for c in self._cerveaux():
             await c.fermer()
@@ -325,31 +332,27 @@ class Session:
             "phrases_regroupees": len(lot),
         }
         lignes = {p["ligne"] for p in lot}
-        maintenant = time.monotonic()
         contexte = Contexte(
             mode="reponse", t=dernier["t_fin"], checklist=self.checklist,
             dialogue=[l for l in self.dialogue if l not in lignes][-8:],
             images=self._images_pour(lot[0]["t_debut"], dernier["t_fin"]), phrase=texte,
             t_phrase=(lot[0]["t_debut"], dernier["t_fin"]),
             derniere_question=self._derniere_question_texte,
-            questions_recentes=self.questions.recentes(maintenant, self.checklist.piece_courante),
         )
         self.mesures.append(mesure)
+        reference = dernier["reference"]
 
-        # 1. Extraction immédiate, sans IA : tout ce qui est reconnu est noté tout de suite (bip).
+        # 1. Extraction immédiate, sans IA : tout ce qui est reconnu est noté tout de suite.
         debut = time.perf_counter()
         extraction = extraire(texte, self.checklist, self._cible)
         resultats = appliquer(self.checklist, extraction.actions, contexte.t, self._phrases_recentes(contexte))
         mesure["extraction_ms"] = round((time.perf_counter() - debut) * 1000, 1)
         notes = self._compter(resultats)
+        compris = [r for r in resultats if r["statut"] == "accepte"]
         mesure["valeurs_extraites"] = len(notes)
         self.journaliser("extraction", resultats=resultats, devines=extraction.devines, mesures={"extraction_ms": mesure["extraction_ms"]})
         if resultats:
             await self._envoyer_actions(resultats, "extraction")
-        if notes:
-            mesure["bip_s"] = round(time.monotonic() - dernier["reference"], 3)
-            await self._bip(mesure["bip_s"])
-            await self.envoyer_etat()
         contexte.deja_note = [f"{r.get('element') or r['action'].get('type')}.{r['action'].get('champ')} = {r['action'].get('valeur') or 'sans objet'}"
                               for r in notes]
         if self._cible and champ_rempli(self._cible, self.checklist):
@@ -357,12 +360,55 @@ class Session:
         # Après l'extraction : la phrase a pu changer de pièce (« ici c'est la cuisine »).
         contexte.questions_recentes = self.questions.recentes(time.monotonic(), self.checklist.piece_courante)
 
-        # 2. Le cerveau complète ce que les règles n'ont pas compris et choisit UNE question.
-        await self._decider(self.cerveau, contexte, dernier["reference"], mesure)
+        if compris:
+            # 2. Compris : la question suivante du parcours part tout de suite, sans attendre Claude.
+            if not await self._question_du_parcours(reference, mesure) and notes:
+                await self._bip(round(time.monotonic() - reference, 3))
+                mesure["bip_s"] = round(time.monotonic() - reference, 3)
+            await self.envoyer_etat()
+            self.journaliser("decision", mode="parcours", mesures=mesure)
+            # Phrase longue : Claude relit en arrière-plan, au cas où les règles auraient manqué quelque chose.
+            if len(texte.split()) >= MOTS_POUR_COMPLEMENT and not isinstance(self.cerveau, CerveauSimulation):
+                contexte.mode = "complement"
+                tache = asyncio.create_task(self._completer(contexte))
+                self._complements.add(tache)
+                tache.add_done_callback(self._complements.discard)
+        else:
+            # 3. Pas compris par les règles : Claude essaie, puis le parcours reprend.
+            await self._decider(self.cerveau, contexte, reference, mesure)
+
+    async def _question_du_parcours(self, reference: float, mesure: dict | None) -> bool:
+        """Pose la première question du parcours que les garde-fous acceptent. Vrai si une question part."""
+        maintenant = time.monotonic()
+        dernier_id = self._dernier_element_id
+        for plan in parcours.questions(self.checklist, dernier_id):
+            question, cible, raison, cle = self.questions.filtrer(plan.texte, plan.code, self.checklist, maintenant, cle=plan.cle)
+            if not raison:
+                if mesure is not None:
+                    mesure["question_s"] = round(maintenant - reference, 3)
+                    mesure["question_dite"] = True
+                await self.dire(question, reference, mesure, cible=cible, cle=cle, une_fois=True)
+                return True
+        return False
+
+    async def _completer(self, contexte: Contexte) -> None:
+        """Claude relit une phrase longue déjà traitée : il ajoute seulement ce que les règles ont manqué."""
+        try:
+            self._compteurs["relectures_claude"] += 1
+            decision = await self.cerveau.decider(contexte, None)
+            resultats = appliquer(self.checklist, decision.actions, contexte.t, self._phrases_recentes(contexte))
+            self._compter(resultats)
+            self.journaliser("complement", resultats=resultats, erreur=decision.erreur, brut=decision.brut[:2000], mesures=decision.mesures)
+            if any(r["statut"] == "accepte" for r in resultats):
+                await self._envoyer_actions(resultats, "complement")
+                await self.envoyer_etat()
+        except Exception as e:
+            log.exception("Complément de Claude")
+            self.journaliser("erreur", etape="complement", message=str(e))
 
     def _compter(self, resultats: list[dict]) -> list[dict]:
         """Met à jour les compteurs ; renvoie les valeurs acceptées (enregistrées ou « sans objet »)."""
-        notes = [r for r in resultats if r["action"].get("outil") in ("enregistrer_reponse", "marquer_sans_objet")]
+        notes = [r for r in resultats if r["action"].get("outil") in ("enregistrer_reponse", "marquer_sans_objet", "copier")]
         self._compteurs["acceptees"] += sum(r["statut"] == "accepte" for r in notes)
         self._compteurs["refusees"] += sum(r["statut"] == "refuse" for r in notes)
         if any(r["action"].get("outil") == "piece_courante" and r["statut"] == "accepte" for r in resultats):
@@ -397,6 +443,8 @@ class Session:
         return recentes + ([contexte.phrase] if contexte.phrase else [])  # phrases regroupées : citation à cheval
 
     async def _decider(self, cerveau, contexte: Contexte, reference: float, mesure: dict) -> Decision:
+        """Claude, pour une phrase que les règles n'ont pas comprise. Il note ce qu'il comprend ; il ne
+        parle que pour une précision indispensable. Sinon, le parcours pose la question suivante."""
         await self._pret.wait()
         debut = time.perf_counter()
         filtrees: list[str] = []
@@ -404,48 +452,35 @@ class Session:
         async def sur_dire(texte: str, code_cible: str) -> None:
             if mesure.get("question_dite"):
                 return
-            question, cible, raison = self.questions.filtrer(texte, code_cible, self.checklist, time.monotonic())
+            question, cible, raison, cle = self.questions.filtrer(texte, code_cible, self.checklist, time.monotonic())
             if raison:
                 filtrees.append(raison)
                 self.journaliser("question_filtree", texte=texte, cible=code_cible, raison=raison)
                 return
             mesure["cerveau_dire_s"] = round(time.perf_counter() - debut, 3)
+            mesure["question_s"] = round(time.monotonic() - reference, 3)
             mesure["question_dite"] = True
-            await self.dire(question, reference, mesure, cible=cible)
+            await self.dire(question, reference, mesure, cible=cible, cle=cle)
 
-        decision = await cerveau.decider(contexte, sur_dire if contexte.mode == "reponse" else None)
+        decision = await cerveau.decider(contexte, sur_dire)
         mesure["cerveau_total_s"] = round(time.perf_counter() - debut, 3)
         mesure["cerveau"] = decision.mesures
         resultats = appliquer(self.checklist, decision.actions, contexte.t, self._phrases_recentes(contexte))
         notes = self._compter(resultats)
-        if contexte.mode == "reponse" and not mesure.get("question_dite"):
-            if filtrees or decision.erreur:
-                await self._question_de_secours(reference, mesure)
-            if notes and not mesure.get("bip_s") and not mesure.get("question_dite"):
+        if resultats:
+            await self._envoyer_actions(resultats, "cerveau")
+        if any(r["statut"] == "accepte" for r in resultats) and not mesure.get("question_dite"):
+            if not await self._question_du_parcours(reference, mesure) and notes:
                 await self._bip()
         self.journaliser("decision", mode=contexte.mode, dire=decision.dire, cible=decision.cible, filtrees=filtrees,
                          resultats=resultats, erreur=decision.erreur, brut=decision.brut[:2000], mesures=mesure)
         if decision.erreur:
             await self._envoyer({"type": "erreur", "message": f"Assistant : {decision.erreur}"})
-        if resultats:
-            await self._envoyer_actions(resultats, "cerveau")
         await self.envoyer_etat()
         return decision
 
-    async def _question_de_secours(self, reference: float, mesure: dict) -> None:
-        """La question du cerveau a été refusée (« répétez », déjà demandée…) : on pose la suivante de la
-        checklist, si elle n'a pas été demandée récemment. Le diagnostiqueur n'a jamais à répéter."""
-        maintenant = time.monotonic()
-        manques = self.checklist.manques_piece() or self.checklist.manques_logement()
-        for manque in manques:
-            question, cible, raison = self.questions.filtrer(manque.question, manque.code, self.checklist, maintenant)
-            if not raison:
-                mesure["question_dite"] = True
-                mesure["question_de_secours"] = True
-                await self.dire(question, reference, mesure, cible=cible)
-                return
-
-    async def dire(self, texte: str, reference: float, mesure: dict | None = None, forcer: bool = False, cible: Cible | None = None) -> None:
+    async def dire(self, texte: str, reference: float, mesure: dict | None = None, forcer: bool = False,
+                   cible: Cible | None = None, cle: str = "", une_fois: bool = False) -> None:
         """Envoie une phrase à dire au téléphone, dans la limite du plafond de questions par minute."""
         maintenant = time.monotonic()
         while self._questions and maintenant - self._questions[0] > 60:
@@ -458,9 +493,11 @@ class Session:
         self._questions.append(maintenant)
         self._derniere_question = maintenant
         self._compteurs["questions"] += 1
-        self.questions.noter(texte, cible, maintenant, self.checklist.piece_courante)
+        if cle:
+            self.questions.noter(cle, maintenant, une_fois)
         if not forcer:
             self._cible = cible
+            self._dernier_element_id = cible.element_id if cible and cible.element_id else None
             self._derniere_question_texte = f"{cible.code} : « {texte} »" if cible else f"« {texte} »"
         self.dialogue.append(f"[{horodatage(self.t_video)}] Assistant : « {texte} »")
         if mesure is not None:
@@ -477,8 +514,7 @@ class Session:
         while True:
             await asyncio.sleep(1)
             maintenant = time.monotonic()
-            if (self.muet or self.occupe or self._en_parole or self.vad.ia_parle
-                    or maintenant - self._fin_parole < 2 or maintenant - self._derniere_question < 12):
+            if self.occupe or self._en_parole or maintenant - self._fin_parole < 2:
                 continue
             if not (self._veille_bientot or maintenant - derniere >= self.reglages.veille_s):
                 continue
@@ -493,21 +529,22 @@ class Session:
                 self.journaliser("erreur", etape="veille", message=str(e))
 
     async def _veiller(self) -> None:
+        """Claude regarde les images pendant un silence et signale les éléments visibles (fenêtre,
+        radiateur…). La veille ne parle pas : c'est le parcours qui en parlera au bon moment."""
         self._compteurs["veilles"] += 1
-        paroles_avant = self._paroles
         contexte = Contexte(mode="veille", t=self.t_video, checklist=self.checklist, dialogue=self.dialogue[-8:],
-                            images=list(self.images)[-2:], questions_recentes=self.questions.recentes(time.monotonic(), self.checklist.piece_courante))
-        mesure: dict = {"source": "veille", "t": round(self.t_video, 2)}
-        decision = await self._decider(self.cerveau_veille, contexte, time.monotonic(), mesure)
-        question, cible, raison = self.questions.filtrer(decision.dire, decision.cible, self.checklist, time.monotonic())
-        if raison:
-            self.journaliser("question_filtree", texte=decision.dire, cible=decision.cible, raison=raison)
-        if not question:
-            return
-        if self._paroles != paroles_avant or self._en_parole or self.occupe:
-            self.journaliser("question_abandonnee", texte=question, raison="le diagnostiqueur a parlé entre-temps")
-            return
-        await self.dire(question, time.monotonic(), cible=cible)
+                            images=list(self.images)[-2:],
+                            questions_recentes=self.questions.recentes(time.monotonic(), self.checklist.piece_courante))
+        debut = time.perf_counter()
+        decision = await self.cerveau_veille.decider(contexte, None)
+        actions = [a for a in decision.actions if a.get("outil") in ("signaler_element", "piece_courante")]
+        resultats = appliquer(self.checklist, actions, contexte.t, self._phrases_recentes(contexte))
+        self._compter(resultats)
+        self.journaliser("decision", mode="veille", resultats=resultats, erreur=decision.erreur, brut=decision.brut[:2000],
+                         mesures={"cerveau_total_s": round(time.perf_counter() - debut, 3), "cerveau": decision.mesures})
+        if resultats:
+            await self._envoyer_actions(resultats, "veille")
+            await self.envoyer_etat()
 
     # --- Fin et bilan ---------------------------------------------------------------------------
 
@@ -546,6 +583,8 @@ class Session:
                 "fin_de_phrase (silence attendu)": self.reglages.fin_silence_s,
                 "attente_dans_la_file": stats([m.get("attente_s") for m in audio]),
                 "transcription": stats([m.get("transcription_s") for m in audio]),
+                "fin_de_phrase_detectee_a_question_prete": stats([m.get("question_s") for m in audio]),
+                "texte_ecrit_a_question_prete": stats([m.get("question_s") for m in phrases if m["source"] == "texte"]),
                 "claude_premier_mot": stats([(m.get("cerveau") or {}).get("premier_mot_s") for m in phrases]),
                 "claude_question_prete": stats([m.get("cerveau_dire_s") for m in phrases]),
                 "claude_total": stats([m.get("cerveau_total_s") for m in phrases]),

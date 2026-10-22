@@ -1,10 +1,13 @@
-"""Dialogue complet (extraction immédiate + cerveau + garde-fous), sans Claude ni réseau :
-une seule question à la fois, jamais de « répétez », jamais une question déjà posée ou déjà répondue."""
+"""Dialogue complet (extraction immédiate + parcours du serveur + garde-fous), sans Claude ni réseau.
+
+Étape 2 de Noah : parcours mur par mur, puis plafond, plancher, fenêtres, radiateurs, pièce suivante ;
+seulement les questions utiles ; une seule fois chacune ; jamais « répétez »."""
 
 import asyncio
 
 from assistant.cerveau import Decision
 from assistant.checklist import VALEUR_INCONNUE, Checklist
+from assistant.evaluer import PIECE_A_4_MURS
 from assistant.garde import DELAI_REDEMANDE_S, Questions
 from assistant.reglages import Reglages
 from assistant.session import Session, phrase_inachevee
@@ -12,7 +15,8 @@ from assistant.simulation import CerveauSimulation
 from assistant.transcription import TranscripteurSimulation
 
 
-async def visite(dossier, phrases, cerveau=None):
+async def visite(dossier, echanges, cerveau=None):
+    """Joue les phrases une par une ; renvoie la session et, pour chaque phrase, les questions posées après."""
     cerveau = cerveau or CerveauSimulation()
     reglages = Reglages(cerveau="simulation", transcription="simulation", dossier_sessions=dossier, veille_s=1000, questions_par_minute=60)
     session = Session("essai", dossier, cerveau, cerveau, TranscripteurSimulation(), reglages)
@@ -23,57 +27,77 @@ async def visite(dossier, phrases, cerveau=None):
 
     session.envoyer = envoyer
     await session.demarrer()
-    for phrase in phrases:
+    questions_apres = []
+    for phrase in echanges:
+        avant = len(recus)
         await session.recevoir_controle({"type": "texte", "texte": phrase})
         await asyncio.sleep(0.02)
         while session.occupe:
             await asyncio.sleep(0.02)
-    bilan = await session.terminer()
-    return session, [m["texte"] for m in recus if m["type"] == "dire"], recus, bilan
+        questions_apres.append([m["texte"] for m in recus[avant:] if m["type"] == "dire"])
+    await session.terminer()
+    return session, questions_apres, recus
 
 
-def test_dialogue_en_simulation(tmp_path):
-    session, questions, recus, _ = asyncio.run(visite(tmp_path, [
-        "Ici c'est la chambre 1.",
-        "Ce mur-là, brique, 30 cm, il donne sur l'extérieur.",
-        "Je sais pas.",
-        "Oui, trois fenêtres en PVC double vitrage.",
-        "Volets roulants.",
+# La pièce à 4 murs jouée ici est la même que dans l'évaluation avec Claude (python -m assistant.evaluer).
+
+
+def test_piece_complete_a_4_murs(tmp_path):
+    session, questions_apres, recus = asyncio.run(visite(tmp_path, [phrase for phrase, _ in PIECE_A_4_MURS]))
+    for (phrase, attendue), posees in zip(PIECE_A_4_MURS, questions_apres):
+        assert posees == [attendue], f"après « {phrase} » : {posees}"
+
+    c = session.checklist
+    valeurs = {e.id: {champ: v[-1].valeur for champ, v in e.valeurs.items()} for e in c.elements}
+    assert valeurs["M1"] == {"donne_sur": "extérieur", "materiau": "brique", "epaisseur": "30 cm", "isolation": "ITI"}
+    assert valeurs["M2"] == {"donne_sur": "local chauffé"}  # paroi non déperditive : rien d'autre demandé
+    assert valeurs["M3"] == {"materiau": "parpaing", "epaisseur": "20 cm", "isolation": "non isolé", "donne_sur": "local non chauffé : garage"}
+    assert valeurs["M4"] == {"donne_sur": "extérieur", "materiau": "brique", "epaisseur": "30 cm", "isolation": VALEUR_INCONNUE}
+    assert valeurs["PL1"] == {"donne_sur": "combles perdus", "isolation": "isolé laine de verre 30 cm"}
+    assert valeurs["PB1"] == {"donne_sur": "terre-plein", "isolation": "non isolé"}
+    assert c.trouver_element("F1").nombre == 3 and valeurs["F1"] == {"menuiserie": "PVC", "vitrage": "double", "volets": "roulants"}
+    assert c.trouver_element("E1").nombre == 2 and valeurs["E1"]["type"] == "radiateur à eau"
+    assert valeurs["CH1"] == {"energie": "gaz", "type": "chaudière à condensation", "annee": "2015"}
+    assert valeurs["ECS1"] == {"systeme": "chaudière", "energie": "gaz"}
+    assert c.trouver_element("ECS1").valeur("energie").note == "déduit : même chaudière que le chauffage (CH1)"
+    assert valeurs["V1"] == {"type": "VMC simple flux hygro B"}
+    assert c.taux_remplissage("sejour") == 1.0 and not c.manques_secondaires()
+
+    toutes = [q for posees in questions_apres for q in posees]
+    assert len(toutes) == len(PIECE_A_4_MURS)  # une seule question par phrase
+    assert not any("répét" in q.lower() or "pardon" in q.lower() or "épaisseur d" in q.lower() for q in toutes)
+    assert all(len([m for m in q.split() if any(c.isalpha() for c in m)]) <= 10 for q in toutes)  # questions courtes
+    latences = [m["latence_s"] for m in recus if m["type"] == "dire"]
+    assert max(latences) < 0.5  # posées par le serveur, sans attendre d'IA
+
+
+def test_piece_suivante_plafond_pareil_et_plancher_different(tmp_path):
+    echanges = [phrase for phrase, _ in PIECE_A_4_MURS] + [
+        "Ce mur donne dehors, parpaing 20, non isolé.",
         "Non.",
-    ]))
-    assert questions == [
-        "Décrivez un premier mur : matériau, épaisseur, isolation, et sur quoi il donne.",
-        "Pour le mur 1, isolé par l'intérieur, par l'extérieur, ou pas isolé ?",
-        "Y a-t-il une fenêtre dans cette pièce ?",
-        "Pour les 3 fenêtres, quels volets, ou pas de volet ?",
-        "Y a-t-il un radiateur ou un autre émetteur de chauffage dans cette pièce ?",
-        "Où est le chauffage principal du logement ?",
+        "Oui.",
+        "Non, il donne sur une cave, pas isolé.",
+    ]
+    session, questions_apres, _ = asyncio.run(visite(tmp_path, echanges))
+    assert questions_apres[-4:] == [
+        ["Un autre mur dans cette pièce ?"],
+        ["Plafond pareil que dans le séjour ?"],
+        ["Plancher pareil que dans le séjour ?"],
+        ["Des fenêtres dans cette pièce ?"],
     ]
     c = session.checklist
-    assert c.trouver_element("M1").valeur("isolation").valeur == VALEUR_INCONNUE  # « je sais pas » : noté, on passe
-    fenetres = c.trouver_element("F1")
-    assert fenetres.nombre == 3 and fenetres.valeur("volets").valeur == "roulants"
-    assert len([e for e in c.elements if e.type == "fenetre"]) == 1
-    assert c.taux_remplissage() == 1.0
-    assert sum(m["type"] == "bip" for m in recus) >= 3  # valeur notée = bip immédiat
+    plafond, plancher = c.element_de_piece("plafond"), c.element_de_piece("plancher")
+    assert plafond.valeur("isolation").valeur == "isolé laine de verre 30 cm" and plafond.valeur("isolation").note == "pareil que Séjour"
+    assert (plancher.valeur("donne_sur").valeur, plancher.valeur("isolation").valeur) == ("sous-sol / cave", "non isolé")
 
 
-def test_description_libre_puis_seule_la_suite_est_demandee(tmp_path):
-    _, questions, _, bilan = asyncio.run(visite(tmp_path, [
-        "Ce mur fait 4 m 50 de long, brique 30 cm, isolé par l'intérieur, il y a trois fenêtres en bois double vitrage, "
-        "deux radiateurs à eau.",
-    ]))
-    assert questions == ["Pour le mur 1, il donne sur l'extérieur, un local non chauffé ou un local chauffé ?"]
-    assert bilan["acceptees"] == 7
+class CerveauEspion:
+    """Un cerveau qui note quand on l'appelle, et qui se comporte mal (il fait répéter)."""
 
+    nom = "espion"
 
-class CerveauQuiFaitRepeter:
-    """Un cerveau qui se comporte mal : il demande de répéter, ou deux questions à la fois."""
-
-    nom = "mauvais élève"
-
-    def __init__(self, reponses):
-        self.reponses = list(reponses)
+    def __init__(self):
+        self.appels = []
 
     async def demarrer(self):
         pass
@@ -82,39 +106,23 @@ class CerveauQuiFaitRepeter:
         pass
 
     async def decider(self, contexte, sur_dire=None):
-        dire, cible = self.reponses.pop(0)
+        self.appels.append((contexte.mode, contexte.phrase))
         if sur_dire:
-            await sur_dire(dire, cible)
-        return Decision(dire=dire, cible=cible)
+            await sur_dire("Pardon, pouvez-vous répéter ?", "")
+        return Decision(dire="Pardon, pouvez-vous répéter ?")
 
 
-def test_garde_fous_sur_les_questions_du_cerveau(tmp_path):
-    cerveau = CerveauQuiFaitRepeter([
-        ("Pardon, pouvez-vous répéter le matériau ?", "M1.materiau"),  # interdit → question de secours
-        ("Il est isolé ? Et il fait quelle épaisseur ?", "M1.isolation"),  # deux questions → la 1re seulement
-        ("Il est isolé ?", "M1.isolation"),  # déjà demandé → question de secours (la suivante)
-    ])
-    _, questions, _, _ = asyncio.run(visite(tmp_path, ["Ce mur, brique.", "Euh voilà.", "Bon."], cerveau))
-    assert questions == [
-        "Pour le mur 1, quelle épaisseur ?",
-        "Il est isolé ?",
-        "Pour le mur 1, il donne sur l'extérieur, un local non chauffé ou un local chauffé ?",
-    ]
-    assert not any("répét" in q.lower() or "pardon" in q.lower() for q in questions)
+def test_le_cerveau_n_est_appele_que_si_les_regles_n_ont_pas_compris(tmp_path):
+    cerveau = CerveauEspion()
+    _, questions_apres, _ = asyncio.run(visite(tmp_path, ["Ici c'est le séjour.", "Euh voilà.", "Ce mur donne dehors."], cerveau))
+    assert cerveau.appels == [("reponse", "Euh voilà.")]  # compris : le serveur répond seul, tout de suite
+    assert questions_apres == [["Décrivez le premier mur."], [], ["Le mur 1 est en quoi ?"]]  # « répétez » jamais dit
 
 
 def test_phrase_coupee_attend_la_suite(tmp_path):
-    class Memoire(CerveauSimulation):
-        def __init__(self):
-            self.phrases = []
-
-        async def decider(self, contexte, sur_dire=None):
-            self.phrases.append(contexte.phrase)
-            return await super().decider(contexte, sur_dire)
-
     async def scenario():
-        cerveau = Memoire()
         reglages = Reglages(cerveau="simulation", transcription="simulation", dossier_sessions=tmp_path, veille_s=1000)
+        cerveau = CerveauSimulation()
         session = Session("essai", tmp_path, cerveau, cerveau, TranscripteurSimulation(), reglages)
         await session.demarrer()
         await session.recevoir_controle({"type": "texte", "texte": "Ce mur, il est..."})
@@ -124,11 +132,11 @@ def test_phrase_coupee_attend_la_suite(tmp_path):
         while session.occupe:
             await asyncio.sleep(0.02)
         await session.terminer()
-        return cerveau.phrases, session.checklist
+        return session
 
-    phrases, c = asyncio.run(scenario())
-    assert phrases == ["Ce mur, il est... en parpaing de 20."]
-    assert c.trouver_element("M1").valeur("materiau").valeur == "parpaing"
+    session = asyncio.run(scenario())
+    assert [m["texte"] for m in session.mesures] == ["Ce mur, il est... en parpaing de 20."]
+    assert session.checklist.trouver_element("M1").valeur("materiau").valeur == "parpaing"
     assert phrase_inachevee("Et il fait...") and phrase_inachevee("Il est") and not phrase_inachevee("Brique.")
 
 
@@ -142,18 +150,21 @@ def test_filtre_des_questions():
     assert q.filtrer("Je n'ai pas compris, c'est quel matériau ?", "", c, 0)[2] == "demande de répétition interdite"
     assert q.filtrer("Quel isolant ? Et quelle épaisseur ?", "M1.isolation", c, 0)[0] == "Quel isolant ?"
     assert q.filtrer("Il est en quoi ?", "M1.materiau", c, 0)[2] == "M1.materiau déjà renseigné"
-    q.noter("Il est isolé ?", q.filtrer("Il est isolé ?", "M1.isolation", c, 0)[1], 0)
+    _, _, _, cle = q.filtrer("Il est isolé ?", "M1.isolation", c, 0)
+    q.noter(cle, 0)
     assert q.filtrer("Et l'isolation ?", "M1.isolation", c, 30)[2] == "déjà demandé il y a moins de 2 minutes"
     assert q.filtrer("Et l'isolation ?", "M1.isolation", c, DELAI_REDEMANDE_S + 1)[2] == ""
-    assert q.recentes(30) == ["M1.isolation"]
+    q.noter("suite:mur@sejour#1", 0, une_fois=True)
+    assert q.filtrer("Un autre mur ?", "suite:mur", c, 1000, cle="suite:mur@sejour#1")[2] == "déjà demandé une fois"
+    assert q.recentes(30, "sejour") == ["M1.isolation", "suite:mur"]
 
 
 def test_question_de_presence_retenue_par_piece():
     c = Checklist()
     c.definir_piece("Séjour", 0)
     q = Questions()
-    _, cible, _ = q.filtrer("Y a-t-il une fenêtre ?", "presence:fenetre", c, 0)
-    q.noter("Y a-t-il une fenêtre ?", cible, 0, c.piece_courante)
+    _, _, _, cle = q.filtrer("Y a-t-il une fenêtre ?", "presence:fenetre", c, 0)
+    q.noter(cle, 0)
     assert q.filtrer("Une fenêtre ici ?", "presence:fenetre", c, 10)[2] == "déjà demandé il y a moins de 2 minutes"
     c.definir_piece("Cuisine", 20)
     assert q.filtrer("Y a-t-il une fenêtre ?", "presence:fenetre", c, 30)[2] == ""  # autre pièce : on peut demander

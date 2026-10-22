@@ -48,7 +48,7 @@ def test_visite_par_texte_puis_video_et_bilan(client, tmp_path):
         ws.send_bytes(binaire(1, 0.0, np.zeros(1600, "<i2").tobytes()))
         ws.send_json({"type": "texte", "texte": "ici c'est la cuisine"})
         dire = attendre(ws, "dire")
-        assert dire["texte"].startswith("Décrivez un premier mur")
+        assert dire["texte"] == "Décrivez le premier mur."
         attendre(ws, "etat")  # fin du traitement de la 1re phrase
         ws.send_json({"type": "tts", "etat": "debut", "id": dire["id"]})
         ws.send_json({"type": "texte", "texte": "ce mur-là, brique, 30 cm, il donne sur l'extérieur"})
@@ -56,11 +56,10 @@ def test_visite_par_texte_puis_video_et_bilan(client, tmp_path):
         assert actions["source"] == "extraction"  # notées tout de suite, sans attendre le cerveau
         valeurs = {r["champ"]: r["statut"] for r in actions["resultats"] if r["outil"] == "enregistrer_reponse"}
         assert valeurs == {"materiau": "accepte", "epaisseur": "accepte", "donne_sur": "accepte"}
+        question = attendre(ws, "dire")  # posée tout de suite par le parcours du serveur
+        assert question["texte"] == "Le mur 1 est isolé ?" and question["latence_s"] >= 0
         etat = attendre(ws, "etat")
         assert etat["piece"] == "Cuisine" and etat["manques"][0] == "le mur 1 : isolation"
-        question = attendre(ws, "dire")
-        assert question["texte"].startswith("Pour le mur 1, isolé") and question["latence_s"] >= 0
-        attendre(ws, "etat")  # fin du traitement de la 2e phrase
         ws.send_json({"type": "fin"})
         rappel = attendre(ws, "dire")
         assert rappel["texte"].startswith("Avant d'arrêter, il manque")
@@ -127,8 +126,8 @@ def test_rappel_de_fin():
                              "logement, eau chaude sanitaire : présence à confirmer ; logement, ventilation : présence à confirmer.")
     c.definir_piece("séjour", 0)
     c.signaler_element("mur", "le mur du fond", 1)
-    assert rappel_fin(c).startswith("Avant d'arrêter, il manque 9 informations. Séjour, le mur du fond : matériau ;")
-    assert rappel_fin(c).endswith("et 6 autres, à l'écran.")
+    assert rappel_fin(c).startswith("Avant d'arrêter, il manque 13 informations. Séjour, le mur du fond : donne sur ;")
+    assert rappel_fin(c).endswith("et 10 autres, à l'écran.")
 
 
 def test_phrases_regroupees_pendant_une_reponse(tmp_path):
@@ -150,12 +149,13 @@ def test_phrases_regroupees_pendant_une_reponse(tmp_path):
         cerveau = CerveauLent()
         session = Session("essai", tmp_path, cerveau, cerveau, TranscripteurSimulation(), reglages(tmp_path))
         await session.demarrer()
-        for texte in ["ici c'est la cuisine", "ce mur-là, brique", "30 cm"]:
+        # Phrases que les règles ne comprennent pas : seules celles-là attendent le cerveau.
+        for texte in ["Euh.", "Bon alors.", "Voilà."]:
             await session.recevoir_controle({"type": "texte", "texte": texte})
             await asyncio.sleep(0.05)
         await asyncio.sleep(1.2)
         return cerveau.vus, await session.terminer()
 
     vus, bilan = asyncio.run(scenario())
-    assert vus == ["ici c'est la cuisine", "ce mur-là, brique 30 cm"]
+    assert vus == ["Euh.", "Bon alors. Voilà."]
     assert bilan["phrases"] == 3 and bilan["appels_reponse"] == 2
