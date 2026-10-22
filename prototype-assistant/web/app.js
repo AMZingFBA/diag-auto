@@ -80,7 +80,7 @@ function parler(texte, id) {
   const u = new SpeechSynthesisUtterance(texte);
   u.lang = "fr-FR";
   if (etat.voix) u.voice = etat.voix;
-  u.rate = 1.1;
+  u.rate = 1.2; // questions courtes, dites vite (retour de Noah : trop lent)
   let commence = false;
   u.onstart = () => {
     commence = true;

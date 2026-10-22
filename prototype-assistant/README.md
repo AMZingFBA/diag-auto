@@ -12,14 +12,43 @@ Ce prototype correspond à l'étape **V1bis** du plan ([docs/02-capture-video.md
 2. Le **serveur** (ce PC) :
    - repère la fin de chaque phrase, et attend la suite si elle est coupée (« Il est… ») ;
    - la transcrit sur place : **la voix ne quitte pas le PC** ;
-   - **note tout de suite**, sans IA, tout ce qu'il reconnaît dans la phrase (quelques millisecondes, puis un **bip**) ;
-   - envoie ensuite à **Claude** la phrase, 1 à 3 images réduites et l'état de la checklist DPE.
-3. **Claude** complète ce que le serveur n'a pas compris et choisit **une seule** question.
+   - **note tout de suite**, sans IA, tout ce qu'il reconnaît dans la phrase (quelques millisecondes) ;
+   - **pose aussitôt la question suivante du parcours**, sans attendre l'IA (voir « Parcours de la visite » plus bas).
+3. **Claude** n'intervient qu'en appui :
+   - quand les règles n'ont rien compris à une phrase, il essaie de la comprendre (images comprises) ;
+   - il relit en arrière-plan les phrases longues, au cas où les règles auraient manqué une valeur ;
+   - pendant les silences, il regarde les images et signale les éléments visibles (fenêtre, radiateur…), sans parler.
 4. **Le serveur vérifie tout** :
    - une valeur n'est notée que si sa citation se retrouve dans ce que le diagnostiqueur a réellement dit ;
-   - une question est bloquée si elle demande de répéter, si elle porte sur un champ déjà rempli, ou si elle a déjà été posée dans les 2 dernières minutes ;
-   - s'il y a deux questions, seule la première est gardée. Si la question de Claude est bloquée, le serveur pose la suivante de la checklist.
+   - une question n'est jamais posée deux fois ;
+   - une question est bloquée si elle demande de répéter ou si elle porte sur un champ déjà rempli ;
+   - s'il y a deux questions, seule la première est gardée.
 5. Le **téléphone** lit la question à voix haute (voix du navigateur), et se tait dès que le diagnostiqueur reparle. Il affiche aussi le temps de réponse.
+
+## Parcours de la visite (étape 2, retour de Noah du 22/10/2026)
+
+C'est le serveur qui décide de la question suivante, dans un ordre fixe, pièce par pièce :
+
+1. **Les murs, un par un.**
+   - Pour chaque mur : « donne sur » d'abord, puis matériau, épaisseur, isolation.
+   - Quand un mur est fini : « Un autre mur dans cette pièce ? », jusqu'à ce que le diagnostiqueur réponde non.
+2. **Le plafond, puis le plancher.** S'ils sont déjà décrits dans une autre pièce, l'assistant propose « Plafond pareil que dans le séjour ? ».
+3. **Les fenêtres et portes restantes**, puis « D'autres fenêtres, ou une porte vers l'extérieur ? ».
+4. **Les radiateurs** : leur type seulement.
+5. **Une seule fois pour tout le logement** :
+   - le chauffage, l'eau chaude et la ventilation ;
+   - puis les détails secondaires (date et température des radiateurs), et plus jamais après « je ne sais pas ».
+6. **« Pièce terminée. Quelle est la pièce suivante ? »**
+
+**Seulement les questions utiles au DPE** :
+- les questions sont courtes, 10 mots au plus ;
+- une question restée sans réponse n'est pas reposée : elle revient dans le rappel de fin de visite ;
+- **hypothèse à faire valider** : un mur, un plafond ou un plancher qui donne sur un **local chauffé** n'est pas une paroi déperditive en DPE 3CL. On ne demande donc ni son matériau ni son isolation ;
+- la température n'est demandée que pour des radiateurs à eau, et la date du ballon seulement s'il y a un ballon ;
+- une fenêtre n'a pas d'« épaisseur » : on demande la menuiserie, le vitrage et les volets ;
+- « Par la chaudière », pour l'eau chaude : son énergie est celle de la chaudière. Elle est notée comme **déduite**, avec sa source.
+
+**Quantités** : « en tout trois fenêtres, toutes pareilles » ou « oui, deux, à eau » donnent un seul groupe de 3 fenêtres ou de 2 radiateurs, décrits une seule fois.
 
 **Description libre** (retour de Noah après son test du 22/10/2026) : le diagnostiqueur peut tout dire d'un coup, par exemple « ce mur fait 4 m 50 de long, brique 30 cm, isolé par l'intérieur, il y a trois fenêtres en bois double vitrage, deux radiateurs à eau ».
 - Tout est noté en une fois : le mur avec ses 4 valeurs, un groupe de **3 fenêtres** identiques, un groupe de **2 radiateurs**.
@@ -33,8 +62,8 @@ Ce prototype correspond à l'étape **V1bis** du plan ([docs/02-capture-video.md
 C'est **notre serveur** qui tient la checklist et calcule ce qui manque, pas l'IA. L'IA ne fait que poser des questions et proposer ce qu'elle a entendu. Une donnée qui n'a pas été dite reste vide.
 
 Périmètre de la checklist dans ce prototype (tiré de [docs/checklist-dpe.md](../docs/checklist-dpe.md)) :
-- **par pièce** : murs (matériau, épaisseur, isolation, donne sur), fenêtres (menuiserie, vitrage, volets), émetteurs de chauffage (type, température, année) ;
-- **pour le logement** : chauffage, eau chaude, ventilation.
+- **par pièce** : murs (donne sur, matériau, épaisseur, isolation), plafond et plancher (donne sur, isolation), fenêtres (menuiserie, vitrage, volets), portes vers l'extérieur, radiateurs (type) ;
+- **pour le logement** : chauffage, eau chaude, ventilation ; détails secondaires des radiateurs et du ballon.
 
 ## Important : Claude passe par l'abonnement Claude Max, sans clé API
 
@@ -110,7 +139,7 @@ set DIAGAUTO_CERVEAU=simulation
 ..\.venv\Scripts\python -m assistant
 ```
 
-Les valeurs sont notées par l'extraction immédiate, la même qu'avec Claude. La simulation pose ensuite la question suivante de la checklist. Elle ne voit pas les images.
+Tout fonctionne comme avec Claude : les valeurs sont notées par l'extraction immédiate, et les questions viennent du parcours du serveur. Seule différence : une phrase que les règles n'ont pas comprise reste sans suite, et les images ne sont pas regardées.
 
 Si faster-whisper n'est pas installé, ou avec `DIAGAUTO_TRANSCRIPTION=simulation`, rien n'est transcrit : on écrit alors les phrases dans « Outils de test ».
 
@@ -130,11 +159,11 @@ cd prototype-assistant
 ..\.venv\Scripts\python -m assistant.rejouer ..\samples\video-001\video.mp4 --serveur http://localhost:8765
 ```
 
-## Évaluer sur 10 phrases réalistes
+## Évaluer sur une pièce complète à 4 murs
 
-Ces 10 phrases de diagnostiqueur contiennent les fautes de transcription réellement entendues pendant le test de Noah. Le script les fait passer par la chaîne complète (extraction immédiate, Claude, garde-fous) et affiche, pour chacune :
+Le script joue la visite complète d'un séjour à 4 murs, en 21 phrases de diagnostiqueur (avec des « je ne sais pas »), puis le passage à la cuisine. Les phrases passent par toute la chaîne : extraction immédiate, parcours, Claude, garde-fous. Pour chaque phrase, il affiche :
 - ce qui a été noté ;
-- la question posée ;
+- la question posée, comparée à la question attendue ;
 - le temps de chaque étape.
 
 ```
@@ -142,7 +171,7 @@ cd prototype-assistant
 ..\.venv\Scripts\python -m assistant.evaluer
 ```
 
-Ajoutez `--simulation` pour l'exécuter sans Claude. Les mêmes 10 phrases sont aussi vérifiées par les tests automatiques (`tests/test_extraction.py`).
+Ajoutez `--simulation` pour l'exécuter sans Claude. Le même parcours est vérifié, question par question, par les tests automatiques (`tests/test_dialogue.py`). Les 10 phrases avec fautes de transcription de l'étape 1 sont vérifiées dans `tests/test_extraction.py`.
 
 ## Ce qui est enregistré
 
@@ -239,6 +268,23 @@ Claude Code indique aussi ce que la visite aurait coûté au tarif de l'API : en
 
 Le temps de réponse est maintenant affiché sous chaque question à l'écran.
 
+## Étape 2 : parcours et temps de réponse (22/10/2026)
+
+**Évaluation sur la pièce à 4 murs avec le vrai Claude** (`python -m assistant.evaluer`) :
+- **21 questions sur 21 conformes au parcours**, 31 valeurs notées, séjour rempli à 100 % ;
+- 0 demande de répétition, 0 question double, 0 question reposée ;
+- **la question part en quelques millisecondes** après la transcription : c'est le serveur qui la pose, sans attendre Claude ;
+- Claude n'a eu qu'une relecture à faire en arrière-plan, sans rien changer.
+
+Vérifié aussi avec le vrai Claude :
+- une phrase longue avec un mot inconnu des règles (« meulière ») : Claude l'a ajoutée 1,5 s plus tard. Le mot est maintenant dans le vocabulaire, avec d'autres matériaux de mur ;
+- « Tu m'entends bien ? » : « Oui, je t'entends. » (2,3 s).
+
+**Temps de réponse sur le téléphone** (ce PC, sans carte graphique) : environ 0,7 s de silence de fin de phrase, plus environ 2,3 s de transcription, plus quelques millisecondes pour le parcours, soit **environ 3 s entre la fin de la phrase et la question**.
+- Avant cette étape : environ 4,5 s ; au départ : environ 4,8 s.
+- La voix du navigateur parle aussi un peu plus vite.
+- Pour aller plus bas, il faut une **carte graphique** pour la transcription. Un essai avec une fenêtre d'analyse plus courte (10 ou 15 s au lieu de 30 s) n'a rien gagné : le moteur la complète de toute façon à 30 s.
+
 ## Réglages (variables d'environnement)
 
 | Variable | Défaut | Rôle |
@@ -259,8 +305,11 @@ Le temps de réponse est maintenant affiché sous chaque question à l'écran.
 ## Limites connues de ce prototype
 
 - **Testé une fois sur iPhone par Noah** (version précédente). Restent à tester : Android récent, Android ancien, et cette version corrigée.
-- **L'extraction immédiate** ne connaît que le vocabulaire listé dans `assistant/extraction.py`. Le reste est compris par Claude.
-- **« Celui-ci »** désigne pour l'instant l'élément dont on donne les valeurs. Le parcours mur par mur dans la pièce viendra à l'étape 2.
+- **L'extraction immédiate** ne connaît que le vocabulaire listé dans `assistant/extraction.py`.
+  - Le reste est compris par Claude, en relecture de la phrase.
+  - Mais la question du parcours part avant cette relecture : un mot inconnu des règles peut donc entraîner une question sur ce qui vient d'être dit. Le vocabulaire est à enrichir au fil des tests.
+- **Le parcours a un ordre fixe** (murs, plafond, plancher, fenêtres, radiateurs). Le diagnostiqueur peut décrire dans l'ordre qu'il veut, tout est noté ; seules les questions suivent cet ordre.
+- **Hypothèse à faire valider par un diagnostiqueur** : une paroi sur local chauffé n'est pas déperditive en 3CL, donc ses détails ne sont pas demandés.
 - **Certificat fait maison** :
   - l'avertissement du navigateur est à accepter à chaque nouveau téléphone ;
   - l'installation de la page comme une application (PWA) ne marche pas avec ce certificat.
@@ -285,8 +334,9 @@ Le temps de réponse est maintenant affiché sous chaque question à l'écran.
 | `assistant/extraction.py` | Extraction immédiate, sans IA, de tout ce qui est dit (description libre, réponse courte, mot mal transcrit deviné, « je ne sais pas »). |
 | `assistant/garde.py` | Garde-fous sur les questions : une seule, jamais « répétez », jamais un champ déjà rempli ou déjà demandé. |
 | `assistant/cerveau.py` | Claude via Claude Code : consignes, messages, processus gardé ouvert. |
-| `assistant/simulation.py` | Cerveau de simulation, sans Claude : question suivante de la checklist. |
-| `assistant/evaluer.py` | Évaluation sur 10 phrases réalistes, avec latence de chaque étape. |
+| `assistant/parcours.py` | Le parcours de la visite : quelle question poser maintenant (mur par mur, plafond, plancher…). |
+| `assistant/simulation.py` | Cerveau de simulation, sans Claude (règles et parcours seulement). |
+| `assistant/evaluer.py` | Évaluation sur une pièce complète à 4 murs, avec la latence de chaque étape. |
 | `assistant/session.py` | Une visite : chaîne son → texte → Claude → voix, veille, journal, bilan. |
 | `assistant/serveur.py`, `assistant/__main__.py` | Serveur web et lancement. |
 | `assistant/rejouer.py` | Rejouer une vidéo de test. |
