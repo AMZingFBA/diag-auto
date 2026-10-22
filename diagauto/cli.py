@@ -2,8 +2,11 @@
 
     diagauto inspect <dossier>      résumé d'un dossier LICIEL (pièces, Carrez, modules)
     diagauto verifier <chemin>...   relit et réécrit en mémoire toutes les tables, vérifie l'identité octet par octet
+    diagauto generer --modele <dossier> [--visite <visite>] [--sortie <dossier>]
+                                    pont assistant -> LICIEL : pièces et Carrez d'une visite, dans un NOUVEAU dossier
 
-Les deux commandes sont en lecture seule.
+« inspect » et « verifier » sont en lecture seule ; « generer » lit le modèle et la visite, et n'écrit que dans la
+sortie (jamais sous C:\\LICIEL_*).
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ from pathlib import Path
 from .liciel_xml import DossierLiciel, FormatNonReconnu, FragmentXml, lire_fichier
 from .liciel_xml.dossier import COLONNE_CARREZ, COLONNE_HABITABLE, COLONNE_SOL
 from .liciel_xml.valeurs import format_fr
+from .pont import ErreurPont, generer
 
 
 def _somme(valeurs) -> float | None:
@@ -146,6 +150,16 @@ def verifier(chemins: list[Path], sortie=None) -> int:
     return 1 if echecs or not fichiers else 0
 
 
+def generer_dossier(visite: Path, modele: Path, sortie: Path, mesures: Path | None, batiment: str | None,
+                    flux=None) -> int:
+    flux = flux or sys.stdout
+    rapport = generer(visite, modele, sortie, mesures=mesures, batiment=batiment)
+    print(rapport.en_texte(), file=flux)
+    print("", file=flux)
+    print("Vérification (diagauto verifier) :", file=flux)
+    return verifier([sortie], flux)
+
+
 def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="replace")
@@ -155,12 +169,22 @@ def main(argv: list[str] | None = None) -> int:
     p_inspect.add_argument("dossier", type=Path, help="dossier LICIEL, ex. C:\\LICIEL_Diagnostics\\Dossiers_2026\\2610210001")
     p_verif = sous.add_parser("verifier", help="vérifie la relecture/réécriture à l'identique des tables (lecture seule)")
     p_verif.add_argument("chemins", type=Path, nargs="+", help="dossiers ou fichiers Table_*.xml")
+    p_gen = sous.add_parser("generer", help="pont assistant -> LICIEL : pièces et Carrez d'une visite, dans un nouveau dossier")
+    p_gen.add_argument("--modele", type=Path, required=True,
+                       help="dossier LICIEL modèle, lu seulement (ex. la copie d'Hermes du dossier de test 2610210001)")
+    p_gen.add_argument("--visite", type=Path, default=Path("prototype-assistant/sessions"),
+                       help="dossier d'une visite (etat.json) ou dossier des sessions : la plus récente (par défaut)")
+    p_gen.add_argument("--sortie", type=Path, default=Path("sorties/dossier-test"), help="dossier créé (jamais sous C:\\LICIEL_*)")
+    p_gen.add_argument("--mesures", type=Path, help="mesures validées (par défaut : mesures.json de la visite, s'il existe)")
+    p_gen.add_argument("--batiment", help="bâtiment des nouvelles pièces (par défaut : celui du dossier modèle)")
     args = parser.parse_args(argv)
     try:
         if args.commande == "inspect":
             return inspecter(args.dossier)
+        if args.commande == "generer":
+            return generer_dossier(args.visite, args.modele, args.sortie, args.mesures, args.batiment)
         return verifier(args.chemins)
-    except FileNotFoundError as err:
+    except (FileNotFoundError, ErreurPont) as err:
         print(f"Erreur : {err}", file=sys.stderr)
         return 2
 
