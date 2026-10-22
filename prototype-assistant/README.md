@@ -748,6 +748,39 @@ Le prototype compte 251 tests.
 - Le filtre des reprises est une règle simple (la moitié des mots porteurs) : une reprise courte peut passer (« D'accord, c'est chez le voisin. »), et Claude répète moins de lui-même grâce à ses consignes.
 - Sans suppression automatique, un élément créé en trop reste jusqu'à ce que le diagnostiqueur réponde « oui » à « C'est le même… ? », ou jusqu'à l'écran de validation.
 
+## Étape 10 : plus de faux « Hors réseau » (22/10/2026)
+
+Noah voyait « Hors réseau » alors qu'il avait du réseau. Causes, changements et mesures : [rejeux/20261022-etape10-reseau.md](rejeux/20261022-etape10-reseau.md).
+
+**Cause** : **toute** fermeture de la liaison affichait « Hors réseau », tout de suite, sans vérifier que le serveur était injoignable.
+- Ces fermetures arrivent avec un bon réseau : page mise en arrière-plan ou écran verrouillé (iOS suspend la page), serveur redémarré, erreur sur un seul message reçu (le serveur fermait la liaison).
+- Il n'y avait pas de battement de cœur : une coupure d'une seconde ressemblait à une panne, et une liaison morte n'était pas vue.
+- Ce qui était dit pendant une coupure était perdu pour l'assistant.
+
+**Maintenant** :
+- **Battement de cœur** toutes les 2 s. Le serveur répond tout de suite, même quand Claude réfléchit : 1 ms en médiane, 35 ms au pire, mesuré pendant le rejeu complet d'une visite avec le vrai Claude.
+- **« Hors réseau » seulement si le serveur est vraiment injoignable** : 3 battements sans réponse (6 s), ou une reconnexion qui échoue depuis 6 s.
+- Une réponse lente donne « réseau lent » : pastille orange, sans alerte. Claude lent donne « L'assistant réfléchit… ».
+- **Reconnexion automatique et silencieuse** : après 0,5 s, 1 s, puis toutes les 2 s. Elle est aussi immédiate quand la page revient ou que le réseau revient.
+- Page cachée (écran verrouillé) : aucune alerte.
+- **Rattrapage** : le téléphone garde ce qui n'a pas pu partir (tout le son, une image sur trois, les capteurs, les phrases écrites ; jusqu'à 2 à 3 min). Il l'envoie au retour, dans l'ordre, et le serveur traite les phrases dites pendant la coupure.
+  - Le serveur redit ce qu'il a dit pendant la coupure (moins d'une minute).
+  - Le téléphone rapporte ses coupures (durée, cause), notées au journal avec le code de chaque fermeture.
+- Une erreur sur un message est notée au journal et ne ferme plus la liaison.
+
+**Fichiers** : `web/liaison.js` (la liaison du téléphone, testable seule) ; `assistant/serveur.py` (battement, erreurs, journal) ; `assistant/session.py` (rattrapage).
+
+**Tests** :
+- `tests/test_liaison_js.py` (8 scénarios, avec Node et une fausse horloge) : réseau lent, Claude lent, vraie coupure, coupure brève, liaison morte, écran verrouillé, coupure trop longue, code incorrect.
+- `tests/test_liaison.py` (4 tests du serveur) : battement pendant que Claude réfléchit, message illisible, reconnexion avec rattrapage, son gardé traité au retour.
+
+Le prototype compte 263 tests.
+
+**Limites** :
+- À vérifier sur l'iPhone de Noah : le module de liaison est testé avec une fausse horloge, pas encore sur le téléphone.
+- Écran verrouillé : iOS suspend la page, et le son n'est plus capté pendant ce temps.
+- Serveur redémarré pendant une visite : une nouvelle visite commence à la reconnexion. Ne pas redémarrer le serveur pendant un test.
+
 ## Réglages (variables d'environnement)
 
 | Variable | Défaut | Rôle |
@@ -808,7 +841,7 @@ Le prototype compte 251 tests.
 | `assistant/session.py` | Une visite : chaîne son → texte → pré-remplissage → Claude → voix (trois postes en file, sans blocage), pause, veille, journal, bilan. |
 | `assistant/serveur.py`, `assistant/__main__.py` | Serveur web et lancement. |
 | `assistant/rejouer.py` | Rejouer une vidéo de test. |
-| `web/` | La page du téléphone ; `web/boussole.js` : cap de la caméra par la matrice de rotation. |
+| `web/` | La page du téléphone ; `web/boussole.js` : cap de la caméra par la matrice de rotation ; `web/liaison.js` : liaison avec le serveur (battement de cœur, reconnexion, rattrapage). |
 
 Tests (sans Claude ni réseau ; Claude Code y est remplacé par un faux programme) :
 
