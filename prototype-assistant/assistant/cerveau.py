@@ -56,6 +56,7 @@ class Contexte:
     deja_note: list[str] = field(default_factory=list)  # noté par l'extraction immédiate à partir de cette phrase
     derniere_question: str = ""  # « M1.isolation : Il est isolé ? »
     questions_recentes: list[str] = field(default_factory=list)  # codes des champs déjà demandés récemment
+    valeurs_attendues: list[str] = field(default_factory=list)  # réponses possibles à la dernière question
 
 
 @dataclass
@@ -82,7 +83,10 @@ Ton rôle :
 Règles absolues :
 - Description libre : une phrase peut décrire plusieurs éléments d'un coup (« ce mur fait 4 m 50 de long, brique 30 cm, isolé par l'intérieur, il y a trois fenêtres en bois double vitrage, deux radiateurs à eau »). Extrais TOUT en une fois : une action par valeur, et un seul élément avec "nombre" pour des éléments identiques (« trois fenêtres en bois » = un élément fenêtre, nombre 3).
 - Le serveur note déjà automatiquement ce qu'il reconnaît (liste « Déjà noté automatiquement ») : ne le renote pas, complète seulement le reste.
-- Ne fais JAMAIS répéter. Jamais « pardon », « répétez », « pas compris », « pas clair ». Un mot mal transcrit se devine avec le vocabulaire métier et la dernière question posée : « ictérieur » = extérieur, « besse » ou « bas » = basse température, « o chaudi » = eau chaude, « parpin » = parpaing, « l'allaine » = la laine, « AVMC » = la VMC.
+- Ne fais JAMAIS répéter. Jamais « pardon », « répétez », « pas compris », « pas clair ».
+- Les diagnostiqueurs parlent vite, avec un accent, hésitent ou bégaient, et la transcription est souvent fautive. Interprète TOUJOURS la phrase par rapport à la dernière question posée, à ses valeurs possibles (fournies) et à ce qui est filmé : cherche la valeur possible qui se prononce le plus pareil. Exemples : question « à eau ou électrique ? », transcription « Oh ! est chaude » = « eau chaude » = radiateur à eau ; « ictérieur » = extérieur ; « besse » ou « bas » = basse température ; « o chaudi » = eau chaude ; « parpin » = parpaing ; « l'allaine » = la laine ; « AVMC » = la VMC ; « pévécé » = PVC.
+- Ignore les hésitations, répétitions et faux départs : « euh… le… le mur il fait… trente » = épaisseur 30 cm ; « pa… parpaing » = parpaing. Une correction l'emporte : « alu, enfin bois » = bois.
+- Si l'interprétation est sûre : enregistrer_reponse. Si elle est seulement probable : ajoute "certitude": "probable" à l'action ; le serveur demandera « J'ai compris …, c'est bien ça ? » au lieu de faire répéter.
 - « Je ne sais pas » : valeur « inconnu » pour le champ demandé. Ne redemande jamais ce champ.
 - Ne demande jamais un champ déjà renseigné dans l'état, ni un champ de la liste « Déjà demandé ». Pas de question absurde : une fenêtre n'a pas d'épaisseur (menuiserie, vitrage, volets, dimensions).
 - « Pas d'autre mur », « c'est tout pour les fenêtres » : action cloturer. « Plafond pareil que le séjour » : action copier.
@@ -104,7 +108,7 @@ Format de réponse : UNIQUEMENT un objet JSON sur une ligne, sans texte autour, 
 Actions possibles :
 {"outil": "piece_courante", "nom": "Chambre 1", "citation": "<mots dits, ou vide si tu le déduis de l'image>"}
 {"outil": "signaler_element", "type": "<type>", "description": "<courte, avec article : le mur avec la télé>", "nombre": 1}
-{"outil": "enregistrer_reponse", "element_id": "<M1… si l'élément existe, sinon vide>", "type": "<type>", "description": "<pour un nouvel élément>", "nombre": 1, "champ": "<champ>", "valeur": "<valeur courte>", "citation": "<mots dits>"}
+{"outil": "enregistrer_reponse", "element_id": "<M1… si l'élément existe, sinon vide>", "type": "<type>", "description": "<pour un nouvel élément>", "nombre": 1, "champ": "<champ>", "valeur": "<valeur courte>", "citation": "<mots dits>", "certitude": "<sur ou probable>"}
 {"outil": "marquer_sans_objet", "element_id": "<id ou vide>", "type": "<type>", "champ": "<champ, ou presence pour « pas de fenêtre ici »>", "citation": "<mots dits>"}
 {"outil": "cloturer", "type": "<mur ou fenetre>", "citation": "<mots dits : « pas d'autre mur »>"}
 {"outil": "copier", "type": "<plafond ou plancher>", "piece_source": "<nom de la pièce>", "citation": "<mots dits : « pareil que le séjour »>"}
@@ -142,6 +146,8 @@ def texte_message(contexte: Contexte, chemins_images: list[Path] | None = None) 
     if contexte.mode in ("reponse", "complement"):
         debut, fin = contexte.t_phrase or (contexte.t, contexte.t)
         lignes.append(f"Dernière question posée : {contexte.derniere_question or 'aucune'}")
+        if contexte.valeurs_attendues:
+            lignes.append("Valeurs possibles pour cette question : " + ", ".join(contexte.valeurs_attendues))
         lignes.append("Déjà noté automatiquement à partir de cette phrase : " + ("; ".join(contexte.deja_note) or "rien"))
         lignes.append(f"Nouvelle phrase du diagnostiqueur [{horodatage(debut)}–{horodatage(fin)}] : « {contexte.phrase} »")
     else:

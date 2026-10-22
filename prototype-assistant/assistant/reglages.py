@@ -28,7 +28,7 @@ class Reglages:
     whisper_faisceau: int = field(default_factory=lambda: int(_env("DIAGAUTO_WHISPER_FAISCEAU", "5")))
     fin_silence_s: float = field(default_factory=lambda: float(_env("DIAGAUTO_FIN_SILENCE", "0.7")))
     veille_s: float = field(default_factory=lambda: float(_env("DIAGAUTO_VEILLE_S", "10")))
-    questions_par_minute: int = field(default_factory=lambda: int(_env("DIAGAUTO_QUESTIONS_MINUTE", "6")))
+    questions_par_minute: int = field(default_factory=lambda: int(_env("DIAGAUTO_QUESTIONS_MINUTE", "20")))
     # Code d'accès facultatif (conseillé dès que le serveur est joignable hors du réseau local).
     code: str = field(default_factory=lambda: _env("DIAGAUTO_CODE", ""))
     dossier_sessions: Path = field(default_factory=lambda: Path(_env("DIAGAUTO_SESSIONS", str(DOSSIER_PROTOTYPE / "sessions"))))

@@ -24,7 +24,7 @@ from .actions import appliquer
 from .cerveau import Contexte, Decision, ImageInstant
 from .checklist import Checklist, cle_texte, horodatage
 from . import parcours
-from .extraction import Cible, extraire
+from .extraction import VOCABULAIRE, Cible, extraire
 from .garde import Questions, champ_rempli
 from .simulation import CerveauSimulation
 from .reglages import Reglages
@@ -41,6 +41,17 @@ MOTS_POUR_COMPLEMENT = 8
 _SUSPENDUS = {"est", "fait", "de", "du", "des", "la", "le", "les", "et", "en", "avec", "a", "au", "aux", "sur", "par",
               "il", "elle", "un", "une", "mais", "donc", "ou", "euh", "heu", "sont", "son", "sa", "ses", "qui", "que",
               "pour", "dans", "c", "cest"}
+
+
+def valeurs_attendues(cible: Cible | None) -> list[str]:
+    """Les réponses possibles à la dernière question, pour que Claude interprète une transcription
+    fautive par rapport à elles (« Oh ! est chaude » à « à eau ou électrique ? » = eau chaude)."""
+    if cible is None or cible.genre == "piece":
+        return []
+    if cible.genre in ("presence", "suite", "pareil"):
+        return ["oui", "non"]
+    valeurs = list(dict.fromkeys(v for _, v in VOCABULAIRE.get((cible.type, cible.champ), [])))
+    return ["oui", "non", *valeurs] if cible.genre == "confirmation" else valeurs
 
 
 def phrase_inachevee(texte: str) -> bool:
@@ -338,6 +349,7 @@ class Session:
             images=self._images_pour(lot[0]["t_debut"], dernier["t_fin"]), phrase=texte,
             t_phrase=(lot[0]["t_debut"], dernier["t_fin"]),
             derniere_question=self._derniere_question_texte,
+            valeurs_attendues=valeurs_attendues(self._cible),
         )
         self.mesures.append(mesure)
         reference = dernier["reference"]
@@ -360,9 +372,11 @@ class Session:
         # Après l'extraction : la phrase a pu changer de pièce (« ici c'est la cuisine »).
         contexte.questions_recentes = self.questions.recentes(time.monotonic(), self.checklist.piece_courante)
 
-        if compris:
-            # 2. Compris : la question suivante du parcours part tout de suite, sans attendre Claude.
-            if not await self._question_du_parcours(reference, mesure) and notes:
+        if compris or extraction.proposition:
+            # 2. Compris : la question suivante du parcours part tout de suite, sans attendre Claude. Compris avec
+            # un doute : on propose l'interprétation la plus probable (« J'ai compris…, c'est bien ça ? »).
+            question = extraction.proposition is not None and await self._confirmer(extraction.proposition, reference, mesure)
+            if not question and not await self._question_du_parcours(reference, mesure) and notes:
                 await self._bip(round(time.monotonic() - reference, 3))
                 mesure["bip_s"] = round(time.monotonic() - reference, 3)
             await self.envoyer_etat()
@@ -376,6 +390,23 @@ class Session:
         else:
             # 3. Pas compris par les règles : Claude essaie, puis le parcours reprend.
             await self._decider(self.cerveau, contexte, reference, mesure)
+
+    async def _confirmer(self, proposition: dict, reference: float, mesure: dict | None) -> bool:
+        """« J'ai compris eau chaude, c'est bien ça ? » : une seule fois par valeur proposée. Vrai si posée."""
+        if not proposition.get("element_id"):
+            return False
+        cible = Cible("confirmation", proposition["type"], proposition["champ"], proposition["element_id"], source=proposition["valeur"])
+        texte = f"J'ai compris {proposition['valeur']}, c'est bien ça ?"
+        maintenant = time.monotonic()
+        question, cible, raison, cle = self.questions.filtrer(texte, cible.code, self.checklist, maintenant)
+        if raison:
+            return False
+        self.journaliser("confirmation_demandee", proposition=proposition)
+        if mesure is not None:
+            mesure["question_s"] = round(maintenant - reference, 3)
+            mesure["question_dite"] = True
+        await self.dire(question, reference, mesure, cible=cible, cle=cle, une_fois=True)
+        return True
 
     async def _question_du_parcours(self, reference: float, mesure: dict | None) -> bool:
         """Pose la première question du parcours que les garde-fous acceptent. Vrai si une question part."""
@@ -396,7 +427,11 @@ class Session:
         try:
             self._compteurs["relectures_claude"] += 1
             decision = await self.cerveau.decider(contexte, None)
-            resultats = appliquer(self.checklist, decision.actions, contexte.t, self._phrases_recentes(contexte))
+            # Relecture : seulement des valeurs sûres, et rien sur un champ dont la confirmation est en cours.
+            attente = self._cible if self._cible and self._cible.genre == "confirmation" else None
+            actions = [a for a in decision.actions if a.get("certitude") != "probable"
+                       and not (attente and a.get("element_id") == attente.element_id and a.get("champ") == attente.champ)]
+            resultats = appliquer(self.checklist, actions, contexte.t, self._phrases_recentes(contexte))
             self._compter(resultats)
             self.journaliser("complement", resultats=resultats, erreur=decision.erreur, brut=decision.brut[:2000], mesures=decision.mesures)
             if any(r["statut"] == "accepte" for r in resultats):
@@ -465,10 +500,15 @@ class Session:
         decision = await cerveau.decider(contexte, sur_dire)
         mesure["cerveau_total_s"] = round(time.perf_counter() - debut, 3)
         mesure["cerveau"] = decision.mesures
-        resultats = appliquer(self.checklist, decision.actions, contexte.t, self._phrases_recentes(contexte))
+        # Interprétation seulement probable : pas notée, proposée au diagnostiqueur (« J'ai compris…, c'est bien ça ? »).
+        probables = [a for a in decision.actions if a.get("certitude") == "probable" and a.get("outil") == "enregistrer_reponse"]
+        actions = [a for a in decision.actions if a not in probables]
+        resultats = appliquer(self.checklist, actions, contexte.t, self._phrases_recentes(contexte))
         notes = self._compter(resultats)
         if resultats:
             await self._envoyer_actions(resultats, "cerveau")
+        if probables and not mesure.get("question_dite"):
+            await self._confirmer({**probables[0], "note": "interprété par Claude"}, reference, mesure)
         if any(r["statut"] == "accepte" for r in resultats) and not mesure.get("question_dite"):
             if not await self._question_du_parcours(reference, mesure) and notes:
                 await self._bip()

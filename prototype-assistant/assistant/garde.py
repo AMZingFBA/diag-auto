@@ -34,7 +34,7 @@ def champ_rempli(cible: Cible, checklist: Checklist) -> bool:
         return element is not None and element.est_rempli("donne_sur")
     if cible.genre == "secondaire":
         return (cible.type, cible.champ) not in checklist.manques_secondaires()
-    if cible.genre == "champ":
+    if cible.genre in ("champ", "confirmation"):
         try:
             element = checklist.trouver_element(cible.element_id or "")
         except ErreurChecklist:

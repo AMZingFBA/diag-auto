@@ -19,6 +19,8 @@ import tempfile
 from pathlib import Path
 
 from .cerveau import CerveauClaudeCode
+from .checklist import Checklist
+from .extraction import Cible
 from .reglages import Reglages
 from .session import Session
 from .simulation import CerveauSimulation
@@ -49,6 +51,61 @@ PIECE_A_4_MURS = [
     ("Aucune idée.", "Pièce terminée. Quelle est la pièce suivante ?"),
     ("La cuisine.", "Décrivez le premier mur."),
 ]
+
+
+# Réponses que les règles ne peuvent pas trancher seules : Claude doit les interpréter par rapport à la
+# question posée (étape 3 de Noah). (champ visé par la dernière question, question, transcription)
+CAS_DIFFICILES = [
+    ("PL1.donne_sur", "Au-dessus du plafond : combles, terrasse ou logement ?", "Au-dessus c'est le voisin, il est chauffé."),
+    ("PB1.donne_sur", "Sous le plancher : terre-plein, vide sanitaire, cave ou logement ?", "En dessous y a le parking de l'immeuble."),
+    ("E1.type", "Les 2 radiateurs : à eau ou électrique ?", "Oh !"),
+    ("E1.type", "Les 2 radiateurs : à eau ou électrique ?", "Ils sont branchés sur la chaudière."),
+    ("M1.materiau", "Le mur avec la télé est en quoi ?", "C'est du, euh, comment on dit, du bloc creux."),
+    ("F1.menuiserie", "Les 3 fenêtres : PVC, bois ou alu ?", "Du plastique blanc."),
+]
+
+
+def _sejour_en_cours() -> Checklist:
+    c = Checklist()
+    c.definir_piece("Séjour", 0)
+    c.signaler_element("mur", "le mur avec la télé", 1)
+    c.signaler_element("fenetre", "les 3 fenêtres", 1, nombre=3)
+    c.signaler_element("emetteur", "les 2 radiateurs", 1, nombre=2)
+    return c
+
+
+async def evaluer_comprehension() -> None:
+    """Chaque cas difficile part d'un séjour en cours, avec la question posée juste avant."""
+    dossier = Path(tempfile.mkdtemp(prefix="diagauto-comprehension-"))
+    cerveau = CerveauClaudeCode(dossier / "claude-reponses")
+    reglages = Reglages(cerveau="claude", transcription="simulation", dossier_sessions=dossier, veille_s=10_000, questions_par_minute=60)
+    session = Session("comprehension", dossier, cerveau, CerveauSimulation(), TranscripteurSimulation(), reglages)
+    recus: list[dict] = []
+
+    async def envoyer(message: dict) -> None:
+        recus.append(message)
+
+    session.envoyer = envoyer
+    print(f"Cerveau : {cerveau.nom}\nDémarrage…\n", flush=True)
+    await session.demarrer()
+    await session._pret.wait()
+    for code, question, phrase in CAS_DIFFICILES:
+        session.checklist = _sejour_en_cours()
+        session._cible = Cible.depuis_code(code, session.checklist)
+        session._derniere_question_texte = f"{code} : « {question} »"
+        avant = len(recus)
+        await session.recevoir_controle({"type": "texte", "texte": phrase})
+        await asyncio.sleep(0.05)
+        while session.occupe:
+            await asyncio.sleep(0.05)
+        element_id, champ = code.split(".")
+        valeur = session.checklist.trouver_element(element_id).valeur(champ)
+        dits = [m["texte"] for m in recus[avant:] if m["type"] == "dire"]
+        mesure = session.mesures[-1]
+        print(f"« {question} »  →  « {phrase} »")
+        print(f"    noté : {valeur.valeur + (' (' + valeur.note + ')' if valeur.note else '') if valeur else 'rien'}")
+        print(f"    dit  : {' / '.join(dits) or '(rien)'} | Claude {_s(mesure.get('cerveau_total_s'))} s", flush=True)
+    await session.terminer()
 
 
 def _s(valeur) -> str:
@@ -120,9 +177,10 @@ async def evaluer(simulation: bool) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Évaluation de l'assistant sur une pièce complète à 4 murs")
     parser.add_argument("--simulation", action="store_true", help="sans Claude (règles et parcours seulement)")
+    parser.add_argument("--comprehension", action="store_true", help="réponses difficiles interprétées par Claude selon la question")
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
-    asyncio.run(evaluer(args.simulation))
+    asyncio.run(evaluer_comprehension() if args.comprehension else evaluer(args.simulation))
 
 
 if __name__ == "__main__":

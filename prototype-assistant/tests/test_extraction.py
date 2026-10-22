@@ -88,12 +88,14 @@ def test_6_reponse_courte_en_lettres():
     assert valeurs(c, "M1")["epaisseur"] == "5 cm"
 
 
-def test_7_mot_deforme_ictérieur_devine_avec_le_vocabulaire():
+def test_7_mot_deforme_devine_avec_le_vocabulaire():
     c = mur_avec({"materiau": "brique"})
-    extraction = dire(c, "Ictérieur.", cible="M1.donne_sur")
+    dire(c, "Ictérieur.", cible="M1.donne_sur")  # confusion observée chez Noah, corrigée par le lexique
     assert valeurs(c, "M1")["donne_sur"] == "extérieur"
-    assert c.trouver_element("M1").valeur("donne_sur").note == "deviné : « icterieur » → extérieur"
-    assert extraction.devines == ["deviné : « icterieur » → extérieur"]
+    c = mur_avec({"materiau": "brique"})
+    extraction = dire(c, "Dehor.", cible="M1.donne_sur")  # mot tronqué : deviné par le son
+    assert c.trouver_element("M1").valeur("donne_sur").note == "deviné : « dehor » → extérieur"
+    assert extraction.devines == ["deviné : « dehor » → extérieur"]
 
 
 def test_8_reponse_criee_besse():

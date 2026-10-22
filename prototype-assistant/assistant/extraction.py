@@ -73,16 +73,68 @@ def chiffres(texte: str) -> str:
     return " ".join(sortie)
 
 
+# Mots d'hésitation, sans contenu (« euh… le… le mur »).
+_HESITATIONS = {"euh", "euuh", "euhh", "heu", "heuu", "hum", "humm", "hmm", "mmh", "mh", "bah", "ben", "beh", "hein", "bref"}
+# Mots qui ne doivent jamais disparaître comme un faux départ (« pas parpaing » n'est pas un bégaiement).
+_JAMAIS_FAUX_DEPART = {"pas", "non", "sans", "ne", "ni"}
+
+
+def nettoyer_oral(mots: list[str]) -> list[str]:
+    """Retire les hésitations, les mots répétés (« le le mur », « roulant roulant ») et les faux départs
+    d'un bégaiement (« pa parpaing », « dou double »)."""
+    propres: list[str] = []
+    for i, mot in enumerate(mots):
+        if mot in _HESITATIONS or re.fullmatch(r"e+u+h*|h+e+u+|m{2,}h*|m+h+", mot):
+            continue
+        suivant = next((m for m in mots[i + 1:] if m not in _HESITATIONS and m != ","), "")
+        if (mot.isalpha() and mot not in _JAMAIS_FAUX_DEPART and len(suivant) - len(mot) >= 2
+                and suivant.startswith(mot) and len(mot) <= 4):
+            continue  # faux départ : « pa… parpaing »
+        precedent = next((m for m in reversed(propres) if m != ","), "")
+        if mot != "," and mot == precedent and not mot.isdigit():
+            while propres and propres[-1] == ",":
+                propres.pop()
+            continue  # répétition : « le… le mur »
+        if mot == "," and propres and propres[-1] == ",":
+            continue
+        propres.append(mot)
+    return propres
+
+
 def normaliser(texte: str) -> str:
     """Texte comparable : corrections du lexique, minuscules sans accents, ponctuation isolée,
-    nombres en chiffres."""
+    hésitations et répétitions retirées, nombres en chiffres."""
     texte = cle_texte(corriger(texte))
+    texte = re.sub(r"\.{2,}|…", " ", texte)  # « il fait… trente » : une hésitation, pas une fin de phrase
     texte = re.sub(r"[’'`\-]", " ", texte)
     texte = re.sub(r"(\d)\s*[,.]\s*(\d)", r"\1.\2", texte)  # 4,5 → 4.5
-    texte = re.sub(r"[;:!?…]|\.(?!\d)", " , ", texte)
+    texte = re.sub(r"[;:!?]|\.(?!\d)", " , ", texte)
     texte = re.sub(r",", " , ", texte)
     texte = re.sub(r"[^a-z0-9., ]", " ", texte)
-    return chiffres(" ".join(texte.split()))
+    return chiffres(" ".join(nettoyer_oral(texte.split())))
+
+
+def phonetique(texte: str) -> str:
+    """Clé phonétique française approximative, pour comparer ce qui se prononce pareil :
+    « oh est chaude » ≈ « eau chaude », « brik » ≈ « brique », « vie de sanitaire » ≈ « vide sanitaire »."""
+    mots = []
+    for mot in cle_texte(texte).replace(",", " ").split():
+        if mot.isdigit():
+            mots.append(mot)
+            continue
+        m = mot
+        for motif, son in (
+            (r"^(?:est|et|ai|es)$", "e"), (r"^(?:oh|ho|o|au|aux|eau|eaux)$", "o"),
+            (r"eaux?|aux?|au", "o"), (r"ph", "f"), (r"ch", "x"), (r"qu", "k"), (r"gu(?=[eiy])", "g"),
+            (r"c(?=[eiy])", "s"), (r"g(?=[eiy])", "j"), (r"c", "k"), (r"x(?!$)", "ks"), (r"ss", "s"),
+            (r"(?:ai|ei|er$|ez$|et$)", "e"), (r"ou", "w"), (r"y", "i"), (r"h", ""),
+            (r"[ae]n(?=[^aeiouy]|$)|[ae]m(?=[bp])", "a"), (r"(?:ai|ei|i)n(?=[^aeiouy]|$)", "in"),
+        ):
+            m = re.sub(motif, son, m)
+        m = re.sub(r"(.)\1+", r"\1", m)  # lettres doublées
+        m = re.sub(r"(?<=.)(?:es|e|s|t|x)$", "", m)  # lettres finales muettes
+        mots.append(m)
+    return "".join(mots)
 
 
 # --- Vocabulaire métier par champ -----------------------------------------------------------------
@@ -91,7 +143,8 @@ def normaliser(texte: str) -> str:
 
 VOCABULAIRE: dict[tuple[str, str], list[tuple[tuple[str, ...], str]]] = {
     ("mur", "materiau"): [
-        (("parpaing", "parpaings", "agglo", "agglos", "bloc beton", "blocs beton", "parpaing creux"), "parpaing"),
+        (("parpaing", "parpaings", "agglo", "agglos", "bloc beton", "blocs beton", "parpaing creux", "bloc creux", "blocs creux",
+          "bloc", "blocs"), "parpaing"),
         (("brique creuse", "briques creuses"), "brique creuse"),
         (("brique pleine", "briques pleines"), "brique pleine"),
         (("monomur", "brique alveolaire", "briques alveolaires"), "monomur"),
@@ -122,7 +175,8 @@ VOCABULAIRE: dict[tuple[str, str], list[tuple[tuple[str, ...], str]]] = {
         (("combles", "comble", "grenier"), "local non chauffé : combles"),
         (("veranda",), "local non chauffé : véranda"),
         (("local non chauffe", "non chauffe"), "local non chauffé"),
-        (("local chauffe", "piece chauffee", "autre piece", "une piece", "interieur du logement"), "local chauffé"),
+        (("local chauffe", "piece chauffee", "autre piece", "une piece", "interieur du logement", "mur interieur", "interieur", "cloison"),
+         "local chauffé"),
         (("voisin", "voisins", "mitoyen", "mitoyenne"), "local chauffé (voisin)"),
         (("exterieur", "dehors", "facade", "rue", "jardin"), "extérieur"),
     ],
@@ -211,7 +265,7 @@ VOCABULAIRE: dict[tuple[str, str], list[tuple[tuple[str, ...], str]]] = {
         (("convecteur", "convecteurs"), "convecteurs électriques"),
     ],
     ("ecs", "systeme"): [
-        (("thermodynamique",), "ballon thermodynamique"),
+        (("thermodynamique", "thermo"), "ballon thermodynamique"),
         (("solaire",), "chauffe-eau solaire"),
         (("instantane",), "chauffe-eau instantané"),
         (("ballon", "cumulus", "chauffe eau"), "ballon électrique"),
@@ -256,7 +310,8 @@ PLURIELS = {"mur": "murs", "fenetre": "fenêtres", "porte": "portes", "emetteur"
 _MOTS = re.compile("|".join(f"(?P<m{i}>\\b(?:{motif})\\b)" for i, (motif, *_reste) in enumerate(MOTS_ELEMENTS)))
 _DESIGNE = re.compile(r"\bcelui (?:ci|la)\b|\bcelle (?:ci|la)\b")  # « celui-ci » : un nouvel élément
 _DESIGNATION = "designation"  # type provisoire d'un « celui-ci », fixé d'après les valeurs dites
-_NOUVEAU = {"ce", "cet", "cette", "ces", "un", "une", "autre", "deuxieme", "troisieme", "quatrieme", "second", "seconde", "dernier"}
+_NOUVEAU_FORT = {"autre", "deuxieme", "troisieme", "quatrieme", "cinquieme", "second", "seconde", "dernier"}
+_NOUVEAU = {"ce", "cet", "cette", "ces", "un", "une"} | _NOUVEAU_FORT
 
 _ISOLANTS = [
     ("laine de verre", "laine de verre"), ("laine de roche", "laine de roche"), ("laine minerale", "laine minérale"),
@@ -266,10 +321,17 @@ _ISOLANTS = [
 _ISOLATION = re.compile(r"\bisol|\biti\b|\bite\b|\bitr\b|\blaine\b|polystyrene|polyurethane|\bouate\b|doublage|fibre de bois|\bliege\b")
 # Début de la partie « isolation » d'une clause, négation comprise (« pas isolé », « sans isolation »).
 _DEBUT_ISOLATION = re.compile(r"(?:\b(?:pas|non|sans|aucune?)\s+(?:d\s+)?)?(?:" + _ISOLATION.pattern + ")")
-_NE_SAIT_PAS = re.compile(r"\bje (?:ne )?(?:sais|sait|c est) pas\b|\bj en sais rien\b|\baucune idee\b|\bon (?:ne )?sait pas\b|\binconnu")
+_NE_SAIT_PAS = re.compile(
+    r"\b(?:je (?:ne )?|j )?(?:sais|sait) (?:pas|plus)\b|\bje (?:ne )?c est pas\b|\b(?:chais|chai|che) pas\b|\bj en sais rien\b"
+    r"|\baucune idee\b|\bon (?:ne )?sait pas\b|\binconnu|\bjsp\b")
+# « Alu, enfin bois », « brique, non, parpaing » : c'est la dernière version dite qui compte.
+_CORRECTION = re.compile(r"\b(?:enfin|plutot|pardon|je veux dire|c est a dire|non)\b(?!\s+(?:isol|chauff|concern))")
+# « Je crois que c'est du parpaing » : la valeur est notée, avec le doute, pour l'écran de validation.
+_DOUTE = re.compile(r"\bje (?:crois|pense|dirais|suppose)\b|\bpeut etre\b|\bprobablement\b|\bsans doute\b|\bil me semble\b")
 _SANS_OBJET = re.compile(r"\bsans objet\b|\bpas concerne\b|\bnon concerne\b")
 _ABSENCE = re.compile(r"\b(?:pas de|pas d|aucune?|il n y a pas de|il y a pas de|y a pas de)\s+(fenetres?|radiateurs?|chauffage|emetteurs?|convecteurs?|vmc|ventilation)\b")
-_OUI = re.compile(r"^(?:oui|ouais|si|exact|voila|il y en a|bien sur|tout a fait|pareil|meme chose|identique)\b")
+_OUI = re.compile(r"^(?:oui|ouais|si|exact|exactement|il y en a|bien sur|tout a fait|absolument|ok|d accord|affirmatif"
+                  r"|c est (?:bien )?ca|pareil|meme chose|identique)\b")
 _NON = re.compile(r"^(?:non|nan|aucune?|pas du tout|il n y en a pas|y en a pas|c est tout|c est fini|fini|termine|rien)\b")
 # « En tout trois fenêtres, toutes pareilles » : le nombre total d'un élément déjà décrit.
 _TOTAL = re.compile(r"\ben tout\b|\bau total\b|\btoutes? (?:pareilles?|identiques?|les memes)\b|\btous (?:pareils|identiques|les memes)\b")
@@ -316,6 +378,17 @@ class Cible:
             return cls("pareil", type_element, source=source) if type_element in TYPES and source in checklist.pieces else None
         if prefixe == "piece" and reste in ("suivante", "nom"):
             return cls("piece", champ=reste)
+        if prefixe == "confirmer":
+            # « J'ai compris eau chaude, c'est bien ça ? » : confirmer:E1.type=radiateur à eau
+            designation, _, valeur = reste.partition("=")
+            element_id, _, champ = designation.partition(".")
+            try:
+                element = checklist.trouver_element(element_id)
+            except ValueError:
+                return None
+            if valeur and any(c.cle == champ for c in element.type_element.champs):
+                return cls("confirmation", element.type, champ, element.id, source=valeur)
+            return None
         if prefixe == "secondaire":
             type_element, _, champ = reste.partition(".")
             if type_element in TYPES and any(c.cle == champ for c in TYPES[type_element].champs):
@@ -339,6 +412,7 @@ class Cible:
             "suite": f"suite:{self.type}",
             "pareil": f"pareil:{self.type}:{self.source}",
             "piece": f"piece:{self.champ}",
+            "confirmation": f"confirmer:{self.element_id}.{self.champ}={self.source}",
         }.get(self.genre, f"secondaire:{self.type}.{self.champ}")
 
 
@@ -351,12 +425,15 @@ class _Segment:
     singulier: str
     pluriel: str
     total: bool = False  # « en tout trois fenêtres » : nombre total d'un élément déjà décrit
+    nouveau_fort: bool = False  # « un autre mur », « le deuxième », « celui-là » : forcément un autre élément
 
 
 @dataclass
 class Extraction:
     actions: list[dict] = field(default_factory=list)
     devines: list[str] = field(default_factory=list)  # « ictérieur → extérieur »
+    # Interprétation probable mais pas sûre : à faire confirmer (« J'ai compris eau chaude, c'est bien ça ? »).
+    proposition: dict | None = None
 
 
 def _motif_formes(formes: tuple[str, ...]) -> re.Pattern:
@@ -366,26 +443,95 @@ def _motif_formes(formes: tuple[str, ...]) -> re.Pattern:
 _MOTIFS = {cle: [(_motif_formes(formes), valeur) for formes, valeur in liste] for cle, liste in VOCABULAIRE.items()}
 
 
+def _morceaux(texte: str, longueur_max: int = 3) -> list[str]:
+    """Groupes de 1 à 3 mots consécutifs (sans ponctuation), pour comparer à des formes de plusieurs mots."""
+    mots = [m for m in texte.replace(",", " ").split() if not m.isdigit()]
+    return [" ".join(mots[i:i + n]) for n in range(1, longueur_max + 1) for i in range(len(mots) - n + 1)]
+
+
+def ressemblance(morceau: str, forme: str) -> float:
+    """Ressemblance (0 à 1) par l'orthographe ou par le son, mots collés compris
+    (« doublevitrage » ≈ « double vitrage », « oh est chaude » ≈ « eau chaude »)."""
+    ecrit = SequenceMatcher(None, morceau.replace(" ", ""), forme.replace(" ", ""), autojunk=False).ratio()
+    p1, p2 = phonetique(morceau), phonetique(forme)
+    if min(len(morceau.replace(" ", "")), len(forme.replace(" ", ""))) <= 5:
+        # Mots courts : le son doit être identique (« brik » = « brique »), sinon « allô » ressemblerait à « agglo ».
+        son = 1.0 if p1 == p2 and len(p1) >= 2 else 0.0
+    else:
+        son = SequenceMatcher(None, p1, p2, autojunk=False).ratio() if min(len(p1), len(p2)) >= 2 else 0.0
+    return max(ecrit, son)
+
+
+SEUIL_TOLERANT = 0.9  # forme longue presque identique : comptée comme dite (« condensassion », « doublevitrage »)
+
+
 def _premiere_valeur(type_element: str, champ: str, texte: str) -> str | None:
-    for motif, valeur in _MOTIFS.get((type_element, champ), []):
-        if motif.search(texte):
+    """La première valeur du vocabulaire (de la plus précise à la plus générale) présente dans le texte.
+    Si aucune n'y est telle quelle, une forme longue presque identique est acceptée (2e passage seulement :
+    « local chauffé » ne doit jamais être pris pour « local non chauffé »)."""
+    exacte = next((valeur for motif, valeur in _MOTIFS.get((type_element, champ), []) if motif.search(texte)), None)
+    morceaux = _morceaux(texte)
+    for formes, valeur in VOCABULAIRE.get((type_element, champ), []):
+        if valeur == exacte:
+            break  # rien de plus précis avant la valeur dite telle quelle
+        longues = [f for f in formes if len(f.replace(" ", "")) >= 9]
+        presque = any(ressemblance(m, f) >= SEUIL_TOLERANT for f in longues for m in morceaux if abs(len(m) - len(f)) <= 3)
+        # Une valeur plus précise presque dite l'emporte sur une valeur générale dite exactement, si elle l'englobe :
+        # « comble perdue » = combles perdus (pas « combles »), « chaudière à condensassion » = à condensation.
+        if presque and (exacte is None or cle_texte(exacte) in cle_texte(valeur)):
             return valeur
-    return None
+    return exacte
 
 
-def _deviner(type_element: str, champ: str, texte: str, seuil: float = 0.74) -> tuple[str, str] | None:
-    """Mot mal transcrit : le plus proche du vocabulaire du champ demandé (« ictérieur » → extérieur)."""
-    mots = [m for m in texte.replace(",", " ").split() if len(m) >= 3 and not m.isdigit()]
-    morceaux = mots + [f"{a} {b}" for a, b in zip(mots, mots[1:])]
-    meilleur: tuple[float, str, str] | None = None
+# Petits mots qui ne portent pas de valeur : un groupe qui commence ou finit par l'un d'eux ne sert pas à
+# deviner (« ça c'est » ressemblerait à « calcaire »). « Oh est chaude » reste comparé (« oh » … « chaude »).
+_MOTS_VIDES = {
+    "c", "ca", "ce", "cet", "cette", "est", "et", "es", "le", "la", "les", "l", "un", "une", "de", "du", "des", "d", "a", "au",
+    "aux", "il", "elle", "on", "en", "y", "que", "qui", "se", "sa", "son", "ses", "ok", "oui", "non", "bon", "alors", "donc",
+    "mais", "ou", "je", "tu", "j", "t", "m", "s", "n", "ne", "ici", "voila", "celui", "ci", "fait", "dit", "tout", "bien",
+    "tres", "plus", "pas", "premier", "mur", "allo", "attends", "entends",
+}
+
+
+def _valeurs_dites(type_element: str, champ: str, texte: str) -> list[str]:
+    """Valeurs différentes de ce champ dites telles quelles, dans l'ordre où elles sont dites."""
+    trouvees: list[tuple[int, int, str]] = []
+    for motif, valeur in _MOTIFS.get((type_element, champ), []):
+        if (m := motif.search(texte)) and not any(debut <= m.start() < fin for debut, fin, _ in trouvees):
+            trouvees.append((m.start(), m.end(), valeur))
+    return list(dict.fromkeys(v for _, _, v in sorted(trouvees)))
+
+
+def candidats(type_element: str, champ: str, texte: str) -> list[tuple[float, str, str]]:
+    """Valeurs possibles du champ, de la plus ressemblante à la moins : (score, valeur, mots entendus)."""
+    meilleurs: dict[str, tuple[float, str, str]] = {}
+    morceaux = [m for m in _morceaux(texte) if len(m.replace(" ", "")) >= 2
+                and m.split()[0] not in _MOTS_VIDES and m.split()[-1] not in _MOTS_VIDES]
     for formes, valeur in VOCABULAIRE.get((type_element, champ), []):
         for forme in formes:
             for morceau in morceaux:
-                if (forme.count(" ") == morceau.count(" ")) and len(forme) >= 3:
-                    ratio = SequenceMatcher(None, morceau, forme).ratio()
-                    if ratio >= seuil and (meilleur is None or ratio > meilleur[0]):
-                        meilleur = (ratio, valeur, morceau)
-    return (meilleur[1], f"deviné : « {meilleur[2]} » → {meilleur[1]}") if meilleur else None
+                if len(forme) < 2 or abs(len(morceau) - len(forme)) > 3:
+                    continue
+                score = ressemblance(morceau, forme)
+                if score > meilleurs.get(valeur, (0.0, "", ""))[0]:
+                    meilleurs[valeur] = (score, valeur, morceau)
+    return sorted(meilleurs.values(), reverse=True)
+
+
+SEUIL_SUR, ECART_SUR, SEUIL_PROBABLE = 0.74, 0.12, 0.6
+
+
+def _deviner(type_element: str, champ: str, texte: str) -> tuple[str, str, str] | None:
+    """Mot mal entendu, interprété avec le vocabulaire du champ demandé : (« sur » ou « probable »,
+    valeur, note). « Sûr » si un seul candidat ressemble nettement ; « probable » s'il y a un doute :
+    on propose alors l'interprétation au lieu de faire répéter."""
+    liste = candidats(type_element, champ, texte)
+    if not liste or liste[0][0] < SEUIL_PROBABLE:
+        return None
+    score, valeur, entendu = liste[0]
+    second = liste[1][0] if len(liste) > 1 else 0.0
+    niveau = "sur" if score >= SEUIL_SUR and score - second >= ECART_SUR else "probable"
+    return niveau, valeur, f"deviné : « {entendu} » → {valeur}"
 
 
 # --- Parois : murs, plafonds, planchers --------------------------------------------------------------
@@ -428,7 +574,9 @@ def _valeurs_paroi(type_element: str, texte: str) -> dict[str, str]:
         if mur and "epaisseur" not in valeurs:
             m = (re.search(r"\b(\d{1,3}(?:\.\d)?)\s*(?:cm|centimetres?)\b", avant)
                  or re.search(rf"\b(?:{materiaux})\s+(?:de\s+)?(\d{{1,3}})\b(?!\s*(?:m\b|metres?|ans?\b|\.\d))", avant)
-                 or re.search(r"\b(\d{1,3})\s*(?:d\s+)?epaisseurs?\b|epaisseur\D{0,12}(\d{1,3})\b", avant))
+                 or re.search(r"\b(\d{1,3})\s*(?:d\s+)?epaisseurs?\b|epaisseur\D{0,12}(\d{1,3})\b", avant)
+                 # « le mur il fait trente » (pas « il fait 4 mètres de long », traité plus haut)
+                 or re.search(r"\bfait\s+(?:de\s+)?(\d{1,3})\b(?!\s*(?:m\b|metres?|\.\d))", avant))
             if m:
                 valeurs["epaisseur"] = f"{next(g for g in m.groups() if g)} cm"
         if "donne_sur" not in valeurs and (v := _premiere_valeur(type_element, "donne_sur", avant)):
@@ -479,8 +627,9 @@ def _segments(texte: str, type_courant: str | None) -> tuple[str, list[_Segment]
             debut_segment = texte.rfind(precedent[-1], 0, debut)
         nouveau = bool(set(precedent) & _NOUVEAU) or bool(_DESIGNE.match(texte, debut)) or (nombre or 0) > 1
         total = bool(_TOTAL.search(" ".join(texte[:debut].split()[-5:])))
+        nouveau_fort = bool(set(precedent) & _NOUVEAU_FORT) or bool(_DESIGNE.match(texte, debut))
         debuts.append(debut_segment)
-        segments.append(_Segment(type_element, "", nombre, nouveau, singulier, pluriel, total))
+        segments.append(_Segment(type_element, "", nombre, nouveau, singulier, pluriel, total, nouveau_fort))
     for k, segment in enumerate(segments):
         segment.texte = texte[debuts[k]: debuts[k + 1] if k + 1 < len(segments) else len(texte)]
         segment.total = segment.total or bool(_TOTAL.search(segment.texte))
@@ -550,9 +699,11 @@ def extraire(phrase: str, checklist: Checklist, cible: Cible | None = None) -> E
         action("piece_courante", nom=_PIECES[piece.group(1)] + (f" {piece.group(2)}" if piece.group(2) else ""))
         texte = texte[: piece.start()] + texte[piece.end():]
 
-    # « Je ne sais pas » / « sans objet » : réponse à la dernière question, on passe à la suite.
-    if cible and _NE_SAIT_PAS.search(texte):
-        if cible.genre == "champ":
+    # « Je ne sais pas » / « sans objet » : réponse à la dernière question, on passe à la suite. Mais « je sais
+    # pas trop, je crois que c'est du parpaing » donne une valeur : elle l'emporte.
+    valeur_dite = cible is not None and cible.genre in ("champ", "secondaire", "confirmation") and cible.champ in _valeurs(cible.type, texte)
+    if cible and _NE_SAIT_PAS.search(texte) and not valeur_dite:
+        if cible.genre in ("champ", "confirmation"):
             action("enregistrer_reponse", element_id=cible.element_id or "", type=cible.type, champ=cible.champ, valeur=VALEUR_INCONNUE)
         elif cible.genre == "secondaire":  # détail secondaire : plus jamais demandé
             for element in checklist.manques_secondaires().get((cible.type, cible.champ), []):
@@ -577,7 +728,7 @@ def extraire(phrase: str, checklist: Checklist, cible: Cible | None = None) -> E
 
     # Réponse courte à la dernière question : le début de phrase (avant tout autre élément cité).
     if cible:
-        _reponse_a_la_cible(checklist, cible, debut, segments, resultat, action)
+        _reponse_a_la_cible(checklist, cible, debut, segments, resultat, action, phrase)
 
     cites: set[str] = set()  # types déjà annoncés dans cette phrase
     nouveaux: dict[str, int] = {}  # éléments créés par cette phrase, par type (pour les numéroter)
@@ -592,7 +743,11 @@ def extraire(phrase: str, checklist: Checklist, cible: Cible | None = None) -> E
         if simple_mention and (segment.type in ("mur", *TOUJOURS_PRESENTS) or segment.type in cites or _existants(checklist, segment.type)):
             continue
         cites.add(segment.type)
-        vise = _element_vise(checklist, segment, valeurs)
+        if cible and cible.genre in ("champ", "confirmation") and segment.type == cible.type and not segment.nouveau_fort:
+            # « Le mur 1 donne sur quoi ? » « C'est une cloison » : la réponse décrit l'élément de la question.
+            vise = checklist.trouver_element(cible.element_id)
+        else:
+            vise = _element_vise(checklist, segment, valeurs)
         if vise is None:
             description = _nouvelle_description(checklist, segment.type, segment.nombre, segment.singulier, segment.pluriel)
             if nouveaux.get(segment.type):
@@ -625,7 +780,8 @@ def _energie_de_la_chaudiere(checklist: Checklist, resultat: Extraction, action)
                note=f"déduit : même chaudière que le chauffage ({chaudiere.id})")
 
 
-def _reponse_a_la_cible(checklist: Checklist, cible: Cible, texte: str, segments: list[_Segment], resultat: Extraction, action) -> None:
+def _reponse_a_la_cible(checklist: Checklist, cible: Cible, texte: str, segments: list[_Segment], resultat: Extraction, action,
+                        phrase: str) -> None:
     reponse = texte.strip(" ,")
     if cible.genre in ("presence", "suite"):
         # « Oui, trois fenêtres en PVC » : c'est la suite de la phrase qui décrit l'élément.
@@ -656,34 +812,61 @@ def _reponse_a_la_cible(checklist: Checklist, cible: Cible, texte: str, segments
         return
     if cible.genre == "piece" or not reponse:
         return
+    # « Alu, enfin bois » : on garde la dernière version dite (si elle contient une valeur).
+    corrige = _CORRECTION.split(texte)[-1]
+    if corrige.strip(" ,") and corrige != texte and (_valeurs(cible.type, corrige) or candidats(cible.type, cible.champ, corrige)):
+        texte = corrige
+    doute = f"dit avec un doute : « {phrase} »" if _DOUTE.search(reponse) else ""
     if cible.genre == "secondaire":
         # Une seule réponse pour tout le logement : elle vaut pour tous les éléments concernés.
         valeur = _valeurs(cible.type, texte).get(cible.champ)
         if valeur is None and cible.champ == "annee" and (m := re.search(r"\b(\d{4})\b", texte)):
             valeur = m.group(1)
-        if valeur is None and (devine := _deviner(cible.type, cible.champ, texte)):
-            valeur = devine[0]
-            resultat.devines.append(devine[1])
+        if valeur is None and (devine := _deviner(cible.type, cible.champ, texte)) and devine[0] == "sur":
+            valeur = devine[1]
+            resultat.devines.append(devine[2])
         if valeur is not None:
             for element in checklist.manques_secondaires().get((cible.type, cible.champ), []):
                 action("enregistrer_reponse", element_id=element.id, type=cible.type, champ=cible.champ, valeur=valeur)
         return
     if not cible.element_id:
         return
+    if cible.genre == "confirmation":
+        if _OUI.match(reponse):  # « J'ai compris eau chaude, c'est bien ça ? » « Oui. »
+            action("enregistrer_reponse", element_id=cible.element_id, type=cible.type, champ=cible.champ, valeur=cible.source,
+                   note=f"confirmé : « {cible.source} »")
+            return
+        if _NON.match(reponse) and not _valeurs(cible.type, texte) and not candidats(cible.type, cible.champ, _CORRECTION.split(texte)[-1]):
+            return  # « Non. » sans autre valeur : on n'insiste pas
     if cible.champ == "isolation":
         # Toute la réponse parle de l'isolation : « 10 cm » est l'épaisseur de l'isolant, pas du mur.
         v = ("non isolé" if _NON.match(reponse) else _valeur_isolation(texte) or ("isolé" if _OUI.match(reponse) else None))
         valeurs = {"isolation": v} if v else {}
     else:
         valeurs = _valeurs(cible.type, texte)
-    if cible.champ not in valeurs:
+    notes: dict[str, str] = {}
+    dites = _valeurs_dites(cible.type, cible.champ, texte)
+    if len(dites) > 1 and cible.champ in valeurs:
+        # « Bois… ou alu ? » : deux valeurs différentes, sans correction : on propose la dernière dite.
+        del valeurs[cible.champ]
+        resultat.proposition = {"outil": "enregistrer_reponse", "citation": phrase, "element_id": cible.element_id,
+                                "type": cible.type, "champ": cible.champ, "valeur": dites[-1],
+                                "note": f"plusieurs valeurs dites ({', '.join(dites)}) : la dernière, confirmée"}
+    elif cible.champ not in valeurs:
         if cible.champ == "epaisseur" and (m := re.search(r"\b(\d{1,3}(?:\.\d)?)\b(?!\s*(?:m\b|metres?))", texte)):
             valeurs["epaisseur"] = f"{m.group(1)} cm"
         elif cible.champ == "annee" and (m := re.search(r"\b(\d{4})\b", texte)):
             valeurs["annee"] = m.group(1)
         elif devine := _deviner(cible.type, cible.champ, texte):
-            valeurs[cible.champ] = devine[0]
-            resultat.devines.append(devine[1])
+            niveau, valeur, note = devine
+            resultat.devines.append(note)
+            if niveau == "sur":
+                valeurs[cible.champ], notes[cible.champ] = valeur, note
+            else:  # doute : on propose l'interprétation la plus probable au lieu de faire répéter
+                resultat.proposition = {"outil": "enregistrer_reponse", "citation": phrase,
+                                        "element_id": cible.element_id, "type": cible.type, "champ": cible.champ,
+                                        "valeur": valeur, "note": note}
     for champ, valeur in valeurs.items():
-        note = next((d for d in resultat.devines if d.endswith(f"→ {valeur}")), "") if champ == cible.champ else ""
+        note = " ; ".join(n for n in (notes.get(champ, ""), doute if champ == cible.champ else "") if n)
         action("enregistrer_reponse", element_id=cible.element_id, type=cible.type, champ=champ, valeur=valeur, **({"note": note} if note else {}))
+
