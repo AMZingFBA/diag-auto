@@ -107,7 +107,7 @@ Au premier lancement, le modèle de transcription se télécharge (environ 500 M
 1. Ouvrez l'adresse affichée pour le téléphone, dans Chrome (Android) ou Safari (iPhone).
 2. Un avertissement de sécurité s'affiche, parce que le certificat est fait maison. Touchez « Paramètres avancés », puis « Continuer vers le site ». C'est normal pour ce prototype : le HTTPS est obligatoire pour que le téléphone autorise la caméra et le micro.
 3. Branchez une **oreillette**, de préférence. Sans oreillette, la voix de l'assistant passe par le haut-parleur et peut être captée par le micro.
-4. Touchez **Démarrer la visite** et autorisez la caméra et le micro. Sur iPhone, autorisez aussi l'accès à l'**orientation** (boussole) : il sert à nommer les murs (« le mur nord »). Si vous refusez, les murs sont nommés autrement.
+4. Touchez **Démarrer la visite** et autorisez la caméra et le micro. Sur iPhone, autorisez aussi l'accès à l'**orientation** (boussole) : elle donne l'orientation des murs et des fenêtres (« le mur nord »). Si vous refusez, l'assistant demandera une fois l'orientation d'un mur à l'oral. Une petite boussole reste affichée en haut à droite (voir « Étape 6 »).
 5. Filmez en parlant normalement, en décrivant librement :
    - « ici c'est la cuisine » ;
    - « ce mur fait 4 m 50 de long, brique 30 cm, isolé par l'intérieur, il donne dehors » ;
@@ -490,6 +490,61 @@ Total entre la fin de la phrase et la question : environ **3,8 s avant, 0,85 s a
 - Le FastConformer ne connaît pas le vocabulaire métier. Ses erreurs sont rattrapées par le lexique, la comparaison phonétique, puis le second avis de Whisper. Sa licence (CC-BY-4.0, mention de NVIDIA ; version ONNX publiée par OpenVoiceOS) est à vérifier avant un usage commercial.
 - Le rejeu d'une visite garde les réponses d'origine de Noah, alors que les questions ont changé. Certains échanges ne se répondent donc plus, ce qui est normal.
 
+## Étape 6 : boussole, murs et fenêtres orientés (22/10/2026)
+
+Dans LICIEL et en DPE 3CL, les parois et surtout les **fenêtres sont décrites par leur orientation** (nord, est, sud, ouest) : elle sert au calcul des apports solaires. L'assistant la relève maintenant tout seul, et nomme les murs ainsi : « **le mur nord** », « **le mur est, celui avec la télé** ».
+
+**Principe** : quand le diagnostiqueur filme un mur de face, depuis l'intérieur de la pièce, la caméra regarde vers l'extérieur de ce mur. L'orientation du mur est donc le cap de la caméra pendant qu'il le décrit, arrondi au point cardinal le plus proche (4 points, ceux du DPE). Le **cap brut** est gardé (`cap_brut` dans l'état), avec sa preuve pour l'écran de validation (« cap 352° »). Une fenêtre citée avec son mur prend l'orientation de ce mur.
+
+**Sur le téléphone** : une petite boussole reste affichée en haut à droite de la vidéo.
+- Elle indique la direction filmée (« SO 223° »).
+- Sa bordure indique la fiabilité : verte (bonne), orange (moyenne), rouge (faible), grise (pas de boussole).
+- Si elle est perturbée, elle affiche « Faites un 8 avec le téléphone » (calibration), et l'assistant le dit une fois.
+- Sur iPhone, l'accès est demandé à l'appui sur « Démarrer ».
+- Sur Android récent, elle utilise l'orientation absolue ; sur Android ancien, l'orientation fournie par le navigateur.
+
+**Boussole et gyroscope**. Le téléphone envoie deux mesures chaque seconde :
+- le **cap** de la boussole : il donne le nord, mais il est faussé près du métal ou de l'électricité (radiateur en fonte, tableau électrique) ;
+- le **lacet** du gyroscope : il ne connaît pas le nord, mais il donne juste l'angle entre deux murs.
+
+La différence entre les deux est la même pour toute la visite. Estimée sur de nombreuses mesures (médiane), elle donne l'orientation de chaque mur par le gyroscope. Résultat :
+- un mur filmé près d'un radiateur en fonte reste juste (la boussole perturbée y est notée) ;
+- deux murs **face à face sont toujours opposés** (nord ↔ sud).
+
+**Fiabilité** : bonne, moyenne, faible, ou absente (pas de boussole, accès refusé). Elle repose sur la précision annoncée par l'iPhone, sinon sur la stabilité de la différence cap − gyroscope. Les seuils (15° et 30°, 12° et 25°) sont des hypothèses à ajuster sur le terrain.
+
+**Correction à l'oral**, à tout moment : « Non, c'est le mur ouest », « ce mur est plein sud », « le mur est donne dehors ».
+- L'orientation dite l'emporte sur la boussole, et sa preuve est gardée : « dit : non, c'est le mur ouest (la boussole donnait nord) ».
+- Elle sert de référence : les autres murs se recalent par le gyroscope.
+- Si elle dément la boussole de plus de 45°, la boussole est déclarée peu fiable pour la suite.
+- « Le mur est en brique » n'est pas une orientation : « est » y est le verbe.
+- « Le mur nord, en fait c'est du béton » vise le mur orienté nord.
+
+**Pièce sans boussole fiable** (absente, faible, ou démentie) : l'assistant demande **une seule fois** « Ce mur est orienté nord, sud, est ou ouest ? », pour le mur extérieur filmé. Une réponse courte suffit : « Plein sud », « À l'est ».
+- Avec le gyroscope, tous les autres murs s'en déduisent.
+- Sans gyroscope, la question revient une fois par pièce.
+- Si le téléphone n'a rien envoyé (essai écrit, rejeu d'une ancienne visite), rien n'est demandé.
+
+**Cohérence** : si deux murs face à face (d'après le gyroscope) ont la même orientation, ou deux murs visés dans la même direction des orientations différentes, c'est signalé : « Attention : le mur nord et le mur ouest sont face à face, l'orientation de l'un des deux est fausse. »
+
+**Tests** : `tests/test_boussole.py` (33 tests) :
+- le calcul cap → orientation ;
+- la fiabilité, et la visée stable ou balayée ;
+- les murs opposés et les fenêtres orientées comme leur mur ;
+- la correction orale et sa propagation ;
+- la question unique sans boussole ;
+- la confusion « le mur est en brique » ;
+- les noms par orientation ;
+- une visite simulée avec un téléphone qui envoie boussole et gyroscope.
+
+Le prototype compte 189 tests.
+
+**Limites** :
+- La boussole n'a pas encore été essayée sur un vrai téléphone ; c'est à faire avec Noah, sur iPhone et sur un Android ancien.
+- Le cap de l'iPhone (`webkitCompassHeading`) est à vérifier quand le téléphone est tenu droit.
+- Le gyroscope dérive de quelques degrés sur une longue visite : sans effet sur l'arrondi au point cardinal (± 45°), mais la référence se recale si une orientation est redite.
+- Un mur filmé de biais, depuis un coin de la pièce, donne un cap faux : l'orientation reste à confirmer à l'écran de validation, comme toute valeur de capteur.
+
 ## Réglages (variables d'environnement)
 
 | Variable | Défaut | Rôle |
@@ -522,7 +577,7 @@ Total entre la fin de la phrase et la question : environ **3,8 s avant, 0,85 s a
 - La vidéo est gardée **dans la mémoire du téléphone** jusqu'à la fin. Cela convient pour des tests de quelques minutes ; en 1080p, environ 60 Mo par minute.
 - La **détection de fin de phrase** se fait sur le volume du son, ce qui est simple. Silero VAD reste à évaluer, une fois sa licence vérifiée.
 - La **voix** est celle du navigateur ; Piper (voix fr_FR-siwis, sur le serveur) viendra ensuite.
-- La **boussole** du téléphone est enregistrée (une valeur par seconde) et sert à nommer les murs. Elle est souvent faussée de 20 à 30° à l'intérieur (métal, électricité) : l'orientation reste « à confirmer ». Le gyroscope n'est pas encore enregistré.
+- La **boussole** et le **gyroscope** du téléphone sont enregistrés (une mesure par seconde) : voir « Étape 6 ». La boussole n'a pas encore été essayée sur un vrai téléphone ; sur iPhone, le cap utilisé (`webkitCompassHeading`) est à vérifier quand le téléphone est tenu droit.
 - **Deux processus Claude Code par visite** : un pour les réponses, un pour la veille, pour que la veille ne retarde jamais une réponse.
 - Différences avec le plan § 3.6 :
   - **Pas d'« outils » au sens de l'API** : Claude répond en JSON (question + actions), et le serveur applique les actions après vérification. Les actions sont `piece_courante`, `signaler_element`, `enregistrer_reponse`, `marquer_sans_objet`, `cloturer`, `copier`, et depuis l'étape 4 `scinder`, `compter`, `regle` et `exception`.
@@ -536,6 +591,7 @@ Total entre la fin de la phrase et la question : environ **3,8 s avant, 0,85 s a
 | `assistant/groupes.py` | Découpage d'une phrase en groupes, quantités et exceptions (« 9 … et 1 … », « dont une », « tous sauf un »). |
 | `assistant/noms.py` | Noms parlants à l'oral : « ce mur », « le mur côté voisin », « le mur nord », jamais « le mur 3 ». |
 | `assistant/plausibilite.py` | Contrôle des valeurs invraisemblables (un mur de 30 m de long) avant de les noter. |
+| `assistant/boussole.py` | Boussole et gyroscope du téléphone : orientation des murs et des fenêtres, fiabilité. |
 | `assistant/citations.py`, `assistant/actions.py` | Vérification des citations ; application des actions proposées. |
 | `assistant/lexique.py` | Lexique métier pour la transcription, corrections connues (« parpin » → parpaing). |
 | `assistant/vad.py`, `assistant/transcription.py` | Fin de phrase ; transcription (FastConformer, Whisper en second avis). |
