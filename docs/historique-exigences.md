@@ -1,0 +1,71 @@
+# Historique des exigences de Noah (transmises par Hermes)
+
+Demandes reçues dans `docs/exigences-en-attente.md`, toutes intégrées le 22/10/2026, puis retirées de ce fichier.
+Où trouver le résultat :
+
+- étapes 2 à 10 : [prototype-assistant/README.md](../prototype-assistant/README.md) (une section par étape) et les rejeux avant/après dans [prototype-assistant/rejeux/](../prototype-assistant/rejeux/) ;
+- étape 11 (pont assistant → LICIEL) : [README.md](../README.md), section « Générer le dossier LICIEL d'une visite ».
+
+---
+
+## Étape 2 — ENVOYÉE à Claude le 22/10 08:03 (vérifier puis envoyer l'étape 3)
+<!-- ancien titre : à envoyer quand l'étape 1 (compréhension description libre) est finie et testée -->
+- Parcours mur par mur : après chaque mur, demander « Y a-t-il un autre mur dans cette pièce ? » jusqu'à 4+ murs, puis fenêtres/portes restantes, puis pièce suivante.
+- Ne poser que les questions UTILES au DPE (priorité aux données qui changent l'étiquette) ; ne pas demander des détails peu utiles si le diagnostiqueur ne sait pas (ex. date des radiateurs).
+- « Épaisseur d'une fenêtre » n'a pas de sens : demander menuiserie / vitrage / dimensions.
+- Gérer les quantités : « en tout trois fenêtres ».
+- Réduire la latence (trop de temps de réponse).
+
+## Étape 3 — ENVOYÉE à Claude le 22/10 (en file après l étape 2)
+- Compréhension orale robuste : le diagnostiqueur a dit « eau chaude » (radiateur à eau / électrique), la transcription a donné « Oh ! est chaude » et l'assistant n'a pas compris. Il y a plein de cas comme ça.
+- Doit comprendre les gens qui parlent mal, vite, avec accent, qui bégaient : vocabulaire métier injecté dans la transcription (prompt initial Whisper / hotwords), modèle de transcription plus gros ou meilleur pour le français, correction par Claude selon le contexte (question posée = « eau ou électrique ? » → « Oh est chaude » = eau chaude), corpus de tests audio réels avec erreurs.
+
+## Étape 4 (Noah, 22/10) — ENVOYÉE à Claude le 22/10 09:07 (étape 3 vérifiée : 96 + 624 tests OK)
+- L'assistant doit S'ADAPTER à toute situation, pas un questionnaire rigide. Exemple : « il y a 9 radiateurs électriques basse température et 1 électrique haute température » → il doit créer 2 groupes d'émetteurs différents (9 + 1), avec leurs attributs propres, et ne pas supposer que tout est identique.
+- Plus généralement : modèle de données flexible (groupes/quantités/exceptions pour murs, fenêtres, émetteurs, générateurs…), chaque élément peut différer ; le diagnostiqueur peut corriger ou préciser à tout moment (« sauf celui de la chambre qui est en PVC »).
+- Revoir la règle « date / température des radiateurs jamais demandées » : ne pas demander par défaut, mais TOUJOURS enregistrer si le diagnostiqueur le dit, et gérer les exceptions par élément.
+- L'IA construit dynamiquement ses questions selon le logement réel et ce que dit le diagnostiqueur (pas de liste figée).
+- Tests : au moins 15 scénarios d'exceptions (groupes mixtes, corrections tardives, « tous sauf un », éléments ajoutés après coup).
+
+## Étape 5 (Noah, 22/10) — ENVOYÉE à Claude le 22/10 (étape 4 vérifiée : 133 + 624 tests OK). Analyse Hermes du test réel sessions/20261022-083308-20ef54 (Noah : « trop lent, ne s'adapte pas, je dois répéter, je ne sais pas c'est quel mur 3 / mur 4 »)
+Constats (journal.jsonl) :
+1. NOMS DE MURS ABSTRAITS : « Le mur 3 est en quoi ? », « le quatrième mur » → le diagnostiqueur ne sait pas lequel. Nommer chaque élément par ce qui est visible/dit : « le mur avec la télé », « le mur des 3 fenêtres », « le mur côté voisin », orientation boussole (« mur nord »), + vignette de l'image sur l'écran. Jamais « mur 3 » à l'oral.
+2. PHRASES GLOBALES IGNORÉES : « Il y a juste un mur qui donne sur l'extérieur, le reste donne sur l'intérieur ou les voisins » → doit CLORE la pièce (tous les autres murs = local chauffé / mitoyen, aucune question matériau dessus). Or il a créé M4 puis demandé encore « Ce mur 3, il est en quoi ? ». Gérer « le reste », « tous les autres », « pareil pour… ».
+3. QUESTIONS INUTILES : matériau/épaisseur demandés pour des murs sur local chauffé ou mitoyen chauffé.
+4. VALEURS ABERRANTES : « donne sur l'extérieur 30 mètres » enregistré longueur = 30 m pour un séjour → contrôle de plausibilité et reformulation (« 3 mètres ? »). Même chose pour contradictions (« plafond isolé » puis « pas isolé ») : garder la dernière, signaler.
+5. TRANSCRIPTION = goulot de latence : faster-whisper small CPU médiane 2,45 s, p90 6,2 s ; voix prête médiane 4,7 s, p90 7,5 s. Solutions sans payer : transcription en flux PENDANT que la personne parle (morceaux de 1-2 s, ne transcrire que la fin à l'arrêt), int8, beam_size 1, vocabulaire métier en prompt, VAD plus réactif ; viser < 2 s de bout en bout. Mesurer avant/après sur l'audio de cette session (audio.wav) avec l'outil de rejeu.
+6. Mauvaise transcription métier (« combles bleus », « le avec l'aise », « plafonds DPE ») → correction contextuelle (étape 3) à vérifier sur ce rejeu.
+Livrable : rejouer cette session réelle avant/après, montrer le dialogue obtenu, tests de non-régression, commit, résumé 5 lignes.
+
+## Étape 6 (Noah, 22/10) — ENVOYÉE à Claude le 22/10 (étape 5 vérifiée : 155/156 + 624, test latence flaky signalé) : BOUSSOLE et murs nommés par orientation
+- Dans LICIEL / le DPE, les parois et surtout les fenêtres sont décrites par orientation (Nord, Sud, Est, Ouest) : c'est utilisé pour les apports solaires. Nommer les murs « mur nord », « mur sud »… (en plus du repère visuel : « le mur nord, celui avec la télé »).
+- Petite boussole affichée en permanence dans un coin de l'écran vidéo (DeviceOrientationEvent / webkitCompassHeading ; demander l'autorisation sur iPhone ; fonctionner sur Android ancien).
+- Orientation automatique : quand la caméra filme un mur de face depuis l'intérieur, l'orientation extérieure du mur = le cap de la caméra. Arrondir aux 4 (ou 8) points cardinaux, enregistrer le cap brut.
+- Gestion des imprécisions : boussole perturbée par le métal/l'électrique → indicateur de fiabilité, calibration (geste en 8), cohérence entre murs opposés (nord ↔ sud à 180°), correction orale possible (« non, c'est le mur ouest »).
+- Pièces sans capteur fiable : demander à l'oral une seule fois l'orientation de la façade principale et déduire les autres.
+- Tests : calcul cap → orientation, murs opposés, correction orale.
+
+## Étape 7 (Noah, 22/10) — ENVOYÉE à Claude le 22/10 (étape 6 vérifiée : 189 + 624 OK) : une VRAIE conversation, pas des listes de mots
+- Noah : « il ne faut pas ajouter 3-4 mots de vocabulaire ; il faut qu'il comprenne TOUT, n'importe quelle phrase, comme quand je parle à Claude : je dis "comment ça va" il répond, je demande "comment se construit une maison" il répond ».
+- Constat Hermes dans le journal du test : l'« extraction » est faite par des règles locales (extraction_ms ≈ 1 ms = mots-clés/regex) et Claude n'intervient qu'en « complément ». C'est la cause de la rigidité.
+- À faire : CLAUDE devient le cerveau principal de CHAQUE phrase (compréhension libre, contexte complet de la visite, images), les règles locales ne servent plus qu'à pré-remplir/accélérer et ne doivent jamais bloquer ni contredire Claude.
+- L'assistant doit pouvoir répondre à n'importe quelle question ou remarque hors questionnaire (« c'est quoi un pont thermique ? », « on fait une pause », « reviens au salon », « tu as noté quoi pour la cuisine ? », « comment ça va »), puis reprendre la visite naturellement.
+- Conserver la rapidité : réponse de Claude en streaming, voix qui démarre dès la première phrase, file d'attente sans blocage.
+- Tests : 30 phrases libres variées (questions générales, hors sujet, ordres de navigation, corrections, récapitulatifs).
+
+## Étape 8 (Noah, 22/10 12:10) — ENVOYÉE à Claude le 22/10 ~12:15 : fluidité, silences, hors sujet, infos mal rangées, phrases globales, changement de pièce auto, murs pointés (voir scratch/msg8.txt)
+
+## Étape 9 (Noah, 22/10) — ENVOYÉE à Claude le 22/10 13:10 (étape 8 vérifiée : 233 + 624 OK)
+- NE PAS RÉPÉTER ce que dit le diagnostiqueur : « laine de verre 30 cm » → pas de « OK, c'est noté laine de verre 30 cm ». Accusé de réception très court (« ok », petit bip, ou rien) puis directement la question suivante. Récapitulatif seulement sur demande ou en fin de pièce.
+- FAUX DOUBLONS : Noah montre un mur côté couloir (jamais décrit avant) ; l'IA répond « je l'avais déjà noté, c'est un doublon, je le retire » → FAUX. Ne jamais affirmer qu'un élément existe déjà sans preuve (même repère visuel/orientation/description dans l'état) ; en cas de doute, créer l'élément et demander confirmation brève. Ne jamais supprimer un élément de soi-même. (Session 20261022-120410-53ecb1 vers 154-157 s et 268-273 s : « je retire mon doublon ».)
+- Tests : 10 cas de nouveaux murs ressemblant à d'anciens, aucune suppression automatique ; mesure du nombre de mots répétés par réponse.
+
+## Étape 10 (Noah, 22/10) — ENVOYÉE le 22/10 (étape 9 vérifiée : 251 + 624 OK) — après l étape 9 : FAUX « hors réseau »
+- Noah voit « Hors réseau : l'enregistrement continue, l'assistant répondra au retour du réseau » alors qu'il a bien du réseau.
+- Trouver la cause (détection basée sur navigator.onLine ? délai d'un ping/WebSocket trop court ? certificat auto-signé ? Claude lent interprété comme coupure ? reconnexion WebSocket ?) dans le journal de ses dernières sessions.
+- Ne déclarer « hors réseau » que si le serveur est vraiment injoignable (plusieurs échecs consécutifs d'un battement de cœur, ex. 3 × 2 s) ; distinguer « serveur lent / Claude réfléchit » de « pas de réseau » ; reconnexion automatique silencieuse ; rattrapage des phrases en attente dès le retour.
+- Tests : réseau lent, Claude lent, vraie coupure, reconnexion.
+
+## Étape 11 — ENVOYÉE le 22/10 (étape 10 vérifiée : 263 + 624 OK) : reformulation + pont assistant -> tables LICIEL (pièces + Carrez)
+- Reformuler en 10 lignes la compréhension du logiciel DiagAuto.
+- Construire le pont assistant -> LICIEL : à partir de l'état d'une visite (sessions/<dernière>/ : pièces, murs, ouvertures, émetteurs), générer les tables LICIEL de notre dossier de test (liste des pièces + Carrez) avec le sérialiseur octet-exact de diagauto/liciel_xml, dans un dossier hors C:\LICIEL_* (ex. sorties/dossier-test). Valider avec diagauto verifier. Tests, README, ce fichier. Ne jamais toucher à C:\LICIEL_*.

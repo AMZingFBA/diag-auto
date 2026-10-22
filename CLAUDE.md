@@ -46,6 +46,7 @@
 - docs/checklist-dpe.md : données à relever pour un DPE 3CL-2021.
 - docs/protocole-tournage.md : fiche d'une page pour tourner les vidéos de test (V1).
 - docs/exigences-en-attente.md : nouvelles demandes de Noah transmises par Hermes, à intégrer puis vider (garder l'en-tête).
+- docs/historique-exigences.md : texte d'origine des demandes déjà intégrées.
 - samples/ (non versionné) : vidéos de test, ex. samples/video-001 (séjour, 38 s, recompressée par WhatsApp).
 - prototype-assistant/ : prototype V1bis de l'assistant vocal en direct (page web + serveur FastAPI + Claude Code) ; mesures et limites dans son README.
 

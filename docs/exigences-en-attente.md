@@ -1,3 +1,3 @@
 # Exigences en attente (à transmettre à Claude au prochain lancement)
 
-*(Vide. L'assistant IA vocal en direct du 22/10/2026 est intégré dans docs/02-capture-video.md § 3.6 et dans le plan, étape V1bis.)*
+*(Vide. Les étapes 2 à 11 de Noah du 22/10/2026 sont intégrées ; leur texte est gardé dans [historique-exigences.md](historique-exigences.md).)*
