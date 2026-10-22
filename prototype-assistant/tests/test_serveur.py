@@ -53,9 +53,14 @@ def test_visite_par_texte_puis_video_et_bilan(client, tmp_path):
         ws.send_json({"type": "tts", "etat": "debut", "id": dire["id"]})
         ws.send_json({"type": "texte", "texte": "ce mur-là, brique, 30 cm, il donne sur l'extérieur"})
         actions = attendre(ws, "actions")
-        assert {r["champ"]: r["statut"] for r in actions["resultats"]} == {"materiau": "accepte", "epaisseur": "accepte", "donne_sur": "accepte"}
+        assert actions["source"] == "extraction"  # notées tout de suite, sans attendre le cerveau
+        valeurs = {r["champ"]: r["statut"] for r in actions["resultats"] if r["outil"] == "enregistrer_reponse"}
+        assert valeurs == {"materiau": "accepte", "epaisseur": "accepte", "donne_sur": "accepte"}
         etat = attendre(ws, "etat")
         assert etat["piece"] == "Cuisine" and etat["manques"][0] == "le mur 1 : isolation"
+        question = attendre(ws, "dire")
+        assert question["texte"].startswith("Pour le mur 1, isolé") and question["latence_s"] >= 0
+        attendre(ws, "etat")  # fin du traitement de la 2e phrase
         ws.send_json({"type": "fin"})
         rappel = attendre(ws, "dire")
         assert rappel["texte"].startswith("Avant d'arrêter, il manque")

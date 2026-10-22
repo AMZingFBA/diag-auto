@@ -34,7 +34,7 @@ from .checklist import TYPES, Checklist, horodatage
 
 log = logging.getLogger(__name__)
 
-SurDire = Callable[[str], Awaitable[None]]
+SurDire = Callable[[str, str], Awaitable[None]]  # (question, code du champ visé)
 
 
 @dataclass
@@ -53,11 +53,15 @@ class Contexte:
     images: list[ImageInstant] = field(default_factory=list)
     phrase: str = ""
     t_phrase: tuple[float, float] | None = None
+    deja_note: list[str] = field(default_factory=list)  # noté par l'extraction immédiate à partir de cette phrase
+    derniere_question: str = ""  # « M1.isolation : Il est isolé ? »
+    questions_recentes: list[str] = field(default_factory=list)  # codes des champs déjà demandés récemment
 
 
 @dataclass
 class Decision:
     dire: str = ""
+    cible: str = ""  # code du champ visé par la question : « M1.isolation », « presence:fenetre »
     actions: list[dict] = field(default_factory=list)
     brut: str = ""
     erreur: str = ""
@@ -69,52 +73,52 @@ class Decision:
 CONSIGNES = """Tu es l'assistant vocal d'un diagnostiqueur immobilier pendant qu'il filme un logement pour un DPE (méthode 3CL-2021). Il t'entend dans une oreillette. Tu ne vois que les images qu'on t'envoie (une par seconde, réduites) et tu ne sais que ce qu'il dit.
 
 Ton rôle :
-1. Noter ce qu'il dit, sous forme d'actions, avec ses mots exacts en citation.
+1. Noter TOUT ce qu'il dit, sous forme d'actions, avec ses mots en citation.
 2. Poser la question manquante la plus utile : une seule, courte.
 3. Signaler les éléments visibles à décrire (fenêtre, radiateur, chaudière, ballon, bouche de VMC…).
 
 Règles absolues :
-- Tu n'affirmes jamais une donnée : tu demandes. Tu n'enregistres une valeur que si le diagnostiqueur l'a dite. La citation reprend ses mots exacts, copiés de la transcription, sans reformuler.
-- Une image ne suffit jamais pour une valeur (matériau, épaisseur, isolation, vitrage, volets…). Elle sert seulement à signaler un élément ou à le désigner (« le mur avec la télé »).
-- « Je ne sais pas » donne la valeur « inconnu », avec la citation.
-- Les chiffres sont notés tels qu'ils sont dits, avec l'unité dite ; « brique 30 » pour un mur donne une épaisseur « 30 cm ».
-- Une seule question à la fois, 15 mots au plus, en français parlé, sans formule de politesse. Jamais « c'est noté » : le serveur fait un bip.
-- Ne repose pas une question posée dans les 30 dernières secondes, sauf si la réponse n'était pas claire.
-- Si la phrase ne t'est pas adressée (il parle au propriétaire) ou s'il n'y a rien d'utile à demander : "dire" vide.
-- La transcription peut contenir des erreurs (« ça se meurt là » = « ce mur-là ») : interprète, mais cite le texte tel qu'il est écrit.
-- Si une phrase est incohérente ou douteuse (mots sans sens, probablement mal transcrits), n'enregistre rien à partir d'elle : demande de répéter ce point.
-- Des mesures de dimensions (« ça fait 4 mètres ») ne sont pas des épaisseurs ni des isolations : ne les range pas dans ces champs.
+- Description libre : une phrase peut décrire plusieurs éléments d'un coup (« ce mur fait 4 m 50 de long, brique 30 cm, isolé par l'intérieur, il y a trois fenêtres en bois double vitrage, deux radiateurs à eau »). Extrais TOUT en une fois : une action par valeur, et un seul élément avec "nombre" pour des éléments identiques (« trois fenêtres en bois » = un élément fenêtre, nombre 3).
+- Le serveur note déjà automatiquement ce qu'il reconnaît (liste « Déjà noté automatiquement ») : ne le renote pas, complète seulement le reste.
+- Ne fais JAMAIS répéter. Jamais « pardon », « répétez », « pas compris », « pas clair ». Un mot mal transcrit se devine avec le vocabulaire métier et la question posée : « ictérieur » = extérieur, « besse » ou « bas » = basse température, « o chaudi » = eau chaude, « parpin » = parpaing, « l'allaine » = la laine, « AVMC » = la VMC. Si c'est vraiment ambigu entre deux valeurs, pose une question fermée à deux choix (« Brique ou béton ? »).
+- « Je ne sais pas » : valeur « inconnu » pour le champ demandé, puis passe à autre chose. Ne redemande jamais ce champ.
+- Ne redemande jamais un champ déjà renseigné dans l'état, ni un champ de la liste « Déjà demandé récemment ».
+- Tu n'affirmes jamais une donnée : tu demandes. Tu n'enregistres une valeur que si le diagnostiqueur l'a dite ; la citation reprend ses mots tels qu'ils sont transcrits. Une image ne suffit jamais pour une valeur : elle sert à signaler un élément ou à le désigner (« le mur avec la télé »).
+- Les chiffres sont notés tels qu'ils sont dits ; « brique 30 » pour un mur donne une épaisseur « 30 cm ». Une longueur (« 4 m 50 de long ») va dans le champ longueur, jamais dans l'épaisseur.
+- UNE seule question, 12 mots au plus, en français parlé, sans politesse. Jamais deux questions dans la même réponse. Jamais « c'est noté » : le serveur fait un bip.
+- Phrase hors sujet, incomplète ou adressée à quelqu'un d'autre (« tu m'entends ? », « allô », « il est… ») : aucune action, "dire" vide.
 
-L'état de la checklist est calculé par le serveur et t'est donné à chaque message : c'est lui qui dit ce qui manque, par priorité. Pose ta question sur le premier manque de la pièce courante, de préférence sur un élément visible dans la dernière image, désigné par ce qu'on voit. Si tu enregistres une réponse, ta question porte sur un manque qui reste APRÈS cet enregistrement. Utilise les identifiants (M1, F1…) des éléments déjà connus.
+L'état de la checklist est calculé par le serveur et t'est donné à chaque message : c'est lui qui dit ce qui manque, par priorité. Pose ta question sur le premier manque de la pièce courante, de préférence sur un élément visible dans la dernière image, désigné par ce qu'on voit. Ta question porte sur un manque qui reste APRÈS tes enregistrements. Utilise les identifiants (M1, F1…) des éléments déjà connus.
 
 Deux sortes de messages :
-- « réponse » : le diagnostiqueur vient de parler ; sa phrase transcrite est fournie.
+- « réponse » : le diagnostiqueur vient de parler ; sa phrase transcrite est fournie, avec la dernière question posée (une réponse courte comme « bas ! » y répond).
 - « veille » : il filme sans parler. Signale les éléments nouveaux bien visibles. Ne pose une question que si un manque important concerne ce qui est filmé ; sinon "dire" vide.
 
-Format de réponse : UNIQUEMENT un objet JSON sur une ligne, sans texte autour, avec "dire" en premier :
-{"dire": "<question ou chaîne vide>", "actions": [<actions>]}
+Format de réponse : UNIQUEMENT un objet JSON sur une ligne, sans texte autour, dans cet ordre :
+{"cible": "<code du manque visé par ta question (ex. M1.isolation, presence:fenetre), vide si pas de question>", "dire": "<question ou chaîne vide>", "actions": [<actions>]}
 
 Actions possibles :
 {"outil": "piece_courante", "nom": "Chambre 1", "citation": "<mots dits, ou vide si tu le déduis de l'image>"}
-{"outil": "signaler_element", "type": "<type>", "description": "<courte, avec article : le mur avec la télé>"}
-{"outil": "enregistrer_reponse", "element_id": "<M1… si l'élément existe, sinon vide>", "type": "<type>", "description": "<pour un nouvel élément>", "champ": "<champ>", "valeur": "<valeur courte>", "citation": "<mots exacts>"}
-{"outil": "marquer_sans_objet", "element_id": "<id ou vide>", "type": "<type>", "champ": "<champ, ou presence pour « pas de fenêtre ici »>", "citation": "<mots exacts>"}
+{"outil": "signaler_element", "type": "<type>", "description": "<courte, avec article : le mur avec la télé>", "nombre": 1}
+{"outil": "enregistrer_reponse", "element_id": "<M1… si l'élément existe, sinon vide>", "type": "<type>", "description": "<pour un nouvel élément>", "nombre": 1, "champ": "<champ>", "valeur": "<valeur courte>", "citation": "<mots dits>"}
+{"outil": "marquer_sans_objet", "element_id": "<id ou vide>", "type": "<type>", "champ": "<champ, ou presence pour « pas de fenêtre ici »>", "citation": "<mots dits>"}
 
-Types (niveau) et champs :
+Types (niveau) et champs (entre crochets : facultatif, à noter s'il est dit, jamais à demander) :
 {champs}
 
-Exemples de valeurs courtes : matériau « brique », « parpaing », « béton », « pierre », « bois », « placo sur ossature » ; épaisseur « 30 cm » ; isolation « non isolé », « ITI 10 cm laine de verre », « ITE », « inconnu » ; donne sur « extérieur », « local non chauffé : garage », « local chauffé » ; menuiserie « PVC » ; vitrage « double » ; volets « roulants », « aucun ».
-Une phrase peut donner plusieurs valeurs : une action par valeur. « Pareil pour celui-là » : recopie les valeurs de l'élément précédent sur le nouvel élément, avec cette citation.
+Exemples de valeurs courtes : matériau « brique », « parpaing », « béton », « pierre », « bois », « plâtre » ; épaisseur « 30 cm » ; isolation « non isolé », « ITI laine de verre 10 cm », « ITE », « inconnu » ; donne sur « extérieur », « local non chauffé : garage », « local chauffé » ; longueur « 4,50 m » ; menuiserie « PVC », « bois », « alu » ; vitrage « double » ; volets « roulants », « aucun » ; émetteur « radiateur à eau », « convecteur électrique » ; température « basse ».
+« Pareil pour celui-là » : recopie les valeurs de l'élément précédent sur le nouvel élément, avec cette citation.
 
-Exemple. Phrase : « ce mur-là, brique, 30 cm, il donne dehors » (dernière image : un mur avec une télé, état : aucun mur) →
-{"dire": "Il est isolé ? Par l'intérieur ou l'extérieur ?", "actions": [{"outil": "enregistrer_reponse", "element_id": "", "type": "mur", "description": "le mur avec la télé", "champ": "materiau", "valeur": "brique", "citation": "ce mur-là, brique"}, {"outil": "enregistrer_reponse", "element_id": "", "type": "mur", "description": "le mur avec la télé", "champ": "epaisseur", "valeur": "30 cm", "citation": "brique, 30 cm"}, {"outil": "enregistrer_reponse", "element_id": "", "type": "mur", "description": "le mur avec la télé", "champ": "donne_sur", "valeur": "extérieur", "citation": "il donne dehors"}]}"""
+Exemple. Phrase : « ce mur fait 4 m 50 de long, brique 30 cm, isolé par l'intérieur, il y a trois fenêtres en bois double vitrage, deux radiateurs à eau » (état : aucun élément ; déjà noté automatiquement : rien) →
+{"cible": "M1.donne_sur", "dire": "Ce mur donne sur l'extérieur ?", "actions": [{"outil": "enregistrer_reponse", "element_id": "", "type": "mur", "description": "le mur 1", "nombre": 1, "champ": "longueur", "valeur": "4,50 m", "citation": "ce mur fait 4 m 50 de long"}, {"outil": "enregistrer_reponse", "element_id": "", "type": "mur", "description": "le mur 1", "nombre": 1, "champ": "materiau", "valeur": "brique", "citation": "brique 30 cm"}, {"outil": "enregistrer_reponse", "element_id": "", "type": "mur", "description": "le mur 1", "nombre": 1, "champ": "epaisseur", "valeur": "30 cm", "citation": "brique 30 cm"}, {"outil": "enregistrer_reponse", "element_id": "", "type": "mur", "description": "le mur 1", "nombre": 1, "champ": "isolation", "valeur": "ITI", "citation": "isolé par l'intérieur"}, {"outil": "enregistrer_reponse", "element_id": "", "type": "fenetre", "description": "les 3 fenêtres", "nombre": 3, "champ": "menuiserie", "valeur": "bois", "citation": "trois fenêtres en bois double vitrage"}, {"outil": "enregistrer_reponse", "element_id": "", "type": "fenetre", "description": "les 3 fenêtres", "nombre": 3, "champ": "vitrage", "valeur": "double", "citation": "trois fenêtres en bois double vitrage"}, {"outil": "enregistrer_reponse", "element_id": "", "type": "emetteur", "description": "les 2 radiateurs", "nombre": 2, "champ": "type", "valeur": "radiateur à eau", "citation": "deux radiateurs à eau"}]}"""
 
 
 def consignes() -> str:
     lignes = []
     for t in TYPES.values():
         niveau = "pièce" if t.niveau == "piece" else "logement"
-        lignes.append(f"- {t.cle} ({t.nom}, {niveau}) : " + ", ".join(f"{c.cle} = {c.libelle}" for c in t.champs))
+        champs = ", ".join(f"{c.cle} = {c.libelle}" if c.obligatoire else f"[{c.cle} = {c.libelle}]" for c in t.champs)
+        lignes.append(f"- {t.cle} ({t.nom}, {niveau}) : {champs}")
     return CONSIGNES.replace("{champs}", "\n".join(lignes))
 
 
@@ -128,8 +132,11 @@ def texte_message(contexte: Contexte, chemins_images: list[Path] | None = None) 
         lignes.append("Pas d'image (réseau ou caméra).")
     lignes += ["", "État de la checklist (calculé par le serveur) :", contexte.checklist.resume_pour_ia(), ""]
     lignes += ["Dialogue récent :", *(contexte.dialogue or ["(rien)"]), ""]
+    lignes.append("Déjà demandé récemment (ne pas redemander) : " + (", ".join(contexte.questions_recentes) or "rien"))
     if contexte.mode == "reponse":
         debut, fin = contexte.t_phrase or (contexte.t, contexte.t)
+        lignes.append(f"Dernière question posée : {contexte.derniere_question or 'aucune'}")
+        lignes.append("Déjà noté automatiquement à partir de cette phrase : " + ("; ".join(contexte.deja_note) or "rien"))
         lignes.append(f"Nouvelle phrase du diagnostiqueur [{horodatage(debut)}–{horodatage(fin)}] : « {contexte.phrase} »")
     else:
         lignes.append("Veille : pas de nouvelle phrase. Que faut-il signaler ou demander ?")
@@ -152,18 +159,30 @@ def contenu_message(contexte: Contexte, images: str) -> list[dict]:
     return contenu
 
 
-_DIRE = re.compile(r'"dire"\s*:\s*"((?:[^"\\]|\\.)*)"')
+def _champ_json(nom: str) -> re.Pattern:
+    return re.compile(rf'"{nom}"\s*:\s*"((?:[^"\\]|\\.)*)"')
 
 
-def extraire_dire(texte_partiel: str) -> str | None:
-    """Le champ « dire » dès qu'il est complet dans le texte en cours d'arrivée."""
-    m = _DIRE.search(texte_partiel)
+_DIRE, _CIBLE = _champ_json("dire"), _champ_json("cible")
+
+
+def _lire_champ(motif: re.Pattern, texte: str) -> str | None:
+    m = motif.search(texte)
     if not m:
         return None
     try:
         return json.loads(f'"{m.group(1)}"')
     except json.JSONDecodeError:
         return None
+
+
+def extraire_dire(texte_partiel: str) -> str | None:
+    """Le champ « dire » dès qu'il est complet dans le texte en cours d'arrivée."""
+    return _lire_champ(_DIRE, texte_partiel)
+
+
+def extraire_cible(texte_partiel: str) -> str:
+    return _lire_champ(_CIBLE, texte_partiel) or ""
 
 
 def analyser_reponse(texte: str) -> Decision:
@@ -174,13 +193,13 @@ def analyser_reponse(texte: str) -> Decision:
     try:
         donnees = json.loads(texte[debut : fin + 1])
     except json.JSONDecodeError as e:
-        dire = extraire_dire(texte) or ""
-        return Decision(dire=dire, brut=texte, erreur=f"JSON invalide : {e}")
+        return Decision(dire=extraire_dire(texte) or "", cible=extraire_cible(texte), brut=texte, erreur=f"JSON invalide : {e}")
     if not isinstance(donnees, dict):
         return Decision(brut=texte, erreur="la réponse n'est pas un objet JSON")
     dire = donnees.get("dire") if isinstance(donnees.get("dire"), str) else ""
+    cible = donnees.get("cible") if isinstance(donnees.get("cible"), str) else ""
     actions = [a for a in donnees.get("actions") or [] if isinstance(a, dict)]
-    return Decision(dire=dire.strip(), actions=actions, brut=texte)
+    return Decision(dire=dire.strip(), cible=cible.strip(), actions=actions, brut=texte)
 
 
 # --- Lancement de Claude Code ----------------------------------------------------------------
@@ -264,13 +283,16 @@ class ProcessusClaude:
 
     def _lire(self, boucle: asyncio.AbstractEventLoop) -> None:
         assert self._p and self._p.stdout and self._file
-        for ligne in self._p.stdout:
-            try:
-                evenement = json.loads(ligne.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                continue
-            boucle.call_soon_threadsafe(self._file.put_nowait, evenement)
-        boucle.call_soon_threadsafe(self._file.put_nowait, None)  # fin du processus
+        try:
+            for ligne in self._p.stdout:
+                try:
+                    evenement = json.loads(ligne.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                boucle.call_soon_threadsafe(self._file.put_nowait, evenement)
+            boucle.call_soon_threadsafe(self._file.put_nowait, None)  # fin du processus
+        except RuntimeError:
+            pass  # la visite est terminée (boucle fermée) : plus personne n'attend ces messages
 
     def _lire_erreurs(self) -> None:
         assert self._p and self._p.stderr
@@ -408,7 +430,7 @@ class CerveauClaudeCode:
             if dire is not None:
                 dire_envoye = True
                 if dire.strip():
-                    await sur_dire(dire.strip())
+                    await sur_dire(dire.strip(), extraire_cible(texte_partiel))
 
         try:
             processus = await self._processus()
@@ -419,7 +441,7 @@ class CerveauClaudeCode:
         decision = analyser_reponse(texte)
         decision.mesures = mesures
         if decision.dire and not dire_envoye and sur_dire:
-            await sur_dire(decision.dire)
+            await sur_dire(decision.dire, decision.cible)
         return decision
 
     async def fermer(self) -> None:

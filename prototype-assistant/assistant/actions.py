@@ -1,4 +1,4 @@
-"""Application des actions proposées par le cerveau (Claude ou simulation) à la checklist.
+"""Application des actions proposées (extraction immédiate, Claude ou simulation) à la checklist.
 
 Le serveur vérifie tout : type et champ connus, élément existant, et surtout citation retrouvée
 dans ce que le diagnostiqueur a réellement dit. Une action refusée est journalisée, jamais
@@ -16,6 +16,16 @@ def _texte(action: dict, cle: str) -> str:
     return valeur.strip() if isinstance(valeur, str) else ""
 
 
+def _nombre(action: dict) -> int | None:
+    valeur = action.get("nombre")
+    if valeur is None or valeur == "":
+        return None
+    try:
+        return int(valeur)
+    except (TypeError, ValueError):
+        raise ErreurChecklist(f"nombre d'éléments invalide : {valeur!r}") from None
+
+
 def appliquer_action(checklist: Checklist, action: dict, t: float, phrases: list[str]) -> dict:
     outil = _texte(action, "outil")
     resultat = {"action": action, "statut": "accepte", "raison": ""}
@@ -27,7 +37,8 @@ def appliquer_action(checklist: Checklist, action: dict, t: float, phrases: list
             if not confirme:
                 resultat["raison"] = "pièce déduite de l'image, à confirmer"
         elif outil == "signaler_element":
-            element = checklist.signaler_element(_texte(action, "type"), _texte(action, "description"), t)
+            source = "voix" if _texte(action, "source") == "voix" else "image"
+            element = checklist.signaler_element(_texte(action, "type"), _texte(action, "description"), t, source=source, nombre=_nombre(action))
             resultat["element"] = element.id
         elif outil in ("enregistrer_reponse", "marquer_sans_objet"):
             citation = _texte(action, "citation")
@@ -38,7 +49,8 @@ def appliquer_action(checklist: Checklist, action: dict, t: float, phrases: list
                 element_id=_texte(action, "element_id") or None, description=_texte(action, "description"),
             )
             if outil == "enregistrer_reponse":
-                resultat["element"] = checklist.enregistrer(valeur=_texte(action, "valeur"), **commun).id
+                element = checklist.enregistrer(valeur=_texte(action, "valeur"), nombre=_nombre(action), note=_texte(action, "note"), **commun)
+                resultat["element"] = element.id
             else:
                 checklist.marquer_sans_objet(**commun)
         else:

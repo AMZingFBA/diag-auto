@@ -27,6 +27,7 @@ class Champ:
     cle: str
     libelle: str
     question: str  # complète « Pour <élément>, … »
+    obligatoire: bool = True  # un champ facultatif est noté s'il est dit, jamais réclamé
 
 
 @dataclass(frozen=True)
@@ -48,8 +49,9 @@ TYPES: dict[str, TypeElement] = {
             (
                 Champ("materiau", "matériau", "quel matériau ?"),
                 Champ("epaisseur", "épaisseur", "quelle épaisseur ?"),
-                Champ("isolation", "isolation", "il est isolé ? Par l'intérieur ou l'extérieur ?"),
+                Champ("isolation", "isolation", "isolé par l'intérieur, par l'extérieur, ou pas isolé ?"),
                 Champ("donne_sur", "donne sur", "il donne sur l'extérieur, un local non chauffé ou un local chauffé ?"),
+                Champ("longueur", "longueur", "quelle longueur ?", obligatoire=False),
             ),
             "Décrivez un premier mur : matériau, épaisseur, isolation, et sur quoi il donne.", "le mur",
         ),
@@ -59,6 +61,7 @@ TYPES: dict[str, TypeElement] = {
                 Champ("menuiserie", "menuiserie", "quelle menuiserie : PVC, bois ou alu ?"),
                 Champ("vitrage", "vitrage", "simple, double ou triple vitrage ?"),
                 Champ("volets", "volets", "quels volets, ou pas de volet ?"),
+                Champ("dimensions", "dimensions", "quelles dimensions ?", obligatoire=False),
             ),
             "Y a-t-il une fenêtre dans cette pièce ?", "la fenêtre",
         ),
@@ -76,7 +79,7 @@ TYPES: dict[str, TypeElement] = {
             (
                 Champ("energie", "énergie", "quelle énergie : gaz, fioul, électricité, bois, pompe à chaleur ?"),
                 Champ("type", "type", "quel type de générateur ?"),
-                Champ("annee", "année", "quelle année ? Sinon, filmez la plaque de près."),
+                Champ("annee", "année", "quelle année, ou bien filmez la plaque ?"),
             ),
             "Où est le chauffage principal du logement ?", "le chauffage",
         ),
@@ -85,7 +88,7 @@ TYPES: dict[str, TypeElement] = {
             (
                 Champ("systeme", "système", "quel système : chaudière, ballon électrique, thermodynamique ?"),
                 Champ("energie", "énergie", "quelle énergie ?"),
-                Champ("annee", "année", "quelle année ? Sinon, filmez la plaque de près."),
+                Champ("annee", "année", "quelle année, ou bien filmez la plaque ?"),
             ),
             "Comment est produite l'eau chaude ?", "l'eau chaude",
         ),
@@ -116,11 +119,15 @@ def horodatage(t: float) -> str:
     return f"{t // 60}:{t % 60:02d}"
 
 
+VALEUR_INCONNUE = "inconnu"  # « je ne sais pas » : champ rempli (on n'y revient pas) mais à vérifier
+
+
 @dataclass
 class Valeur:
     valeur: str
     citation: str
     t: float
+    note: str = ""  # ex. « deviné : ictérieur → extérieur », montré à la validation
 
 
 @dataclass
@@ -131,6 +138,7 @@ class Element:
     piece: str | None  # None pour un équipement du logement
     t: float
     source: str  # « image » (signalé par l'IA) ou « voix » (cité par le diagnostiqueur)
+    nombre: int = 1  # éléments identiques décrits ensemble : « trois fenêtres en bois »
     valeurs: dict[str, list[Valeur]] = field(default_factory=dict)
     sans_objet: dict[str, Valeur] = field(default_factory=dict)
 
@@ -143,14 +151,16 @@ class Element:
         return historique[-1] if historique else None
 
     def a_verifier(self, champ: str) -> bool:
-        """Vrai si le champ a reçu plusieurs valeurs différentes (correction ou contradiction)."""
-        return len({cle_texte(v.valeur) for v in self.valeurs.get(champ, [])}) > 1
+        """Vrai si le champ a reçu plusieurs valeurs différentes (correction ou contradiction),
+        ou si le diagnostiqueur a dit ne pas savoir."""
+        historique = self.valeurs.get(champ, [])
+        return len({cle_texte(v.valeur) for v in historique}) > 1 or bool(historique and historique[-1].valeur == VALEUR_INCONNUE)
 
     def est_rempli(self, champ: str) -> bool:
         return champ in self.sans_objet or bool(self.valeurs.get(champ))
 
     def champs_manquants(self) -> list[Champ]:
-        return [c for c in self.type_element.champs if not self.est_rempli(c.cle)]
+        return [c for c in self.type_element.champs if c.obligatoire and not self.est_rempli(c.cle)]
 
 
 @dataclass
@@ -236,14 +246,26 @@ class Checklist:
     def elements_de(self, piece: str | None) -> list[Element]:
         return [e for e in self.elements if e.piece == piece]
 
-    def signaler_element(self, type_element: str, description: str, t: float, source: str = "image") -> Element:
-        """Ajoute un élément à décrire (ex. « le mur avec la télé »). Une description déjà connue
-        dans la même pièce renvoie l'élément existant."""
+    @staticmethod
+    def _verifier_nombre(nombre: int | None) -> int | None:
+        if nombre is None:
+            return None
+        if not isinstance(nombre, int) or not 1 <= nombre <= 50:
+            raise ErreurChecklist(f"nombre d'éléments invalide : {nombre!r}")
+        return nombre
+
+    def signaler_element(self, type_element: str, description: str, t: float, source: str = "image", nombre: int | None = None) -> Element:
+        """Ajoute un élément à décrire (ex. « le mur avec la télé »), éventuellement en plusieurs
+        exemplaires identiques (« trois fenêtres »). Une description déjà connue dans la même pièce
+        renvoie l'élément existant."""
         te = self._type(type_element)
+        nombre = self._verifier_nombre(nombre)
         description = " ".join(description.split()) or te.designation
         piece = self._piece_pour_element() if te.niveau == "piece" else None
         for element in self.elements_de(piece):
             if element.type == te.cle and cle_texte(element.description) == cle_texte(description):
+                if nombre:
+                    element.nombre = nombre
                 return element
         self._compteurs[te.prefixe] = self._compteurs.get(te.prefixe, 0) + 1
         element = Element(
@@ -253,17 +275,20 @@ class Checklist:
             piece=piece,
             t=t,
             source=source,
+            nombre=nombre or 1,
         )
         self.elements.append(element)
         return element
 
-    def _element_cible(self, type_element: str, element_id: str | None, description: str, t: float) -> Element:
+    def _element_cible(self, type_element: str, element_id: str | None, description: str, t: float, nombre: int | None = None) -> Element:
         if element_id:
             element = self.trouver_element(element_id)
             if element.type != type_element:
                 raise ErreurChecklist(f"{element.id} est un {element.type_element.nom}, pas un {TYPES[type_element].nom}")
+            if self._verifier_nombre(nombre):
+                element.nombre = nombre
             return element
-        return self.signaler_element(type_element, description, t, source="voix")
+        return self.signaler_element(type_element, description, t, source="voix", nombre=nombre)
 
     def _champ(self, type_element: str, champ: str) -> Champ:
         for c in self._type(type_element).champs:
@@ -281,8 +306,11 @@ class Checklist:
         t: float,
         element_id: str | None = None,
         description: str = "",
+        nombre: int | None = None,
+        note: str = "",
     ) -> Element:
-        """Enregistre une valeur dite par le diagnostiqueur. Sans citation, elle est refusée."""
+        """Enregistre une valeur dite par le diagnostiqueur. Sans citation, elle est refusée.
+        La même valeur redite n'est pas ajoutée une 2e fois à l'historique."""
         self._champ(type_element, champ)
         valeur = " ".join(valeur.split())
         citation = " ".join(citation.split())
@@ -290,8 +318,10 @@ class Checklist:
             raise ErreurChecklist("valeur vide")
         if not citation:
             raise ErreurChecklist("valeur refusée : aucune citation du diagnostiqueur")
-        element = self._element_cible(type_element, element_id, description, t)
-        element.valeurs.setdefault(champ, []).append(Valeur(valeur, citation, t))
+        element = self._element_cible(type_element, element_id, description, t, nombre)
+        derniere = element.valeur(champ)
+        if derniere is None or cle_texte(derniere.valeur) != cle_texte(valeur):
+            element.valeurs.setdefault(champ, []).append(Valeur(valeur, citation, t, note))
         element.sans_objet.pop(champ, None)
         return element
 
@@ -362,7 +392,7 @@ class Checklist:
         if piece is None or piece not in self.pieces:
             return 0.0
         elements = self.elements_de(piece)
-        attendus = sum(len(e.type_element.champs) for e in elements) + len(PRESENCES_PIECE)
+        attendus = sum(sum(c.obligatoire for c in e.type_element.champs) for e in elements) + len(PRESENCES_PIECE)
         return round(1 - len(self.manques_piece(piece)) / attendus, 3) if attendus else 0.0
 
     # --- Restitution -----------------------------------------------------------------------
@@ -374,12 +404,13 @@ class Checklist:
             if c.cle in element.sans_objet:
                 champs.append(f"{c.libelle} = sans objet")
             elif v:
-                note = " (à vérifier : valeurs différentes dites)" if element.a_verifier(c.cle) else ""
+                note = " (déjà demandé, à vérifier plus tard : ne pas redemander)" if element.a_verifier(c.cle) else ""
                 champs.append(f"{c.libelle} = {v.valeur}{note}")
-            else:
+            elif c.obligatoire:
                 champs.append(f"{c.libelle} = ?")
         origine = "vu à l'image" if element.source == "image" else "dit"
-        return f"- {element.id} {element.type_element.nom} « {element.description} » ({origine}) : " + ", ".join(champs)
+        nombre = f" ×{element.nombre}" if element.nombre > 1 else ""
+        return f"- {element.id} {element.type_element.nom}{nombre} « {element.description} » ({origine}) : " + ", ".join(champs)
 
     def resume_pour_ia(self, max_manques: int = 12) -> str:
         """État compact envoyé à l'IA à chaque appel (le serveur reste la source de vérité)."""
@@ -412,7 +443,7 @@ class Checklist:
 
     def vers_dict(self) -> dict:
         def valeur(v: Valeur) -> dict:
-            return {"valeur": v.valeur, "citation": v.citation, "t": round(v.t, 2)}
+            return {"valeur": v.valeur, "citation": v.citation, "t": round(v.t, 2), "note": v.note}
 
         def element(e: Element) -> dict:
             return {
@@ -422,6 +453,7 @@ class Checklist:
                 "piece": self.nom_piece(e.piece) if e.piece else None,
                 "t": round(e.t, 2),
                 "source": e.source,
+                "nombre": e.nombre,
                 "champs": {
                     c.cle: {
                         "libelle": c.libelle,

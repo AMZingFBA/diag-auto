@@ -11,6 +11,7 @@ import sys
 import time
 
 REPONSE = json.dumps({
+    "cible": "M1.isolation",
     "dire": "Il est isolé ?",
     "actions": [{"outil": "enregistrer_reponse", "element_id": "", "type": "mur", "description": "le mur avec la télé",
                  "champ": "materiau", "valeur": "brique", "citation": "ce mur-là, brique"}],

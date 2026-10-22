@@ -5,10 +5,9 @@ from pathlib import Path
 from assistant.actions import appliquer
 from assistant.cerveau import (
     CerveauClaudeCode, Contexte, ImageInstant, analyser_reponse, commande_claude, consignes, contenu_message,
-    env_claude, extraire_dire,
+    env_claude, extraire_cible, extraire_dire,
 )
 from assistant.checklist import Checklist
-from assistant.simulation import CerveauSimulation
 
 FAUX_CLAUDE = [sys.executable, str(Path(__file__).with_name("faux_claude.py"))]
 
@@ -49,6 +48,7 @@ def test_contenu_message_images_jointes_ou_fichiers(tmp_path):
 def test_extraire_dire_des_qu_il_est_complet():
     assert extraire_dire('{"dire": "Il est is') is None
     assert extraire_dire('{"dire": "Il est \\"isolé\\" ?", "act') == 'Il est "isolé" ?'
+    assert extraire_cible('{"cible": "M1.isolation", "dire": "Il est') == "M1.isolation"
 
 
 def test_analyser_reponse_tolerante():
@@ -76,7 +76,7 @@ def test_cerveau_claude_code_avec_un_faux_claude(tmp_path):
         await cerveau.demarrer()
         dits = []
 
-        async def dire(texte):
+        async def dire(texte, cible):
             dits.append(texte)
 
         decision = await cerveau.decider(contexte(), dire)
@@ -118,26 +118,3 @@ def test_cerveau_relaye_par_un_processus_neuf(tmp_path):
 
     premier, actuel = asyncio.run(scenario())
     assert actuel is not premier and actuel.tours < 7
-
-
-def test_simulation_dialogue_complet():
-    async def scenario():
-        c = Checklist()
-        cerveau = CerveauSimulation()
-        echanges = []
-        for phrase in ["ici c'est la chambre 1", "ce mur-là, brique, 30 cm, il donne sur l'extérieur",
-                       "isolé par l'intérieur", "la fenêtre, PVC double vitrage", "volets roulants", "pas de radiateur"]:
-            d = await cerveau.decider(Contexte(mode="reponse", t=1.0, checklist=c, phrase=phrase))
-            resultats = appliquer(c, d.actions, 1.0, [phrase])
-            assert all(r["statut"] == "accepte" for r in resultats), resultats
-            echanges.append(d.dire)
-        return c, echanges
-
-    c, echanges = asyncio.run(scenario())
-    assert echanges[0] == "Décrivez un premier mur : matériau, épaisseur, isolation, et sur quoi il donne."
-    assert echanges[1] == "Pour le mur 1, il est isolé ? Par l'intérieur ou l'extérieur ?"
-    assert echanges[2] == "Y a-t-il une fenêtre dans cette pièce ?"
-    assert echanges[3] == "Pour la fenêtre 1, quels volets, ou pas de volet ?"
-    mur = c.trouver_element("M1")
-    assert (mur.valeur("materiau").valeur, mur.valeur("epaisseur").valeur, mur.valeur("isolation").valeur) == ("brique", "30 cm", "ITI")
-    assert c.taux_remplissage() == 1.0

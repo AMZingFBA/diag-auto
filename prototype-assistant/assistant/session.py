@@ -22,13 +22,28 @@ from typing import Awaitable, Callable
 
 from .actions import appliquer
 from .cerveau import Contexte, Decision, ImageInstant
-from .checklist import Checklist, horodatage
+from .checklist import Checklist, cle_texte, horodatage
+from .extraction import Cible, extraire
+from .garde import Questions, champ_rempli
 from .reglages import Reglages
 from .vad import TAUX, DetecteurPhrases, Phrase, ReglagesVad
 
 log = logging.getLogger(__name__)
 
 Envoyer = Callable[[dict], Awaitable[None]]
+
+# Derniers mots qui montrent que la phrase n'est pas finie (« Il est… », « Et il fait… »).
+_SUSPENDUS = {"est", "fait", "de", "du", "des", "la", "le", "les", "et", "en", "avec", "a", "au", "aux", "sur", "par",
+              "il", "elle", "un", "une", "mais", "donc", "ou", "euh", "heu", "sont", "son", "sa", "ses", "qui", "que",
+              "pour", "dans", "c", "cest"}
+
+
+def phrase_inachevee(texte: str) -> bool:
+    texte = texte.strip()
+    if texte.endswith(("...", "…")):
+        return True
+    mots = cle_texte(texte).replace("'", " ").rstrip(" ,;:").split()
+    return bool(mots) and mots[-1] in _SUSPENDUS
 
 
 def rappel_fin(checklist: Checklist, maximum: int = 3) -> str:
@@ -76,6 +91,9 @@ class Session:
         self._veille_bientot = False
         self._compteur_dire = 0
         self._mesure_par_dire: dict[int, tuple[dict, float]] = {}
+        self.questions = Questions()  # pour ne jamais redemander la même chose
+        self._cible: Cible | None = None  # champ visé par la dernière question (pour comprendre « bas ! »)
+        self._derniere_question_texte = ""
         self._compteurs = {"acceptees": 0, "refusees": 0, "questions": 0, "retenues": 0, "veilles": 0, "bips": 0}
         self._pret = asyncio.Event()
         self._journal = open(dossier / "journal.jsonl", "a", encoding="utf-8")
@@ -264,12 +282,33 @@ class Session:
                 # plutôt qu'une file d'attente qui retarde chaque réponse.
                 while not self._file_textes.empty():
                     lot.append(self._file_textes.get_nowait())
+                if phrase_inachevee(lot[-1]["texte"]):
+                    await self._attendre_suite(lot)
                 await self._repondre(lot)
             except Exception as e:
                 log.exception("Réponse à une phrase")
                 self.journaliser("erreur", etape="reponse", message=str(e))
             finally:
                 self._reponse_en_cours = False
+
+    async def _attendre_suite(self, lot: list[dict], calme_s: float = 1.2, maximum_s: float = 8.0) -> None:
+        """« Il est… » : le diagnostiqueur cherche ses mots. On attend la suite tant qu'il parle encore
+        ou qu'une phrase est en cours de transcription, puis on répond à l'ensemble."""
+        limite = time.monotonic() + maximum_s
+        calme_depuis = time.monotonic()
+        while time.monotonic() < limite:
+            try:
+                lot.append(await asyncio.wait_for(self._file_textes.get(), timeout=0.2))
+                while not self._file_textes.empty():
+                    lot.append(self._file_textes.get_nowait())
+                if not phrase_inachevee(lot[-1]["texte"]):
+                    return
+                calme_depuis = time.monotonic()
+            except asyncio.TimeoutError:
+                if self._en_parole or self._transcription_en_cours or not self._file.empty():
+                    calme_depuis = time.monotonic()
+                elif time.monotonic() - calme_depuis > calme_s:
+                    return
 
     async def _repondre(self, lot: list[dict]) -> None:
         # Les mesures portent sur la DERNIÈRE phrase du lot : c'est après elle que le diagnostiqueur attend.
@@ -286,14 +325,60 @@ class Session:
             "phrases_regroupees": len(lot),
         }
         lignes = {p["ligne"] for p in lot}
+        maintenant = time.monotonic()
         contexte = Contexte(
             mode="reponse", t=dernier["t_fin"], checklist=self.checklist,
             dialogue=[l for l in self.dialogue if l not in lignes][-8:],
             images=self._images_pour(lot[0]["t_debut"], dernier["t_fin"]), phrase=texte,
             t_phrase=(lot[0]["t_debut"], dernier["t_fin"]),
+            derniere_question=self._derniere_question_texte,
+            questions_recentes=self.questions.recentes(maintenant, self.checklist.piece_courante),
         )
         self.mesures.append(mesure)
+
+        # 1. Extraction immédiate, sans IA : tout ce qui est reconnu est noté tout de suite (bip).
+        debut = time.perf_counter()
+        extraction = extraire(texte, self.checklist, self._cible)
+        resultats = appliquer(self.checklist, extraction.actions, contexte.t, self._phrases_recentes(contexte))
+        mesure["extraction_ms"] = round((time.perf_counter() - debut) * 1000, 1)
+        notes = self._compter(resultats)
+        mesure["valeurs_extraites"] = len(notes)
+        self.journaliser("extraction", resultats=resultats, devines=extraction.devines, mesures={"extraction_ms": mesure["extraction_ms"]})
+        if resultats:
+            await self._envoyer_actions(resultats, "extraction")
+        if notes:
+            mesure["bip_s"] = round(time.monotonic() - dernier["reference"], 3)
+            await self._bip(mesure["bip_s"])
+            await self.envoyer_etat()
+        contexte.deja_note = [f"{r.get('element') or r['action'].get('type')}.{r['action'].get('champ')} = {r['action'].get('valeur') or 'sans objet'}"
+                              for r in notes]
+        if self._cible and champ_rempli(self._cible, self.checklist):
+            self._cible = None  # la dernière question a eu sa réponse
+        # Après l'extraction : la phrase a pu changer de pièce (« ici c'est la cuisine »).
+        contexte.questions_recentes = self.questions.recentes(time.monotonic(), self.checklist.piece_courante)
+
+        # 2. Le cerveau complète ce que les règles n'ont pas compris et choisit UNE question.
         await self._decider(self.cerveau, contexte, dernier["reference"], mesure)
+
+    def _compter(self, resultats: list[dict]) -> list[dict]:
+        """Met à jour les compteurs ; renvoie les valeurs acceptées (enregistrées ou « sans objet »)."""
+        notes = [r for r in resultats if r["action"].get("outil") in ("enregistrer_reponse", "marquer_sans_objet")]
+        self._compteurs["acceptees"] += sum(r["statut"] == "accepte" for r in notes)
+        self._compteurs["refusees"] += sum(r["statut"] == "refuse" for r in notes)
+        if any(r["action"].get("outil") == "piece_courante" and r["statut"] == "accepte" for r in resultats):
+            self._veille_bientot = True
+        return [r for r in notes if r["statut"] == "accepte"]
+
+    async def _envoyer_actions(self, resultats: list[dict], source: str) -> None:
+        await self._envoyer({"type": "actions", "source": source, "resultats": [
+            {"outil": r["action"].get("outil"), "statut": r["statut"], "raison": r["raison"], "champ": r["action"].get("champ"),
+             "valeur": r["action"].get("valeur"), "nombre": r["action"].get("nombre"), "element": r.get("element")}
+            for r in resultats
+        ]})
+
+    async def _bip(self, latence_s: float | None = None) -> None:
+        self._compteurs["bips"] += 1
+        await self._envoyer({"type": "bip", "latence_s": latence_s})
 
     def _images_pour(self, t_debut: float, t_fin: float) -> list[ImageInstant]:
         """Images de la phrase : la plus proche de la fin, du milieu et du début (3 au plus)."""
@@ -314,37 +399,53 @@ class Session:
     async def _decider(self, cerveau, contexte: Contexte, reference: float, mesure: dict) -> Decision:
         await self._pret.wait()
         debut = time.perf_counter()
+        filtrees: list[str] = []
 
-        async def sur_dire(texte: str) -> None:
+        async def sur_dire(texte: str, code_cible: str) -> None:
+            if mesure.get("question_dite"):
+                return
+            question, cible, raison = self.questions.filtrer(texte, code_cible, self.checklist, time.monotonic())
+            if raison:
+                filtrees.append(raison)
+                self.journaliser("question_filtree", texte=texte, cible=code_cible, raison=raison)
+                return
             mesure["cerveau_dire_s"] = round(time.perf_counter() - debut, 3)
-            await self.dire(texte, reference, mesure)
+            mesure["question_dite"] = True
+            await self.dire(question, reference, mesure, cible=cible)
 
         decision = await cerveau.decider(contexte, sur_dire if contexte.mode == "reponse" else None)
         mesure["cerveau_total_s"] = round(time.perf_counter() - debut, 3)
         mesure["cerveau"] = decision.mesures
         resultats = appliquer(self.checklist, decision.actions, contexte.t, self._phrases_recentes(contexte))
-        notes = [r for r in resultats if r["action"].get("outil") in ("enregistrer_reponse", "marquer_sans_objet")]
-        self._compteurs["acceptees"] += sum(r["statut"] == "accepte" for r in notes)
-        self._compteurs["refusees"] += sum(r["statut"] == "refuse" for r in notes)
-        if any(r["action"].get("outil") == "piece_courante" and r["statut"] == "accepte" for r in resultats):
-            self._veille_bientot = True
-        if contexte.mode == "reponse" and not decision.dire and any(r["statut"] == "accepte" for r in notes):
-            self._compteurs["bips"] += 1
-            await self._envoyer({"type": "bip"})
-        self.journaliser("decision", mode=contexte.mode, dire=decision.dire, resultats=resultats, erreur=decision.erreur,
-                         brut=decision.brut[:2000], mesures=mesure)
+        notes = self._compter(resultats)
+        if contexte.mode == "reponse" and not mesure.get("question_dite"):
+            if filtrees or decision.erreur:
+                await self._question_de_secours(reference, mesure)
+            if notes and not mesure.get("bip_s") and not mesure.get("question_dite"):
+                await self._bip()
+        self.journaliser("decision", mode=contexte.mode, dire=decision.dire, cible=decision.cible, filtrees=filtrees,
+                         resultats=resultats, erreur=decision.erreur, brut=decision.brut[:2000], mesures=mesure)
         if decision.erreur:
             await self._envoyer({"type": "erreur", "message": f"Assistant : {decision.erreur}"})
         if resultats:
-            await self._envoyer({"type": "actions", "resultats": [
-                {"outil": r["action"].get("outil"), "statut": r["statut"], "raison": r["raison"],
-                 "champ": r["action"].get("champ"), "valeur": r["action"].get("valeur"), "element": r.get("element")}
-                for r in resultats
-            ]})
+            await self._envoyer_actions(resultats, "cerveau")
         await self.envoyer_etat()
         return decision
 
-    async def dire(self, texte: str, reference: float, mesure: dict | None = None, forcer: bool = False) -> None:
+    async def _question_de_secours(self, reference: float, mesure: dict) -> None:
+        """La question du cerveau a été refusée (« répétez », déjà demandée…) : on pose la suivante de la
+        checklist, si elle n'a pas été demandée récemment. Le diagnostiqueur n'a jamais à répéter."""
+        maintenant = time.monotonic()
+        manques = self.checklist.manques_piece() or self.checklist.manques_logement()
+        for manque in manques:
+            question, cible, raison = self.questions.filtrer(manque.question, manque.code, self.checklist, maintenant)
+            if not raison:
+                mesure["question_dite"] = True
+                mesure["question_de_secours"] = True
+                await self.dire(question, reference, mesure, cible=cible)
+                return
+
+    async def dire(self, texte: str, reference: float, mesure: dict | None = None, forcer: bool = False, cible: Cible | None = None) -> None:
         """Envoie une phrase à dire au téléphone, dans la limite du plafond de questions par minute."""
         maintenant = time.monotonic()
         while self._questions and maintenant - self._questions[0] > 60:
@@ -357,11 +458,16 @@ class Session:
         self._questions.append(maintenant)
         self._derniere_question = maintenant
         self._compteurs["questions"] += 1
+        self.questions.noter(texte, cible, maintenant, self.checklist.piece_courante)
+        if not forcer:
+            self._cible = cible
+            self._derniere_question_texte = f"{cible.code} : « {texte} »" if cible else f"« {texte} »"
         self.dialogue.append(f"[{horodatage(self.t_video)}] Assistant : « {texte} »")
         if mesure is not None:
             self._mesure_par_dire[self._compteur_dire] = (mesure, reference)
-        self.journaliser("dire", id=self._compteur_dire, texte=texte, muet=self.muet)
-        await self._envoyer({"type": "dire", "id": self._compteur_dire, "texte": texte, "muet": self.muet})
+        latence = round(maintenant - reference, 2) if mesure is not None else None
+        self.journaliser("dire", id=self._compteur_dire, texte=texte, cible=cible.code if cible else "", muet=self.muet, latence_s=latence)
+        await self._envoyer({"type": "dire", "id": self._compteur_dire, "texte": texte, "muet": self.muet, "latence_s": latence})
 
     # --- Veille ---------------------------------------------------------------------------------
 
@@ -390,15 +496,18 @@ class Session:
         self._compteurs["veilles"] += 1
         paroles_avant = self._paroles
         contexte = Contexte(mode="veille", t=self.t_video, checklist=self.checklist, dialogue=self.dialogue[-8:],
-                            images=list(self.images)[-2:])
+                            images=list(self.images)[-2:], questions_recentes=self.questions.recentes(time.monotonic(), self.checklist.piece_courante))
         mesure: dict = {"source": "veille", "t": round(self.t_video, 2)}
         decision = await self._decider(self.cerveau_veille, contexte, time.monotonic(), mesure)
-        if not decision.dire:
+        question, cible, raison = self.questions.filtrer(decision.dire, decision.cible, self.checklist, time.monotonic())
+        if raison:
+            self.journaliser("question_filtree", texte=decision.dire, cible=decision.cible, raison=raison)
+        if not question:
             return
         if self._paroles != paroles_avant or self._en_parole or self.occupe:
-            self.journaliser("question_abandonnee", texte=decision.dire, raison="le diagnostiqueur a parlé entre-temps")
+            self.journaliser("question_abandonnee", texte=question, raison="le diagnostiqueur a parlé entre-temps")
             return
-        await self.dire(decision.dire, time.monotonic())
+        await self.dire(question, time.monotonic(), cible=cible)
 
     # --- Fin et bilan ---------------------------------------------------------------------------
 
