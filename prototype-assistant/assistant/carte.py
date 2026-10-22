@@ -22,8 +22,15 @@ sans GPU, pour tout téléphone :
    dit dans quelle pièce on est. Une autre pièce vue par Claude devient une question, jamais une pièce créée.
 7. **Cap de la caméra** : boussole et gyroscope du téléphone s'ils ont été enregistrés, sinon le suivi continu de la
    vidéo (cap relatif : les murs sont alors « A, B, C, D », pas « nord, est… »).
-8. **Ancrage** : chaque phrase est rattachée, à l'instant du mot qui désigne (« ce mur »), à la pièce reconnue et au mur
-   visé, puis comparée à l'élément choisi par l'assistant pendant la visite.
+8. **Ancrage** : chaque phrase est rattachée, à l'instant du mot qui désigne (« ce mur », « le mur de gauche »,
+   « derrière moi », « le deuxième mur »), à la pièce reconnue et au mur visé, puis comparée à l'élément choisi par
+   l'assistant pendant la visite.
+
+Étape 13 (DPE par côté) : avec la boussole, l'axe des murs est celui du **logement** (les murs des pièces sont
+parallèles), estimé sur toutes les pièces : il ne dépend plus des quelques images d'une pièce. Un logement tourné de
+près de 45° par rapport au nord (côté d'un mur incertain) devient une question. Les murs et fenêtres de l'état de
+l'assistant sont ceux du logement (« enveloppe ») : chacun reçoit ce que la carte en a vu (pièce, mur, côté filmé), et
+un côté filmé différent du côté noté devient une question.
 
 Ce n'est pas encore une carte 3D métrique (pas de plan coté ni de surfaces) : c'est une carte des lieux (quelles images
 montrent le même endroit), suffisante pour les pièces, les revisites et les murs. Voir le README, « Étape 12 ».
@@ -38,6 +45,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import bisect
 import copy
 import json
 import math
@@ -82,9 +90,21 @@ DOUTES_PAR_APPEL = 32  # images douteuses montrées à Claude en un appel
 DOUTES_MAX = 96  # au plus trois appels par visite
 FOCALE_PORTRAIT, FOCALE_PAYSAGE = 1.2, 0.85  # focale en largeurs d'image (téléphone sans réglage connu)
 LETTRES = "ABCD"
+AXE_LOGEMENT = 0.6  # une pièce prend l'axe du logement si ses caps l'expliquent à 60 % au moins de son meilleur axe
+AXE_DOUTE = 10.0  # murs à moins de 10° d'une diagonale (nord-est…) : leur côté est à confirmer
 
 DESIGNATION = re.compile(
     r"\b(?:ce|cet|cette|ces|celui|celle|ceux|celles)\b(?:[- ]?(?:ci|là|la))?|\b(?:ici|là)\b|\bça\b", re.IGNORECASE)
+# « Le mur de gauche », « sur ma droite », « celui derrière moi », « en face » : un mur désigné par sa place par rapport
+# à la caméra (« ça donne derrière sur des toilettes » n'en est pas un).
+POSITION = re.compile(r"\b(?:(?:de|à|a|sur (?:la|ma)|vers (?:la|ma))\s+(gauche|droite)|(?:de|le mur|celui|juste)\s+(derri[eè]re)"
+                      r"|(derri[eè]re) moi|(?:d'en|en)\s+(face)|du (fond))\b", re.IGNORECASE)
+DECALAGES = {"gauche": -90.0, "droite": 90.0, "derriere": 180.0, "face": 0.0, "fond": 0.0}
+# « Le deuxième mur » : le deuxième montré dans la pièce (comme pendant la visite, voir Element.voir_dans).
+ORDINAL = re.compile(r"\b(premier|1er|deuxi[eè]me|second|2e|2[eè]me|troisi[eè]me|3e|3[eè]me|quatri[eè]me|4e|4[eè]me"
+                     r"|cinqui[eè]me|5e|5[eè]me)\s+mur\b", re.IGNORECASE)
+RANGS = {"premier": 1, "1er": 1, "deuxieme": 2, "second": 2, "2e": 2, "2eme": 2, "troisieme": 3, "3e": 3, "3eme": 3,
+         "quatrieme": 4, "4e": 4, "4eme": 4, "cinquieme": 5, "5e": 5, "5eme": 5}
 
 
 # --- Entrées --------------------------------------------------------------------------------------------------------
@@ -255,6 +275,7 @@ class Ancrage:
     mur: str | None
     elements: list[str]
     accord: str  # « oui », « non : … », « sans objet »
+    par: str = ""  # les mots qui désignent : « ce mur », « le mur de gauche », « le deuxième mur »
 
 
 @dataclass
@@ -299,7 +320,7 @@ class Carte:
                         "corrections": p.corrections} for p in self.pieces],
             "murs": [{"id": m.id, "piece": m.piece, "nom": m.nom, "cap": round(m.cap, 1), "vu": p2(m.vu)} for m in self.murs],
             "passages_non_nommes": p2(self.passages_non_nommes),
-            "ancrages": [{"t": round(a.t, 2), "texte": a.texte, "designation": a.designation, "piece": a.piece,
+            "ancrages": [{"t": round(a.t, 2), "texte": a.texte, "designation": a.designation, "par": a.par, "piece": a.piece,
                           "cap": None if a.cap is None else round(a.cap, 1), "mur": a.mur, "elements": a.elements,
                           "accord": a.accord} for a in self.ancrages],
             "elements": self.elements,
@@ -352,16 +373,41 @@ def _nom_a(noms: list[tuple[float, str]], t: float) -> str | None:
     return courant
 
 
+def _score_axe(caps: list[float], axes) -> np.ndarray:
+    """À quel point des murs orientés selon chacun de ces axes expliquent les caps (les caps proches d'une croix)."""
+    ecarts = (np.array(caps)[None, :] - np.atleast_1d(np.asarray(axes, dtype=float))[:, None] + 45) % 90 - 45
+    return np.exp(-(ecarts ** 2) / (2 * 15 ** 2)).sum(1)
+
+
 def _axe(caps: list[float]) -> float:
     """Orientation des murs d'une pièce : on filme surtout les murs de face, donc les caps se groupent tous les 90°.
     Renvoie l'angle (0 à 90°) qui aligne le mieux les caps sur une croix."""
     if not caps:
         return 0.0
     candidats = np.arange(0, 90, 1.0)
-    c = np.array(caps)
-    ecarts = (c[None, :] - candidats[:, None] + 45) % 90 - 45
-    score = np.exp(-(ecarts ** 2) / (2 * 15 ** 2)).sum(1)
-    return float(candidats[int(np.argmax(score))])
+    return float(candidats[int(np.argmax(_score_axe(caps, candidats)))])
+
+
+@dataclass
+class Designation:
+    """Ce qui désigne un mur dans une phrase."""
+
+    debut: int  # place du mot dans la phrase (pour son instant)
+    par: str  # « ce mur », « le mur de gauche », « le deuxième mur »
+    decalage: float = 0.0  # cap du mur désigné par rapport à celui de la caméra
+    rang: int = 0  # « le deuxième mur » : 2
+
+
+def designation(texte: str) -> Designation | None:
+    """« Le deuxième mur » (son rang dans la pièce), « le mur de gauche » (−90° par rapport à la caméra), « ce mur » (en
+    face) ; None si rien ne désigne un mur."""
+    if m := ORDINAL.search(texte):
+        return Designation(m.start(), m.group(0), rang=RANGS[_normaliser(m.group(1))])
+    if m := POSITION.search(texte):
+        return Designation(m.start(), m.group(0), DECALAGES[_normaliser(next(g for g in m.groups() if g))])
+    if m := DESIGNATION.search(texte):
+        return Designation(m.start(), m.group(0))
+    return None
 
 
 def _repartis(elements: list, nombre: int) -> list:
@@ -440,13 +486,16 @@ def construire_carte(entrees: Entrees, arbitre: Arbitre | None = None) -> Carte:
     # téléphone penché ou couché fait alors tourner l'image sans fausser le cap ; caméra vers le plafond ou le sol : pas
     # de cap.
     lacet_vue: list[float | None] = [None] * len(vues)
+    serie: list[int] = []  # numéro de la suite d'images suivies de chaque image (le cap relatif repart à chaque décrochage)
     R = np.eye(3)
     for k in range(len(vues)):
         m = mouvements[k]
         if k == 0 or not m.suivi or m.rotation is None:
             R = np.eye(3)
+            serie.append(k)
         else:
             R = m.rotation @ R
+            serie.append(serie[-1])
         axe = R.T @ np.array([0.0, 0.0, 1.0])
         if abs(axe[1]) < 0.85:  # moins de ~58° vers le haut ou le bas
             lacet_vue[k] = lacet_relatif(R)
@@ -769,6 +818,7 @@ def construire_carte(entrees: Entrees, arbitre: Arbitre | None = None) -> Carte:
         return visee.cap
 
     caps: list[float | None] = [cap_capteur(t) for t in instants]
+    suivi_cap = [False] * n  # cap tiré du suivi continu de la vidéo
     source_cap = "boussole" if any(c is not None for c in caps) else "inconnu"
     if cadence >= FPS_SUIVI:
         # Cap relatif mesuré par le suivi continu : exact le long d'une suite d'images suivies (rotations composées),
@@ -793,10 +843,48 @@ def construire_carte(entrees: Entrees, arbitre: Arbitre | None = None) -> Carte:
                 decalages[(ra, rb)].append(ecart(lacet_suite[a] + lien.lacet, lacet_suite[b]))
         origine: dict[int, float] = {}
         racines_suites = sorted({suites.trouver(i) for i in range(n)}, key=lambda r: -sum(suites.trouver(i) == r for i in range(n)))
-        for r in racines_suites:  # recalage sur la boussole d'abord
-            connus = [ecart(caps[i], lacet_suite[i]) for i in range(n) if suites.trouver(i) == r and caps[i] is not None]
-            if connus:
-                origine[r] = mediane_circulaire(connus)
+        # Recalage sur la boussole d'abord : chaque mesure comparée au cap suivi à son propre instant (pas à celui de
+        # l'image clé voisine : en balayant, la caméra tourne de plusieurs degrés en 0,4 s, toujours dans le même sens).
+        temps = [v.t for v in vues]
+        par_suite: dict[int, list[float]] = defaultdict(list)
+        for mesure in entrees.capteurs:
+            cap_m = mesure.cap if mesure.cap is not None else (
+                (mesure.lacet + correction) % 360 if mesure.lacet is not None and correction is not None else None)
+            j = bisect.bisect_left(temps, mesure.t)
+            k = min((x for x in (j - 1, j) if 0 <= x < len(vues)), key=lambda x: abs(temps[x] - mesure.t), default=None)
+            if cap_m is None or k is None or abs(temps[k] - mesure.t) > 0.6 / max(cadence, 1.0) or lacet_vue[k] is None:
+                continue
+            memes = [i for i in range(n) if serie[cles[i]] == serie[k] and lacet_vue[cles[i]] is not None]
+            if memes:
+                i = min(memes, key=lambda i: abs(instants[i] - mesure.t))
+                par_suite[suites.trouver(i)].append(ecart(cap_m, lacet_suite[i] + ecart(lacet_vue[k], lacet_vue[cles[i]])))
+        # Les suites reliées entre elles (même pièce, lieux reconnus) sont recalées ensemble, sur toutes leurs mesures :
+        # une courte suite n'a souvent qu'une ou deux mesures de boussole (une par seconde), bruitées de ±20°.
+        voisines: dict[int, list[tuple[int, float, int]]] = defaultdict(list)
+        for (ra, rb), lst in decalages.items():
+            d = mediane_circulaire(lst)
+            voisines[ra].append((rb, d, len(lst)))
+            voisines[rb].append((ra, -d, len(lst)))
+        groupe: dict[int, int] = {}
+        relatif_a: dict[int, float] = {}  # origine de la suite moins celle de la première suite de son groupe
+        for depart in racines_suites:  # les plus longues d'abord
+            if depart in groupe:
+                continue
+            groupe[depart], relatif_a[depart] = depart, 0.0
+            pile = [depart]
+            while pile:
+                x = pile.pop()
+                for y, d, _ in sorted(voisines[x], key=lambda v: -v[2]):
+                    if y not in groupe:
+                        groupe[y], relatif_a[y] = depart, (relatif_a[x] + d) % 360
+                        pile.append(y)
+        mesures_groupe: dict[int, list[float]] = defaultdict(list)
+        for r in racines_suites:
+            connus = par_suite.get(r) or [ecart(caps[i], lacet_suite[i]) for i in range(n) if suites.trouver(i) == r and caps[i] is not None]
+            mesures_groupe[groupe[r]] += [ecart(c, relatif_a[r]) for c in connus]
+        for r in racines_suites:
+            if mesures_groupe[groupe[r]]:
+                origine[r] = (mediane_circulaire(mesures_groupe[groupe[r]]) + relatif_a[r]) % 360
         if not origine and racines_suites:
             for r in racines_suites:  # sans boussole : la plus longue suite de chaque pièce donne l'origine (cap relatif)
                 piece = piece_de[min(i for i in range(n) if suites.trouver(i) == r)]
@@ -815,23 +903,71 @@ def construire_carte(entrees: Entrees, arbitre: Arbitre | None = None) -> Carte:
                 break
             x, y, sens, _, lst = meilleur
             origine[y] = (origine[x] + sens * mediane_circulaire(lst)) % 360
+        # Étape 13 : le cap suivi, recalé sur la médiane de toutes les mesures de sa suite, remplace la mesure isolée de la
+        # boussole (bruitée, une par seconde sur les anciens téléphones) : le côté d'un mur ne se joue plus sur une mesure.
         for i in range(n):
             r = suites.trouver(i)
-            if caps[i] is None and r in origine and lacet_vue[cles[i]] is not None:
+            if r in origine and lacet_vue[cles[i]] is not None:
                 caps[i] = (origine[r] + lacet_suite[i]) % 360
+                suivi_cap[i] = True
     relatif = source_cap.startswith("relatif")
 
-    # Murs : les quatre directions de chaque pièce.
+    def cle_proche(t: float) -> int:
+        proches = [i for i in range(n) if abs(instants[i] - t) <= 1.5 and vues[cles[i]].exploitable]
+        return min(proches or range(n), key=lambda i: abs(instants[i] - t))
+
+    temps_vues = [v.t for v in vues]
+
+    def cap_a(t: float) -> float | None:
+        """Cap à l'instant t : celui du suivi continu (image clé de la même suite, plus la rotation suivie depuis), sinon
+        les capteurs, sinon l'image clé la plus proche (à 1 s près) dont le cap est connu."""
+        k = min(range(max(0, bisect.bisect_left(temps_vues, t) - 1), min(len(vues), bisect.bisect_left(temps_vues, t) + 1)),
+                key=lambda j: abs(temps_vues[j] - t))
+        suivies = [i for i in range(n) if suivi_cap[i] and serie[cles[i]] == serie[k]]
+        if suivies and lacet_vue[k] is not None and abs(temps_vues[k] - t) <= 0.5:
+            i = min(suivies, key=lambda i: abs(instants[i] - t))
+            return (caps[i] + ecart(lacet_vue[k], lacet_vue[cles[i]])) % 360
+        c = cap_capteur(t)
+        if c is not None:
+            return c
+        connues = [i for i in range(n) if caps[i] is not None and abs(instants[i] - t) <= 1.0]
+        return caps[min(connues, key=lambda i: abs(instants[i] - t))] if connues else None
+
+    # Les phrases qui désignent un mur (« ce mur », « le mur de gauche ») : à cet instant, la caméra vise un mur.
+    designations = [(ph, designation(ph.texte)) for ph in entrees.phrases]
+
+    def instant_de(ph: Phrase, d: Designation | None) -> float:
+        return ph.t_debut + (ph.t_fin - ph.t_debut) * (d.debut / max(1, len(ph.texte)) if d else 0.5)
+
+    vises: dict[str, list[float]] = defaultdict(list)  # pièce -> caps des murs désignés
+    for ph, d in designations:
+        if d is not None and not d.rang and (c := cap_a(instant_de(ph, d))) is not None:
+            vises[piece_de[cle_proche(instant_de(ph, d))] or ""].append((c + d.decalage) % 360)
+
+    # Murs : les quatre directions de chaque pièce. Avec la boussole, les murs des pièces sont parallèles : l'axe est celui
+    # du logement, estimé sur toutes les pièces (étape 13 ; étape 12 : l'axe de la pièce U variait de 40° d'un calcul à
+    # l'autre, selon ses images retenues). Une pièce que l'axe du logement explique mal garde le sien.
     murs: dict[str, Mur] = {}
     axes: dict[str, float] = {}
     elements_etat = _elements_de(entrees.etat)
+    caps_pieces: dict[str, list[float]] = {}
     for p in resultat_pieces:
-        caps_piece = [caps[i] for i in range(n) if piece_de[i] == p.nom and caps[i] is not None]
+        # Les images clés sont prises en balayant : leurs caps disent peu de l'axe. Un mur désigné, ou décrit par
+        # l'assistant pendant qu'il le filmait, le dit bien mieux : il compte triple.
+        caps_piece = [caps[i] for i in range(n) if piece_de[i] == p.nom and caps[i] is not None] + vises[p.nom] * 3
         if not relatif:
             caps_piece += [e["cap"] for e in elements_etat if e["type"] == "mur" and e["cap"] is not None
                            and _normaliser(e["piece"] or "") == _normaliser(p.nom)] * 3
+        caps_pieces[p.nom] = caps_piece
+    tous_caps = [c for liste in caps_pieces.values() for c in liste]
+    axe_logement = _axe(tous_caps) if tous_caps and source_cap == "boussole" else None
+    for p in resultat_pieces:
+        caps_piece = caps_pieces[p.nom]
         if caps_piece and source_cap != "inconnu":
-            p.axe = axes[p.nom] = _axe(caps_piece)
+            axe = _axe(caps_piece)
+            if axe_logement is not None and _score_axe(caps_piece, axe_logement)[0] >= AXE_LOGEMENT * _score_axe(caps_piece, axe)[0]:
+                axe = axe_logement
+            p.axe = axes[p.nom] = axe
 
     def mur_vise(piece: str | None, cap: float | None) -> Mur | None:
         if piece is None or cap is None or piece not in axes:
@@ -852,19 +988,13 @@ def construire_carte(entrees: Entrees, arbitre: Arbitre | None = None) -> Carte:
     for cle, ts in vus.items():
         murs[cle].vu = _intervalles(ts, 3.0)
 
-    def cle_proche(t: float) -> int:
-        proches = [i for i in range(n) if abs(instants[i] - t) <= 1.5 and vues[cles[i]].exploitable]
-        return min(proches or range(n), key=lambda i: abs(instants[i] - t))
-
-    def cap_a(t: float) -> float | None:
-        """Cap à l'instant t : capteurs, sinon l'image clé la plus proche (à 1 s près) dont le cap est connu."""
-        c = cap_capteur(t)
-        if c is not None:
-            return c
-        connues = [i for i in range(n) if caps[i] is not None and abs(instants[i] - t) <= 1.0]
-        return caps[min(connues, key=lambda i: abs(instants[i] - t))] if connues else None
-
-    # 8. Éléments de l'assistant et ancrage des phrases.
+    # 8. Éléments de l'assistant et ancrage des phrases. Un mur désigné par sa place (« le mur de gauche ») : sans boussole,
+    # son cap est celui de la caméra décalé, comme pendant la visite (avec la boussole, l'assistant l'a noté décalé).
+    decalage_de: dict[str, float] = {}
+    for ph, d in designations:
+        for x in ph.elements:
+            if d is not None and d.decalage:
+                decalage_de.setdefault(x, d.decalage)
     elements: dict[str, dict] = {}
     for e in elements_etat:
         if e["type"] not in ("mur", "fenetre", "porte", "emetteur"):
@@ -872,25 +1002,41 @@ def construire_carte(entrees: Entrees, arbitre: Arbitre | None = None) -> Carte:
         t = e["t_image"] if e["t_image"] is not None else e["t"]
         piece_vue = piece_de[cle_proche(t)]
         cap = e["cap"] if e["cap"] is not None and not relatif else cap_a(t)
+        if cap is not None and (e["cap"] is None or relatif):
+            cap = (cap + decalage_de.get(e["id"], 0.0)) % 360
         mur = mur_vise(piece_vue, cap) if e["type"] in ("mur", "fenetre", "porte") else None
         elements[e["id"]] = {"piece_dite": e["piece"], "piece_vue": piece_vue, "cap": None if cap is None else round(cap, 1),
                              "mur": mur.id if mur else None, "nom": e["nom"], "t": round(t, 2)}
     ancrages: list[Ancrage] = []
-    for ph in entrees.phrases:
-        m = DESIGNATION.search(ph.texte)
-        t = ph.t_debut + (ph.t_fin - ph.t_debut) * (m.start() / max(1, len(ph.texte)) if m else 0.5)
+    montres: dict[str, list[str]] = defaultdict(list)  # murs de chaque pièce, dans l'ordre où il les a montrés
+    for ph, d in designations:
+        t = instant_de(ph, d)
         i = cle_proche(t)
         piece = piece_de[i] if abs(instants[i] - t) <= 1.5 else None
         cap = cap_a(t)
-        mur = mur_vise(piece, cap)
+        if d is not None and d.rang:
+            # « Le deuxième mur » : le deuxième qu'il a montré dans la pièce, pas celui que vise la caméra en le disant ;
+            # sinon, le deuxième des murs que l'assistant a notés dans la pièce.
+            notes = [elements[e["id"]]["mur"] for e in sorted(elements_etat, key=lambda e: e["t"])
+                     if e["type"] == "mur" and elements.get(e["id"], {}).get("mur") and elements[e["id"]]["piece_vue"] == piece]
+            ordre = montres[piece] if len(montres[piece]) >= d.rang else list(dict.fromkeys(notes))
+            mur = murs.get(ordre[d.rang - 1]) if len(ordre) >= d.rang else None
+            cap = mur.cap if mur is not None else None
+        else:
+            if cap is not None and d is not None:
+                cap = (cap + d.decalage) % 360
+            mur = mur_vise(piece, cap)
+            if d is not None and mur is not None and mur.id not in montres[piece]:
+                montres[piece].append(mur.id)
         murs_assistant = [x for x in ph.elements if elements.get(x, {}).get("mur")]
-        if not murs_assistant or mur is None or not m:
+        if not murs_assistant or mur is None or d is None:
             accord = "sans objet"
         elif all(elements[x]["mur"] == mur.id for x in murs_assistant):
             accord = "oui"
         else:
             accord = "non : " + ", ".join(f"{x} = {elements[x]['mur']}" for x in murs_assistant if elements[x]["mur"] != mur.id)
-        ancrages.append(Ancrage(t, ph.texte, bool(m), piece, cap, mur.id if mur else None, ph.elements, accord))
+        ancrages.append(Ancrage(t, ph.texte, d is not None, piece, cap, mur.id if mur else None, ph.elements, accord,
+                                d.par if d else ""))
 
     # Questions pour l'écran de validation : on demande plutôt que de fusionner à tort.
     questions: list[str] = []
@@ -919,6 +1065,13 @@ def construire_carte(entrees: Entrees, arbitre: Arbitre | None = None) -> Carte:
     for mur, ids in par_mur.items():
         if len(ids) > 1:
             questions.append(f"{' et '.join(ids)} visent le même mur ({mur}) : même mur, ou deux murs du même côté ?")
+    # Étape 13 : le DPE se décrit par côté. Des murs tournés de près de 45° par rapport au nord : leur côté (nord ou
+    # est…) se joue à quelques degrés de boussole, on le demande (une fois pour le logement).
+    douteux = sorted({("le logement" if axe == axe_logement else f"« {nom} »", axe) for nom, axe in axes.items()
+                      if not relatif and abs(axe - 45) < AXE_DOUTE})
+    for qui, axe in douteux:
+        questions.append(f"Murs de {qui} tournés de {axe:.0f}° par rapport au nord : le côté de chaque mur (nord ou est, "
+                         "sud ou ouest) est à confirmer.")
     return Carte(entrees.source, vues[-1].t - vues[0].t, len(vues), n, suivi, len(racines), len(liens), source_cap,
                  resultat_pieces, sorted(murs.values(), key=lambda m: m.id), _intervalles(
                      [t for a, b in passages_non_nommes for t in (a, b)], 3.0), ancrages, elements, questions, arbitrage,
@@ -948,16 +1101,23 @@ def _passage(a: float, b: float) -> str:
 
 
 def _elements_de(etat: dict | None) -> list[dict]:
-    """Éléments de l'état de l'assistant, avec leur pièce, leur instant, leur image et leur cap (s'il a été mesuré)."""
+    """Éléments de l'état de l'assistant, avec leur pièce, leur instant, leur image et leur cap (s'il a été mesuré).
+    Étape 13 : murs et ouvertures sont ceux du logement (« enveloppe », avec les pièces où ils ont été vus), les
+    radiateurs ceux du logement ; les états d'avant rangeaient tout par pièce."""
+    etat = etat or {}
+    enveloppe = etat.get("enveloppe") or {}
+    sources = [(e, p["nom"]) for p in etat.get("pieces", []) for e in p.get("elements", [])]
+    sources += [(e, (e.get("pieces") or [None])[0]) for cle in ("murs", "murs_interieurs", "fenetres")
+                for e in enveloppe.get(cle) or []]
+    sources += [(e, None) for e in (etat.get("logement") or {}).get("elements") or [] if e.get("type") == "emetteur"]
     elements = []
-    for p in (etat or {}).get("pieces", []):
-        for e in p.get("elements", []):
-            orientation = e.get("orientation") or {}
-            image = e.get("image") or ""
-            m = re.match(r"^(\d+(?:\.\d+)?)\.jpg$", image)
-            elements.append({"id": e["id"], "type": e["type"], "piece": e.get("piece") or p["nom"], "t": float(e.get("t") or 0),
-                             "t_image": float(m.group(1)) if m else None, "cap": orientation.get("cap_brut"),
-                             "nom": e.get("nom") or e.get("description") or ""})
+    for e, piece in sources:
+        orientation = e.get("orientation") or {}
+        image = e.get("image") or ""
+        m = re.match(r"^(\d+(?:\.\d+)?)\.jpg$", image)
+        elements.append({"id": e["id"], "type": e["type"], "piece": e.get("piece") or piece, "t": float(e.get("t") or 0),
+                         "t_image": float(m.group(1)) if m else None, "cap": orientation.get("cap_brut"),
+                         "point": orientation.get("point") or "", "nom": e.get("nom") or e.get("description") or ""})
     return elements
 
 
@@ -1047,14 +1207,23 @@ def analyser_verdicts(texte: str, noms: dict[str, str]) -> list[Verdict]:
 
 def consolider(etat: dict, carte: Carte) -> dict:
     """État de l'assistant vu par la carte : une seule pièce par endroit (pièces fusionnées), murs nommés par leur repère
-    et leur cap, revisites et questions. L'état d'origine n'est pas modifié."""
+    et leur cap, revisites et questions. Étape 13 : les murs et fenêtres du logement (« enveloppe ») reçoivent ce que la
+    carte en a vu, dont le côté filmé ; un côté filmé différent du côté noté devient une question. L'état d'origine
+    n'est pas modifié."""
     sortie = copy.deepcopy(etat)
     pieces_carte = {_normaliser(p.nom): p for p in carte.pieces}
+    enveloppe = sortie.get("enveloppe") or {}
+    parois = [e for cle in ("murs", "murs_interieurs", "fenetres") for e in enveloppe.get(cle) or []]
+
+    def vus_dans(p: dict) -> list[dict]:
+        """Les éléments de la pièce, et ceux du logement qui y ont été vus (étape 13)."""
+        return [*p.get("elements", []), *(e for e in parois if p["nom"] in (e.get("pieces") or []))]
+
     # Pièces de l'assistant qui sont le même endroit qu'une autre sur la carte (ex. « Pièce 1 » puis « Séjour ») :
     # fusionnées, jamais deux pièces pour le même endroit.
     destination: dict[str, str] = {}
     for p in sortie.get("pieces", []):
-        vus = Counter(carte.elements[e["id"]]["piece_vue"] for e in p.get("elements", [])
+        vus = Counter(carte.elements[e["id"]]["piece_vue"] for e in vus_dans(p)
                       if e["id"] in carte.elements and carte.elements[e["id"]]["piece_vue"])
         if _normaliser(p["nom"]) not in pieces_carte and vus:
             vu, nb = vus.most_common(1)[0]
@@ -1071,6 +1240,9 @@ def consolider(etat: dict, carte: Carte) -> dict:
                 continue  # créés d'office : la pièce cible a déjà les siens
             e["piece"] = piece_cible["nom"]
             piece_cible["elements"].append(e)
+        for e in parois:
+            if source in (e.get("pieces") or []):
+                e["pieces"] = list(dict.fromkeys(piece_cible["nom"] if x == source else x for x in e["pieces"]))
         sortie["pieces"].remove(piece_source)
         fusions.append(f"« {source} » est le même endroit que « {piece_cible['nom']} » : fusionnées.")
     for p in sortie.get("pieces", []):
@@ -1079,24 +1251,38 @@ def consolider(etat: dict, carte: Carte) -> dict:
                       "sejours": pc.sejours if pc else 0, "revisitee": bool(pc and pc.revisitee),
                       "corrections": pc.corrections if pc else []}
         for e in p.get("elements", []):
-            info = carte.elements.get(e["id"])
-            if not info:
-                continue
-            e["carte"] = {k: info[k] for k in ("piece_vue", "mur", "cap")}
-            if info["mur"] and e["type"] == "mur":
-                nom_mur = info["mur"].split(" · ")[-1]
-                repere = e.get("repere") or _repere(e.get("nom") or "")
-                e["carte"]["nom"] = (f"le {nom_mur}" if nom_mur.startswith("mur ") else f"le mur {nom_mur}") + \
-                    (f", {repere}" if repere else "")
-            if info["piece_vue"] and _normaliser(info["piece_vue"]) != _normaliser(p["nom"]):
-                e["carte"]["a_verifier"] = f"noté dans « {p['nom']} », mais filmé dans « {info['piece_vue']} »"
+            _annoter(e, carte, [p["nom"]])
+    questions = list(carte.questions)
+    for e in parois:
+        _annoter(e, carte, e.get("pieces") or [])
+        note, filme = (e.get("orientation") or {}).get("point"), (e.get("carte") or {}).get("cote")
+        if note and filme and note != filme and not (e.get("type") == "mur" and e.get("interieur")):
+            questions.append(f"{e.get('nom') or e.get('description') or e['id']} ({e['id']}) : noté côté {note}, filmé côté "
+                             f"{filme} : lequel ?")
     sortie["carte"] = {
         "source": carte.source, "cap": carte.cap, "fusions": fusions,
         "pieces": [{"nom": p.nom, "nommee": p.nommee, "passages": [[round(a, 1), round(b, 1)] for a, b in p.passages],
                     "sejours": p.sejours, "revisitee": p.revisitee} for p in carte.pieces],
-        "questions": carte.questions,
+        "questions": questions,
     }
     return sortie
+
+
+def _annoter(e: dict, carte: Carte, lieux: list[str]) -> None:
+    """Ce que la carte a vu de cet élément : pièce, mur visé et cap ; pour un mur, son nom par son cap et son repère ;
+    avec la boussole, le côté filmé ; et s'il a été filmé ailleurs que là où il a été noté."""
+    info = carte.elements.get(e["id"])
+    if not info:
+        return
+    e["carte"] = {k: info[k] for k in ("piece_vue", "mur", "cap")}
+    nom_mur = info["mur"].split(" · ")[-1] if info["mur"] else ""
+    if nom_mur and not nom_mur.startswith("mur "):
+        e["carte"]["cote"] = nom_mur  # « nord » : avec la boussole (sans elle, « mur A » ne dit pas de côté)
+    if nom_mur and e["type"] == "mur":
+        repere = e.get("repere") or _repere(e.get("nom") or "")
+        e["carte"]["nom"] = (f"le {nom_mur}" if nom_mur.startswith("mur ") else f"le mur {nom_mur}") + (f", {repere}" if repere else "")
+    if info["piece_vue"] and lieux and _normaliser(info["piece_vue"]) not in {_normaliser(x) for x in lieux}:
+        e["carte"]["a_verifier"] = f"noté dans « {' », « '.join(lieux)} », mais filmé dans « {info['piece_vue']} »"
 
 
 def _repere(nom: str) -> str:

@@ -274,3 +274,52 @@ def test_video_001_une_seule_piece():
     carte = construire_carte(Entrees(vues, "video-001", [], [], []))
     assert len(carte.pieces) == 1  # une seule pièce filmée : jamais coupée en deux
     assert carte.cap == "relatif (suivi de la vidéo)" and len(carte.murs) >= 3
+
+
+# --- Étape 13 : « le mur de gauche », « le deuxième mur », boussole bruitée, état par côté -------------------------------
+
+
+def test_mur_designe_par_sa_place_ou_son_rang(tournage):
+    nord, est = tournage.instant_face("Séjour", "nord"), tournage.instant_face("Séjour", "est")
+    sud = tournage.instant_face("Séjour", "sud")
+    phrases = [Phrase(nord, nord + 0.3, "ce mur c'est de la brique"), Phrase(nord, nord + 0.3, "le mur de gauche est en parpaing"),
+               Phrase(nord, nord + 0.3, "sur ma droite une fenêtre"), Phrase(est, est + 0.3, "celui derrière moi donne sur le couloir"),
+               Phrase(sud, sud + 0.3, "le deuxième mur est isolé")]  # le deuxième montré : celui de gauche
+    capteurs = [Mesure(c["t"], c["cap"]) for c in tournage.capteurs]
+    carte = construire_carte(Entrees(vues_de(tournage), "synthèse", capteurs, NOMS, phrases))
+    assert [(a.par, a.mur) for a in carte.ancrages] == [
+        ("ce", "Séjour · nord"), ("de gauche", "Séjour · ouest"), ("sur ma droite", "Séjour · est"),
+        ("celui derrière", "Séjour · ouest"), ("deuxième mur", "Séjour · ouest")]
+
+
+@pytest.mark.parametrize("graine", [1, 3])
+def test_boussole_bruitee_une_mesure_par_seconde(tournage, graine):
+    """Une mesure de boussole par seconde, à ±20° (vieux téléphone, ou pièce perturbée) : l'axe des murs est celui du
+    logement, recalé sur toutes les mesures, et chaque phrase tombe sur le bon mur."""
+    import random
+
+    rng = random.Random(graine)
+    capteurs = [Mesure(c["t"], (c["cap"] + rng.gauss(0, 20)) % 360) for c in tournage.capteurs[::10]]
+    carte = construire_carte(Entrees(vues_de(tournage), "synthèse", capteurs, NOMS, phrases_de(tournage)))
+    assert [a.mur for a in carte.ancrages] == ["Séjour · nord", "Séjour · ouest", "Cuisine · sud", "Séjour · nord", "Cuisine · est"]
+    assert len({p.axe for p in carte.pieces}) == 1 and min(carte.pieces[0].axe, 90 - carte.pieces[0].axe) < 15
+
+
+def test_etat_par_cote_consolide():
+    """Étape 13 : murs et fenêtres sont ceux du logement. Ils reçoivent ce que la carte en a vu ; la pièce « Pièce 1 »,
+    même endroit que le séjour, est fusionnée ; un côté filmé différent du côté noté devient une question."""
+    mur = {"id": "M1", "type": "mur", "nom": "le mur ouest", "pieces": ["Pièce 1"], "orientation": {"point": "ouest"}, "t": 2.0}
+    fenetre = {"id": "F1", "type": "fenetre", "nom": "la fenêtre ouest", "pieces": ["Pièce 1", "Séjour"], "support": "M1",
+               "orientation": {"point": "ouest"}, "t": 3.0}
+    etat = {"pieces": [{"nom": "Pièce 1", "elements": []}, {"nom": "Séjour", "elements": []}],
+            "enveloppe": {"murs": [mur], "murs_interieurs": [], "fenetres": [fenetre]}, "logement": {"elements": []}}
+    carte = Carte("essai", 60.0, 10, 10, 1.0, 2, 5, "boussole", [PieceCarte("Séjour", True, [(0.0, 60.0)], 10)], [], [], [],
+                  {"M1": {"piece_dite": "Pièce 1", "piece_vue": "Séjour", "cap": 2.0, "mur": "Séjour · nord", "nom": "", "t": 2.0},
+                   "F1": {"piece_dite": "Pièce 1", "piece_vue": "Séjour", "cap": 5.0, "mur": "Séjour · nord", "nom": "", "t": 3.0}}, [])
+    sortie = consolider(etat, carte)
+    assert [p["nom"] for p in sortie["pieces"]] == ["Séjour"]
+    m1, f1 = sortie["enveloppe"]["murs"][0], sortie["enveloppe"]["fenetres"][0]
+    assert m1["pieces"] == ["Séjour"] and f1["pieces"] == ["Séjour"]
+    assert (m1["carte"]["cote"], m1["carte"]["nom"]) == ("nord", "le mur nord")
+    assert sortie["carte"]["questions"] == ["le mur ouest (M1) : noté côté ouest, filmé côté nord : lequel ?",
+                                            "la fenêtre ouest (F1) : noté côté ouest, filmé côté nord : lequel ?"]
