@@ -298,9 +298,11 @@ Chaque étape a un livrable vérifiable. On ne passe à la suivante que si le cr
 > - **Prochaine étape recommandée : V1.** 3 à 5 vidéos tournées selon [protocole-tournage.md](protocole-tournage.md), en fichier original et non par WhatsApp, avec mesures laser et croquis relevés à part comme vérité terrain. En parallèle : E2 (test d'injection des pièces par Hermes).
 > - **Assistant vocal en direct** (demande de Noah, 22/10, 02-capture-video.md § 3.6) :
 >   - Une IA voit le flux et pose les questions manquantes pendant le tournage, avec la checklist DPE comme état tenu par notre serveur.
->   - Prototype **V1bis** sur une pièce, avec Gemini Live : **rapide, sans SLAM ni GPU**, faisable **en parallèle de V1**.
->   - Il demande un compte payant chez le fournisseur et l'accord sur l'envoi des données (questions Q7 et Q8 de 02-capture-video.md).
->   - Coût estimé : environ 0,01 à 0,05 $ par minute de tournage.
+>   - **Cerveau : Claude** (décision de Noah, pas de Gemini ni d'OpenAI). Chaîne sur notre serveur : fin de phrase → transcription faster-whisper → Claude Haiku 5.5 (vision + outils, en streaming) → synthèse vocale Piper → oreillette.
+>   - Latence visée 2 à 4 s, probablement avec un GPU pour la transcription. Analyse finale par Sonnet 5.5.
+>   - Prototype **V1bis** sur une pièce : **rapide, sans SLAM**, faisable **en parallèle de V1**.
+>   - Il demande une **clé API Anthropic** (facturée à l'usage, distincte de l'abonnement Claude Max) et l'accord sur l'envoi d'images et de texte (questions Q7, Q8 et Q9 de 02-capture-video.md).
+>   - Coût Claude estimé : moins de 0,01 $ par minute de tournage. Le vrai poste est le serveur voix, à dimensionner.
 > - Leçons du 1er test (`samples/video-001`, 22/10) :
 >   - vidéo recompressée par WhatsApp et sans capteurs ;
 >   - mouvement trop rapide ;

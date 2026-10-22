@@ -1,6 +1,6 @@
 # DiagAuto — 02. Capture terrain par vidéo continue (tout téléphone, calcul serveur)
 
-*Version du 22/10/2026 (4e). Elle intègre le retour de Noah sur le 1er test vidéo (`samples/video-001`) et l'assistant vocal en direct (§ 3.6). Complète [01-cadrage.md](01-cadrage.md) ; liste des données : [checklist-dpe.md](checklist-dpe.md) ; fiche de tournage : [protocole-tournage.md](protocole-tournage.md).*
+*Version du 22/10/2026 (5e). Elle intègre le retour de Noah sur le 1er test vidéo (`samples/video-001`) et l'assistant vocal en direct avec Claude comme cerveau (§ 3.6). Complète [01-cadrage.md](01-cadrage.md) ; liste des données : [checklist-dpe.md](checklist-dpe.md) ; fiche de tournage : [protocole-tournage.md](protocole-tournage.md).*
 
 ## Le principe
 
@@ -16,6 +16,7 @@
    - Pendant le tournage, une IA regarde le flux et parle au diagnostiqueur, dans une oreillette.
    - Elle pose les questions manquantes (« ce mur avec la télé, quelle épaisseur ? ») et signale ce qui manque (« il manque l'isolation d'un mur de la chambre 1 »).
    - Elle **ne fait que poser des questions et noter les réponses**, elle n'affirme rien d'invisible.
+   - **Cerveau : Claude (API Anthropic)**, avec nos propres briques voix (transcription et synthèse vocale) sur notre serveur.
    - Le calcul 3D lourd reste fait ensuite sur le serveur.
 6. Ensuite viennent, comme avant :
    - les données administratives (devis + API RNB, IGN, BDNB, DPE ADEME) ;
@@ -184,42 +185,61 @@ Rappel : une erreur d'échelle de 2 % donne environ 4 % d'erreur sur les surface
 
 Il **n'affirme jamais** une donnée invisible (« ce mur fait 20 cm ») : il demande. Les réponses restent des valeurs « proposées », avec l'extrait audio comme preuve, et passent par l'écran de validation.
 
-**Architecture temps réel**
+**Décision de Noah (22/10/2026) : le cerveau est Claude (API Anthropic).** Pas de Gemini ni d'OpenAI. L'API Claude n'a pas de mode voix ou vidéo temps réel : elle reçoit du texte et des images, et répond en texte, en continu (« streaming »). On construit donc **une chaîne** : nos briques voix (open source, sur notre serveur) + Claude pour comprendre et décider.
+
+**Architecture temps réel en chaîne**
 
 ```
 Téléphone (PWA)
  ├─ Enregistrement LOCAL haute qualité (1080p + audio + capteurs) ──► envoi après coup ──► chaîne 3D serveur (§ 3.1–3.5)
- └─ Flux LIVE léger : audio 16 kHz + 1 image/s (JPEG ~640 px)
-        │  (V1bis : connexion directe du navigateur avec jeton éphémère ;
-        │   V2 : WebRTC vers notre relais, Pipecat ou LiveKit Agents, open source, hébergé en France ou dans l'UE)
+ └─ Flux LIVE léger vers NOTRE serveur (WebSocket, ou WebRTC en V2) : audio 16 kHz en continu + 1 image/s (JPEG ~500 px)
         ▼
-   Modèle temps réel (Gemini Live ou OpenAI Realtime)
-        │  appels d'outils
+ NOTRE serveur (France ou UE)
+   1. Détection de fin de phrase (VAD)
+   2. Transcription de la phrase (faster-whisper, lexique métier)
+   3. Images : celle de l'instant de la phrase + 1 ou 2 images précédentes, parmi les images reçues à 1 par seconde
+   4. Claude Haiku 5.5, en streaming : vision + transcription + état checklist (préfixe en cache)
+         ├─ outils → « état checklist » du dossier (enregistrer_reponse, piece_courante…)
+         └─ texte court (question suivante)
+   5. Synthèse vocale française de la 1re phrase dès qu'elle est écrite (Piper ou autre, sur notre serveur)
         ▼
-   NOTRE serveur : « état checklist » du dossier (même schéma que le Dossier terrain v1)
+ Oreillette du diagnostiqueur
 ```
 
-- **Le relais côté serveur (V2)** :
-  - garde les clés d'API ;
-  - tient l'état et journalise toute la conversation ;
-  - permet de **changer de fournisseur** sans toucher à l'application ;
-  - tolère mieux un réseau mobile instable (WebRTC).
-- Débit du flux live : de quelques centaines de kbit/s à environ 1 Mbit/s selon le transport. C'est compatible avec la 4G.
+Deux types d'appels à Claude :
 
-**Comparatif des deux fournisseurs** (pages officielles consultées le 22/10/2026, prix en dollars par million de jetons)
-
-| | **Gemini Live** (`gemini-3.8-live`, `gemini-3.1-flash-live-preview`) | **OpenAI Realtime** (`gpt-realtime-2.1`, `-mini`) |
+| Appel | Quand | Ce que fait Claude |
 |---|---|---|
-| Vidéo | **Oui, nativement** : images JPEG, au plus 1 par seconde | **Pas de flux vidéo** : des images envoyées une à une dans la conversation |
-| Transport navigateur | WebSocket. Connexion directe possible avec **jeton éphémère**. WebRTC via des partenaires (LiveKit, Pipecat). | **WebRTC natif** avec clé éphémère (recommandé par OpenAI) ; WebSocket côté serveur |
-| Durée de session | Audio + vidéo : **2 min sans option**, connexion d'environ 10 min. Il faut activer la compression du contexte et la reprise de session (jeton de reprise valable 2 h). | Non indiquée |
-| Outils (checklist) | `gemini-3.8-live` : appels de fonction **asynchrones**. `3.1-flash-live` : séquentiels seulement. | Appels d'outils pris en charge |
-| Prix affichés | Audio entrée 3 $, image/vidéo 1 $, audio sortie 12 $. Google indique **≈ 0,005 $/min** d'écoute, **≈ 0,002 $/min** de vidéo, **≈ 0,018 $/min** de parole de l'IA. | Flagship : audio entrée 32 $, sortie 64 $, image 5 $. Mini : 10 $ / 20 $ / 0,80 $. Pas de prix à la minute officiel. |
-| Données | Version payante : **contenus non utilisés pour améliorer les produits** (la version gratuite, si). Résidence UE non indiquée. | Points d'accès « résidence des données » à +10 %. Rétention : à vérifier. |
-| Statut | **Préversion** (« preview ») | Disponible (GA) |
-| Latence | Pas de chiffre officiel : **à mesurer** | Pas de chiffre officiel : **à mesurer** |
+| **Réponse** | Juste après une phrase du diagnostiqueur | Enregistre les valeurs dites (outil, avec citation). Pose éventuellement **une** question courte. Une confirmation « noté » est rendue par un **bip**, pas par une phrase, pour gagner du temps. |
+| **Veille** | En tâche de fond, toutes les ~10 s et à chaque changement de pièce | Regarde les dernières images et ce qui manque, et **met une question en attente**. Elle est posée au prochain silence, jamais en coupant la parole. |
 
-**Recommandation : Gemini Live pour V1bis.** Il voit la vidéo nativement, coûte environ 5 fois moins cher et accepte des appels d'outils asynchrones. OpenAI Realtime sert d'alternative, à comparer une demi-journée si le temps le permet. Un équivalent 100 % open source auto-hébergé en temps réel (voix + vision) n'est pas réaliste à court terme ; on le réévaluera plus tard pour la souveraineté.
+**Analyse finale** (après envoi de la vidéo complète) : un modèle plus fort, **Claude Sonnet 5.5** (ou **Opus 5.5** pour les cas difficiles), consolide la transcription complète, les images clés et l'ancrage 3D. Il prépare l'écran de validation et les questions a posteriori. Ce traitement n'est pas urgent : l'API par lots (−50 %) est possible.
+
+**Briques voix recommandées** (licences vérifiées sur les pages officielles le 22/10/2026)
+
+| Brique | Choix | Licence / remarque |
+|---|---|---|
+| Orchestration de la chaîne | **Pipecat** (open source, a déjà des modules VAD, Whisper, Anthropic, Piper) ou code maison léger pour V1bis | Licence à confirmer avant usage commercial |
+| Fin de phrase (VAD) | **Silero VAD** (< 1 ms par segment de 30 ms sur un cœur de processeur) | Fichier LICENSE : MIT ; mais le badge du README indique CC BY-NC : **à lever avant usage commercial**. Alternative : VAD de WebRTC. |
+| Transcription | **faster-whisper** (MIT) + modèle **whisper-large-v3-turbo** (MIT, bien plus rapide que large-v3, qualité légèrement moindre). Transcription phrase par phrase, découpée par la VAD. | Alternative française : **Voxtral Mini 3B** (Mistral, Apache-2.0, environ 9,5 Go de GPU). |
+| Synthèse vocale française | **Piper** avec la voix **fr_FR-siwis** (données CC BY 4.0, attribution). Rapide sur processeur. | Le moteur MIT d'origine est archivé ; la suite est sous GPL-3.0 (utilisable sur notre serveur, pas dans une app distribuée). Éviter fr_FR-tom (AGPLv3). Alternatives : **Kokoro** (Apache-2.0, une seule voix française), **MeloTTS** (code MIT, licence des voix à vérifier). |
+| Cerveau live | **Claude Haiku 5.5** (`claude-haiku-5-5`), le plus rapide de la gamme, avec vision et outils | |
+| Cerveau analyse finale | **Claude Sonnet 5.5** (`claude-sonnet-5-5`), ou **Opus 5.5** (`claude-opus-5-5`) | |
+
+**Atout pour la confidentialité** : la **voix ne quitte pas notre serveur**, puisque la transcription est faite chez nous. Seuls du texte et des images réduites sont envoyés à Anthropic.
+
+**Budget de latence** (objectif : **2 à 4 s** entre la fin de la phrase et le début de la réponse ; ce sont des estimations à **mesurer en V1bis**, aucun chiffre officiel)
+
+| Étape | Estimation | Comment réduire |
+|---|---|---|
+| Détection de la fin de phrase | 0,5 à 0,8 s de silence | Seuil réglable. Trop court, l'IA coupe la parole. |
+| Envoi de l'audio | 0,1 à 0,3 s | Audio envoyé en continu pendant que le diagnostiqueur parle. |
+| Transcription d'une phrase de 2 à 5 s | GPU : ~0,2 à 0,5 s ; processeur seul : ~1 à 3 s | Modèle turbo, calcul en int8, lexique métier. |
+| Claude Haiku 5.5 : premiers mots | ~0,5 à 1,5 s | Préfixe en cache. Images petites et préparées à l'avance. Réponse courte, en streaming. |
+| Synthèse de la 1re phrase + lecture | ~0,2 à 0,6 s | Synthèse phrase par phrase pendant que Claude continue d'écrire. |
+| **Total** | **≈ 1,5 à 3,5 s avec GPU ; ≈ 3 à 6 s sur processeur seul** | |
+
+Les questions de « veille » sont préparées à l'avance : elles ne subissent pas cette latence. Si le diagnostiqueur reparle pendant que l'IA parle, la voix de l'IA s'arrête aussitôt.
 
 **La checklist DPE comme état partagé**
 
@@ -264,11 +284,13 @@ Téléphone (PWA)
 | Vie privée (RGPD) | Vidéo continue d'un logement habité. | Floutage des visages, conservation limitée, hébergement en France ou dans l'UE. |
 | Sortie DPE vers LICIEL | Injection non prouvée. | Fiche DPE pré-remplie en attendant (01-cadrage.md). |
 | **Assistant live : réseau** | Cave, combles, zone blanche. | Mode hors réseau (§ 3.6) : enregistrement local et questions a posteriori. |
-| **Assistant live : latence** | Une réponse lente casse le rythme. | Mesurée en V1bis. Questions courtes. Le diagnostiqueur n'attend jamais l'IA pour continuer à filmer. |
+| **Assistant live : latence** | La chaîne a 5 étapes (fin de phrase, transcription, Claude, synthèse, lecture) qui s'additionnent. **2 à 4 s n'est atteignable qu'avec un GPU pour la transcription** ; sur processeur seul, plutôt 3 à 6 s. Le réseau mobile ajoute de l'incertitude. | Streaming à chaque étape. Préfixe Claude en cache. Images petites. Questions de veille préparées à l'avance. Bip au lieu de « c'est noté ». Le diagnostiqueur n'attend jamais l'IA pour continuer à filmer. **Chaque étape est mesurée en V1bis.** |
+| **Assistant live : seuil de fin de phrase** | Trop court, l'IA coupe la parole ; trop long, elle paraît lente. | Seuil réglable, testé avec Noah. Interruption immédiate de la voix de l'IA si le diagnostiqueur reparle. |
+| **Assistant live : serveur voix** | Transcription et synthèse doivent tourner pendant les heures de visite. Un GPU permanent est un coût fixe. | Un GPU partagé entre plusieurs visites simultanées, ou transcription sur processeur si la latence mesurée reste acceptable. |
 | **Assistant live : l'IA invente** | Elle « voit » un mur de 20 cm et l'affirme. | Consigne : questions seulement. Enregistrement **uniquement** par outil, avec citation du diagnostiqueur. Contrôle a posteriori : toute valeur sans citation est rejetée. |
 | **Assistant live : trop bavard** | Fatigue, distraction. | Plafond de questions par minute. Questions regroupées à la sortie de la pièce. Mode « silencieux » possible. |
-| **Assistant live : limites techniques** | Préversion (Gemini). Sessions de 2 min audio + vidéo sans option, connexion d'environ 10 min. | Compression du contexte, reprise de session et reconnexion automatique. Relais serveur pour pouvoir changer de fournisseur. |
-| **Assistant live : confidentialité** | Vidéo et voix d'un logement habité envoyées en direct à Google ou OpenAI (entreprises américaines). | Version payante uniquement (non utilisée pour l'entraînement chez Google). Contrat de traitement des données et résidence UE à vérifier. Information du propriétaire. Flux live en basse définition. |
+| **Assistant live : dépendance à Anthropic** | Panne, limites de débit, évolution des modèles. | La chaîne reste en mode hors réseau (§ 3.6) si Claude ne répond pas. Le modèle est un simple paramètre, et les modèles 5.5 restent disponibles au moins jusqu'en septembre–octobre 2027 (dates de retrait publiées). |
+| **Assistant live : confidentialité** | Images d'un logement habité envoyées en direct à Anthropic (entreprise américaine). Traitement « global » ou « US » seulement : **aucune option UE indiquée**. | La voix reste sur notre serveur, seuls texte et images réduites partent. D'après la documentation, les données API ne sont pas conservées par défaut et pas utilisées pour l'entraînement sans accord ; la « conservation zéro » est possible sur demande. Contrat de traitement des données (transfert hors UE) à vérifier par Hermes. Information du propriétaire. Floutage des visages avant envoi. |
 | **Assistant live : téléphone ancien** | Enregistrement 1080p + flux live + son en même temps : chauffe, batterie, saccades. | Testé en V1bis sur un téléphone ancien. Si besoin, enregistrement en 720p. |
 
 ## 5. Coût serveur approximatif par dossier
@@ -291,23 +313,40 @@ Ce sont des estimations, à mesurer en V1bis. Les prix de catalogue sous-estimen
 
 | Option | Calcul | Par minute | Visite de 15 min |
 |---|---|---|---|
-| **Gemini Live** (prix Google) | 0,005 $ d'écoute + 0,002 $ de vidéo + 0,018 $ × environ 20 % du temps où l'IA parle ≈ 0,011 $/min au catalogue ; réel estimé 1 à 5 fois plus | **≈ 0,01 à 0,05 $** | ≈ 0,15 à 0,75 $ |
-| **OpenAI Realtime** (`gpt-realtime-2.1`) | Pas de prix officiel à la minute. Mesures publiées par des tiers : environ 0,02 à 0,11 $/min pour l'audio, plus les images envoyées | **≈ 0,05 à 0,15 $** | ≈ 0,75 à 2,25 $ |
-| OpenAI Realtime **mini** | Tarifs environ 3 fois plus bas | ≈ 0,02 à 0,05 $ | ≈ 0,30 à 0,75 $ |
+Tarifs Anthropic officiels (22/10/2026, en dollars par million de tokens) :
 
-Avec Gemini, le **total par dossier passe donc d'environ 0,50–3 € à environ 0,70–4 €**.
+| Modèle | Entrée | Sortie | Lecture de cache |
+|---|---|---|---|
+| Claude Haiku 5.5 (prompts ≤ 100 000 tokens) | 0,10 $ | 0,50 $ | 0,01 $ |
+| Claude Sonnet 5.5 | 2 $ | 10 $ | 0,10 $ |
+| Claude Opus 5.5 | 4 $ | 20 $ | 0,20 $ |
+
+Une image coûte ⌈largeur/28⌉ × ⌈hauteur/28⌉ tokens : environ 350 à 600 tokens pour une image de 400×700 à 500×900 px. L'API par lots coûte 50 % moins cher.
+
+Hypothèse : environ 10 appels Haiku par minute (5 réponses + 5 veilles). Chaque appel comprend ~5 000 tokens en cache (consignes + checklist), ~3 000 tokens variables (état de la pièce, historique récent, 2 à 3 images) et ~150 tokens de sortie, soit environ 0,0004 $ par appel.
+
+| Poste | Calcul | Par minute | Visite de 15 min |
+|---|---|---|---|
+| **Claude Haiku 5.5 en direct** | ~10 appels × ~0,0004 $ | **≈ 0,003 à 0,01 $** | ≈ 0,05 à 0,15 $ |
+| (pour comparaison : Sonnet 5.5 en direct) | environ 20 fois plus cher, et plus lent | ≈ 0,08 à 0,20 $ | ≈ 1,2 à 3 $ — *non retenu pour le direct* |
+| **Analyse finale Claude Sonnet 5.5** | ~100 000 à 200 000 tokens en entrée (transcription + 100 à 200 images clés) + 10 000 à 20 000 en sortie | — | **≈ 0,30 à 0,60 $** par dossier (moitié avec l'API par lots ; environ double avec Opus 5.5) |
+| **Transcription + synthèse vocale** (notre serveur) | GPU partagé pendant les heures de visite (0,5 à 2 €/h × ~220 h/mois ≈ 110 à 440 €/mois), ou processeur seul (quelques dizaines d'€/mois, latence plus forte) | — | **Coût fixe** : ≈ 1 à 4 € par dossier à 100 dossiers/mois ; ≈ 0,2 à 0,9 € à 500 dossiers/mois |
+
+**Bilan** :
+- Claude coûte très peu, **moins de 1 $ par dossier** en tout (direct + analyse finale).
+- Le vrai poste est le **serveur voix** (transcription et synthèse), à dimensionner selon le volume.
+- Le total par dossier (chaîne 3D + assistant + analyse) reste de l'ordre de **1 à 5 €** au début, puis baisse avec le volume.
 
 Sources :
-- [tarifs Gemini](https://ai.google.dev/gemini-api/docs/pricing), [Live API](https://ai.google.dev/gemini-api/docs/live), [gestion de session](https://ai.google.dev/gemini-api/docs/live-api/session-management), [jetons éphémères](https://ai.google.dev/gemini-api/docs/live-api/ephemeral-tokens) ;
-- [tarifs OpenAI](https://developers.openai.com/api/docs/pricing), [Realtime](https://developers.openai.com/api/docs/guides/realtime), [Realtime WebRTC](https://developers.openai.com/api/docs/guides/realtime-webrtc) ;
-- estimations tierces OpenAI à la minute : [Forasoft](https://www.forasoft.com/blog/article/openai-realtime-api-pricing), [HackerNoon](https://hackernoon.com/openai-realtime-api-pricing-in-2026-real-world-data-from-4000-measured-sessions).
+- Anthropic : [tarifs](https://platform.claude.com/docs/en/about-claude/pricing), [modèles](https://platform.claude.com/docs/en/about-claude/models/overview), [vision](https://platform.claude.com/docs/en/build-with-claude/vision), [cache de prompt](https://platform.claude.com/docs/en/build-with-claude/prompt-caching), [streaming](https://platform.claude.com/docs/en/build-with-claude/streaming), [résidence des données](https://platform.claude.com/docs/en/manage-claude/data-residency), [conservation des données](https://platform.claude.com/docs/en/manage-claude/api-and-data-retention) ;
+- briques voix : [faster-whisper](https://github.com/SYSTRAN/faster-whisper), [whisper-large-v3-turbo](https://huggingface.co/openai/whisper-large-v3-turbo), [Silero VAD](https://github.com/snakers4/silero-vad), [Piper (suite GPL)](https://github.com/OHF-Voice/piper1-gpl), [voix Piper](https://huggingface.co/rhasspy/piper-voices), [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M), [MeloTTS](https://github.com/myshell-ai/MeloTTS), [Voxtral Mini](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507).
 
 ## 6. Plan de prototype
 
 | Étape | Contenu | Critère de réussite |
 |---|---|---|
 | **V1. Preuve : vidéo continue de 2 pièces avec aller-retour** | **Entrée** : 3 à 5 vidéos tournées selon [protocole-tournage.md](protocole-tournage.md) (pièce A → pièce B → retour en A → retour en B), avec 2 ou 3 téléphones, en fichier original. Le diagnostiqueur parle des murs pendant le film. Mesures laser et croquis numéroté relevés **à part**, comme vérité terrain. **Traitement** (script serveur, sans application) : carte 3D unique avec fermeture de boucle → découpage en pièces → plan coté + surfaces (échelle sans mesure dictée) → transcription → rattachement de chaque phrase à un mur. `video-001` sert de premier cas, dégradé. | **2 pièces reconnues, jamais 3 ou 4**, sur toutes les vidéos exploitables ; une vidéo trop dégradée doit être **signalée**, pas mal interprétée. **≥ 80 % des phrases rattachées au bon mur** ; les erreurs restantes signalées en orange. **Écart de surface ≤ 5 %** (objectif 3 %) sans mesure dictée. Temps et coût de calcul mesurés. Décision « on continue / on ajuste » avec Noah. |
-| **V1bis. Assistant vocal en direct sur une pièce** (rapide, **sans SLAM ni GPU**, en parallèle de V1) | Page web : caméra + micro → Gemini Live (jeton éphémère délivré par un petit serveur ; page servie en HTTPS, obligatoire pour la caméra). État checklist d'**une pièce** : murs (matériau, épaisseur, isolation, donne sur), fenêtres (menuiserie, vitrage, volets), émetteurs. Outils `enregistrer_reponse` / `champs_manquants`. Enregistrement local de la vidéo en parallèle. Test par Noah dans 2 ou 3 pièces, dont un téléphone ancien, avec oreillette. Comparaison rapide avec OpenAI Realtime si le temps le permet. | **Zéro valeur inventée** : toute valeur a une citation. ≥ 80 % des champs de la pièce remplis à la sortie de la pièce. Latence et coût par minute **mesurés**. Effet de la voix de l'IA sur l'enregistrement mesuré. Avis de Noah : « utile ou gênant ? ». |
+| **V1bis. Assistant vocal en direct sur une pièce** (rapide, **sans SLAM**, en parallèle de V1) | Page web (HTTPS, obligatoire pour la caméra) : caméra + micro → notre petit serveur Python. Chaîne : VAD Silero → faster-whisper (turbo) → **Claude Haiku 5.5** en streaming (image de l'instant + état checklist en cache + outils `enregistrer_reponse` / `champs_manquants` / `piece_courante`) → synthèse Piper (voix fr_FR-siwis) → oreillette. État checklist d'**une pièce** : murs (matériau, épaisseur, isolation, donne sur), fenêtres (menuiserie, vitrage, volets), émetteurs. Enregistrement local de la vidéo en parallèle. Test par Noah dans 2 ou 3 pièces, dont un téléphone ancien. **Deux configurations comparées** : transcription sur le processeur de ce PC, puis sur un GPU loué à l'heure. | **Zéro valeur inventée** : toute valeur a une citation. ≥ 80 % des champs de la pièce remplis à la sortie de la pièce. **Latence mesurée étape par étape**, objectif 2 à 4 s. Coût par minute mesuré. Effet de la voix de l'IA sur l'enregistrement mesuré. Avis de Noah : « utile ou gênant ? ». |
 | **V2. Logement complet** | Application web de capture (vidéo + voix + capteurs, retour en direct, **assistant live via relais serveur** si V1bis est concluant). Logement entier en une vidéo. Fenêtres et portes, orientation, ponts thermiques, plaques, Carrez par télémètre filmé. JSON « Dossier terrain v1 ». | Sur 3 logements : pièces correctes, part des champs de la checklist correctement pré-remplis, zéro valeur sans preuve, coût et temps mesurés. |
 | **V3. De bout en bout** | Administratif depuis le devis + API publiques, écran de validation, génération LICIEL (pièces + Carrez) via `diagauto.liciel_xml`, fiche DPE pré-remplie. Pilote sur 2–3 vraies visites, chronométrées. | Aucune ressaisie des pièces ni du Carrez. Temps total mesuré avant et après. |
 
@@ -319,7 +358,13 @@ Sources :
 - **Q4 — GPU.** Peut-on louer un GPU à l'heure pour V1, pour quelques euros ? Ce PC n'en a pas.
 - **Q5 — Sortie DPE.** Une fiche DPE pré-remplie à recopier est-elle acceptable pendant le prototype ?
 - **Q6 — BDNB.** Conditions d'accès à vérifier (Hermes).
-- **Q7 — Assistant live : compte et données.**
-  - Peut-on ouvrir un compte **payant** Google AI Studio (Gemini), et éventuellement OpenAI, pour V1bis ? La version gratuite de Gemini utilise les données pour améliorer les produits : à exclure.
-  - Accepte-t-on, pour le prototype, d'envoyer en direct l'image et la voix à Google ou OpenAI ? Hermes peut-il vérifier les contrats de traitement des données et la résidence UE ?
+- **Q7 — Clé API Anthropic.**
+  - Il faut une **clé API Anthropic**, à créer sur la Console Claude (platform.claude.com) avec des crédits. Elle est **facturée à l'usage, séparément de l'abonnement Claude Max** : l'abonnement ne donne pas accès à l'API.
+  - Qui crée le compte et la clé ? Quel plafond de dépense pour le prototype ? Quelques dollars suffisent pour V1bis.
+  - La clé reste sur notre serveur, jamais dans le téléphone.
+- **Q7 bis — Données.**
+  - Accepte-t-on d'envoyer à Anthropic des images réduites et du texte ? La voix, elle, reste chez nous.
+  - Le traitement se fait hors UE, puisque seules les options « global » et « US » existent.
+  - Hermes peut-il vérifier le contrat de traitement des données et la « conservation zéro » ?
+- **Q9 — Serveur voix.** Pour atteindre 2 à 4 s de délai, la transcription doit sans doute tourner sur un GPU. Accepte-t-on de louer un GPU à l'heure pour les tests, puis un GPU partagé pendant les heures de visite (de l'ordre de 100 à 450 € par mois) ?
 - **Q8 — Oreillette.** Les diagnostiqueurs acceptent-ils de porter une oreillette (filaire ou Bluetooth) pendant la visite ? Sinon, l'IA parle par le haut-parleur, avec plus d'écho dans l'enregistrement.

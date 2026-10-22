@@ -25,7 +25,15 @@
    - Elle pose les questions manquantes et signale les oublis ; elle n'affirme jamais une donnée invisible.
    - Chaque réponse est enregistrée par un outil, avec la citation du diagnostiqueur et l'horodatage.
    - L'état « checklist DPE » est tenu par NOTRE serveur, qui calcule ce qui manque.
-   - Fournisseur recommandé : Gemini Live (vidéo native, moins cher) ; alternative : OpenAI Realtime.
+   - **Cerveau : Claude (API Anthropic) — décision de Noah, pas de Gemini ni d'OpenAI.** L'API Claude n'a pas de voix ni de vidéo temps réel, d'où une chaîne sur notre serveur :
+     - fin de phrase (VAD) ;
+     - transcription faster-whisper avec lexique métier ;
+     - images de l'instant ;
+     - Claude Haiku 5.5 en streaming, avec outils et checklist en cache ;
+     - synthèse vocale française open source (Piper fr_FR-siwis ou équivalent) ;
+     - oreillette.
+   - Latence visée : 2 à 4 s. Un modèle plus fort (Sonnet 5.5, ou Opus 5.5) fait l'analyse finale après le tournage.
+   - Il faut une clé API Anthropic, facturée à l'usage, distincte de l'abonnement Claude Max.
    - Hors réseau : enregistrement local, puis questions a posteriori.
    - Le rattachement définitif des réponses aux murs et tout le calcul 3D restent faits ensuite sur le serveur.
 5. **Précision visée ~3–5 %** : suffisante pour le DPE. **Pour le Carrez/Boutin, la mesure laser fait foi** (télémètre filmé ou dicté) ; la vidéo sert de contrôle et de plan.
