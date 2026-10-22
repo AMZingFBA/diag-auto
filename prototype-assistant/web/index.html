@@ -16,7 +16,7 @@
       <h1>Assistant de visite</h1>
       <p class="aide">Filmez tout le logement en une seule vidéo, en parlant normalement. L'assistant vous pose dans l'oreillette les questions qui manquent pour le DPE. Il ne devine rien : il demande.</p>
       <p id="statut-serveur" class="aide">Connexion au serveur…</p>
-      <label>Pièce de départ (facultatif)
+      <label>Pièce de départ (facultatif : sans effet sur le DPE)
         <input id="piece" type="text" placeholder="ex. Séjour" autocomplete="off">
       </label>
       <label>Qualité de la vidéo
@@ -39,7 +39,7 @@
     <video id="camera" playsinline muted></video>
     <header class="bandeau">
       <span id="connexion" class="pastille" title="Connexion"></span>
-      <span id="piece-courante">Pièce : —</span>
+      <span id="piece-courante">DPE du logement</span>
       <span id="chrono">0:00</span>
     </header>
     <div class="jauge"><div id="taux"></div></div>
@@ -60,7 +60,7 @@
       <div id="latence" class="latence"></div>
       <div id="vous" class="vous"></div>
       <details id="manques-bloc" class="manques">
-        <summary id="manques-titre">Manques de la pièce</summary>
+        <summary id="manques-titre">Manques pour le DPE</summary>
         <ul id="manques"></ul>
       </details>
       <ul id="actions" class="actions"></ul>
@@ -78,9 +78,9 @@
         <button id="terminer" class="danger">Terminer</button>
       </div>
     </div>
-    <!-- Fiche de la pièce : chaque information, à compléter ou corriger d'un appui (en même temps qu'à l'oral). -->
+    <!-- Fiche du DPE du logement, par côté : chaque information, à compléter ou corriger d'un appui (comme à l'oral). -->
     <section id="fiche" class="fiche" hidden>
-      <header class="fiche-titre"><span id="fiche-piece">Pièce</span><button id="fermer-fiche" class="petit-bouton">Fermer</button></header>
+      <header class="fiche-titre"><span id="fiche-piece">DPE du logement</span><button id="fermer-fiche" class="petit-bouton">Fermer</button></header>
       <div id="fiche-contenu"></div>
     </section>
   </section>

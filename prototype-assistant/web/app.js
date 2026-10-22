@@ -259,17 +259,18 @@ function recevoir(m) {
   }
 }
 
+// Étape 13 : le DPE décrit le logement (ses côtés, ses équipements), pas une pièce ; la pièce dite n'est qu'un repère.
 function majEtat(m) {
-  $("piece-courante").textContent = `Pièce : ${m.piece || "—"}`;
+  $("piece-courante").textContent = `DPE du logement : ${Math.round((m.taux || 0) * 100)} %${m.piece ? ` · ${m.piece}` : ""}`;
   $("taux").style.width = `${Math.round((m.taux || 0) * 100)}%`;
   const liste = $("manques");
   liste.replaceChildren(...m.manques.map((texte) => Object.assign(document.createElement("li"), { textContent: texte })));
-  $("manques-titre").textContent = `Manques de la pièce (${m.manques.length}) — visite : ${m.nb_manques_visite}`;
+  $("manques-titre").textContent = `Manques pour le DPE (${m.nb_manques_visite})`;
 }
 
 // --- Questionnaire en direct ---------------------------------------------------------------------------------
 // Chaque question arrive avec ses réponses en boutons ; un appui vaut une réponse dite (le serveur l'applique et pose
-// aussitôt la question suivante). La fiche montre toute la pièce, à compléter ou corriger d'un appui.
+// aussitôt la question suivante). La fiche montre le DPE du logement par côté, à compléter ou corriger d'un appui.
 
 function boutonsReponse(conteneur, options, envoyer) {
   conteneur.replaceChildren(...options.map((o) => {
@@ -293,8 +294,7 @@ function afficherFiche() {
   const m = etat.dernierEtat;
   const contenu = $("fiche-contenu");
   if (!m || !m.checklist) return contenu.replaceChildren("La fiche apparaît dès que la visite a commencé.");
-  const piece = (m.checklist.pieces || []).find((p) => p.nom === m.piece);
-  $("fiche-piece").textContent = `Fiche : ${m.piece || "pièce"}`;
+  $("fiche-piece").textContent = "DPE du logement";
   const blocs = [];
   const ajouterElements = (titre, elements) => {
     const utiles = (elements || []).filter((e) => Object.values(e.champs || {}).some((c) => c.utile));
@@ -319,8 +319,22 @@ function afficherFiche() {
       }
     }
   };
-  ajouterElements(m.piece || "Pièce", piece ? piece.elements : []);
-  ajouterElements("Logement", m.checklist.logement ? m.checklist.logement.elements : []);
+  // Chaque côté : ses murs (et leurs parties), chacun suivi de ses fenêtres et portes.
+  const env = m.checklist.enveloppe || {};
+  const murs = env.murs || [];
+  const ouvertures = env.fenetres || [];
+  for (const cote of ["nord", "est", "sud", "ouest", ""]) {
+    const ici = murs.filter((e) => ((e.orientation && e.orientation.point) || "") === cote);
+    const titre = cote ? `Côté ${cote}` : "Côté à trouver";
+    ajouterElements(titre, ici.flatMap((mur) => [mur, ...ouvertures.filter((o) => o.support === mur.id)]));
+  }
+  const ids = new Set(murs.map((e) => e.id));
+  ajouterElements("Fenêtres et portes (mur à préciser)", ouvertures.filter((o) => !ids.has(o.support)));
+  ajouterElements("Plafond et plancher", [...(env.plafonds || []), ...(env.planchers || [])]);
+  ajouterElements("Équipements", m.checklist.logement ? m.checklist.logement.elements : []);
+  if (env.cotes_manquants && env.cotes_manquants.length) {
+    blocs.push(Object.assign(document.createElement("div"), { className: "petit", textContent: `Côtés pas encore décrits : ${env.cotes_manquants.join(", ")}` }));
+  }
   contenu.replaceChildren(...blocs);
 }
 
