@@ -280,6 +280,13 @@ class Session:
             asyncio.create_task(self._boucle_veille()),
         ]
 
+    async def ouvrir_visite(self) -> None:
+        """La première question du parcours (« Ce mur donne sur quoi ? »), dès que le téléphone est relié : posée par le
+        serveur seul, sans attendre Claude (prêt en 9 s environ) ni une première phrase. Visite de Noah du 22/10 au soir :
+        rien n'était dit pendant les 15 premières secondes."""
+        if self.questions.aucune() and not self.termine:
+            await self._question_du_parcours(time.monotonic(), None)
+
     @property
     def occupe(self) -> bool:
         """Une phrase est en cours de traitement ou en attente."""

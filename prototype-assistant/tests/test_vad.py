@@ -40,12 +40,32 @@ def test_bruit_court_ignore():
     assert [e.phrase for e in ev if e.type == "fin"] == [None]
 
 
+def syllabes(duree):
+    """Une voix : des syllabes de 0,2 s séparées de petits creux de 0,1 s (moins qu'une fin de phrase)."""
+    return [partie for _ in range(int(duree / 0.3)) for partie in ((0.2, 6000), (0.1, 0))]
+
+
 def test_phrase_trop_longue_coupee():
     d = DetecteurPhrases()
     d.reglages.duree_max_s = 3.0
-    ev = envoyer(d, son((0.5, 0), (7.0, 6000), (1.0, 0)))
+    ev = envoyer(d, son((0.5, 0), *syllabes(7.0), (1.0, 0)))
     phrases = [e.phrase for e in ev if e.type == "fin" and e.phrase]
     assert len(phrases) >= 2
+
+
+def test_bruit_fort_des_le_lancement_puis_une_phrase():
+    """Visite de Noah du 22/10 au soir : bruit de fond à −45 dB dès le lancement, au-dessus du seuil de départ. Avant, tout
+    était « parole » et la première phrase n'était coupée qu'au bout de 15 s ; le bruit est maintenant appris, et la
+    phrase dite ensuite est détectée seule, et close à temps."""
+    rng = np.random.default_rng(1)
+    fond = rng.normal(0, 185, int(9.0 * TAUX))  # −45 dB, continu
+    voix = son(*syllabes(1.5)).astype(float)
+    signal = fond.copy()
+    signal[int(5.0 * TAUX): int(5.0 * TAUX) + len(voix)] += voix
+    ev = envoyer(DetecteurPhrases(), signal.clip(-32768, 32767).astype("<i2"))
+    phrases = [e.phrase for e in ev if e.type == "fin" and e.phrase]
+    dite = [ph for ph in phrases if ph.t_debut < 6.0 < ph.t_fin]
+    assert len(dite) == 1 and dite[0].t_fin < 7.5 and dite[0].t_debut > 3.5
 
 
 def test_trou_dans_le_son_clot_la_phrase():

@@ -44,13 +44,13 @@ def test_visite_par_texte_puis_video_et_bilan(client, tmp_path):
     with client.websocket_connect("/ws") as ws:
         ws.send_json({"type": "debut", "piece": ""})
         statut = attendre(ws, "statut")
+        # Dès le lancement, sans attendre une phrase ni Claude (Noah, 22/10 au soir : 15 s de silence au début).
+        dire = attendre(ws, "dire", maximum=3)
+        assert dire["texte"] == "Ce mur donne sur quoi ?"
         ws.send_bytes(binaire(2, 1.0, b"\xff\xd8faux jpeg"))
         ws.send_bytes(binaire(1, 0.0, np.zeros(1600, "<i2").tobytes()))
         ws.send_json({"type": "texte", "texte": "ici c'est la cuisine"})
-        dire = attendre(ws, "dire")
-        assert dire["texte"] == "Ce mur donne sur quoi ?"
         attendre(ws, "etat")  # fin du traitement de la 1re phrase
-        ws.send_json({"type": "tts", "etat": "debut", "id": dire["id"]})
         ws.send_json({"type": "texte", "texte": "ce mur-là, brique, 30 cm, il donne sur l'extérieur"})
         actions = attendre(ws, "actions")
         assert actions["source"] == "extraction"  # notées tout de suite, sans attendre le cerveau
@@ -58,6 +58,7 @@ def test_visite_par_texte_puis_video_et_bilan(client, tmp_path):
         assert valeurs == {"materiau": "accepte", "epaisseur": "accepte", "donne_sur": "accepte"}
         question = attendre(ws, "dire")  # posée tout de suite par le parcours du serveur
         assert question["texte"] == "Ce mur est isolé ?" and question["latence_s"] >= 0
+        ws.send_json({"type": "tts", "etat": "debut", "id": question["id"]})
         etat = attendre(ws, "etat")
         assert etat["piece"] == "Cuisine" and etat["manques"][0] == "le mur extérieur : isolation"  # son nom parlant, jamais « le mur 1 »
         # Écrit à chaque changement : une visite jamais terminée (page fermée, serveur redémarré) garde son état.

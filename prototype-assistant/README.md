@@ -1045,7 +1045,18 @@ murs de la vraie visite sont reconnus et nommés comme avant (« le mur des 3 fe
 `tests/test_groupes.py`, `tests/test_carte.py` (« à gauche », « le deuxième mur », boussole bruitée, état par côté),
 `tests/test_pont_liciel.py` et, à la racine, `tests/test_pont.py`.
 
-Le prototype compte 310 tests (et le projet, à la racine, 654).
+**Retour de Noah le soir même : « quand on lance la vidéo, ça ne parle qu'au bout de 15 secondes »** (visite
+`20261022-211918`). Deux causes, corrigées :
+- la première question n'était posée qu'après la première phrase traitée. Elle part maintenant **dès que le téléphone est
+  relié** (« Ce mur donne sur quoi ? »), posée par le serveur seul, sans attendre Claude (prêt en 9 s environ) ;
+- la détection de fin de phrase (`assistant/vad.py`) partait d'un bruit de fond à −60 dB qu'elle n'apprenait que pendant
+  les silences. Ce soir-là, le bruit (téléphone manipulé) était à −45 dB dès le lancement, au-dessus du seuil : tout
+  passait pour de la parole, et la première phrase n'était coupée de force qu'au bout de 15 s. Le bruit de fond est
+  maintenant suivi en continu (les 10 % de moments les plus calmes des 2 dernières secondes : la parole a des creux, pas un
+  bruit continu). Sur le son de cette visite, « C'est là ? Que tu m'entends ? » est détecté seul, de 10,0 à 13,2 s, au
+  lieu d'un bloc de 0 à 15 s.
+
+Le prototype compte 311 tests (et le projet, à la racine, 654).
 
 ## Réglages (variables d'environnement)
 

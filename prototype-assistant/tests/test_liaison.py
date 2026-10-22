@@ -65,6 +65,7 @@ def test_battement_repondu_pendant_que_claude_reflechit(tmp_path):
     with TestClient(application(tmp_path, reflexion_s=2.0)) as client, client.websocket_connect("/ws") as ws:
         ws.send_json({"type": "debut", "piece": "Séjour"})
         attendre(ws, "statut")
+        assert attendre(ws, "dire")["texte"] == "Ce mur donne sur quoi ?"  # dès le lancement, par le serveur seul
         ws.send_json({"type": "texte", "texte": "C'est quoi un pont thermique ?"})
         debut = time.monotonic()
         ws.send_json({"type": "ping", "n": 1})

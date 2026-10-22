@@ -11,6 +11,7 @@ coupe proprement la phrase en cours.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -38,6 +39,11 @@ class ReglagesVad:
     # son) ; détecté comme un début de parole, il coupait la voix, et la réponse n'était jamais entendue.
     confirmation_s: float = 0.35
     confirmation_ia_parle_s: float = 0.6  # plus long quand l'assistant parle : son écho n'est pas une prise de parole
+    # Bruit de fond suivi même pendant la « parole » : les 10 % de trames les plus faibles des 2 dernières secondes. La
+    # parole a toujours des creux (entre les mots), pas un bruit continu. Visite de Noah du 22/10 au soir : bruit à −45 dB
+    # dès le lancement, au-dessus du seuil de départ (−48 dB) ; tout était « parole », le plancher ne s'adaptait jamais, et
+    # la première phrase n'était coupée qu'au bout de 15 s.
+    fenetre_fond_s: float = 2.0
 
 
 @dataclass
@@ -79,6 +85,7 @@ class DetecteurPhrases:
         self._t_debut_phrase = 0.0
         self._trames_parlees = 0  # trames de parole depuis le début de la phrase (pour la confirmer)
         self._confirmee = False
+        self._niveaux: deque[float] = deque(maxlen=max(1, int(self.reglages.fenetre_fond_s * TAUX / TRAME)))
 
     @staticmethod
     def niveau_db(trame: np.ndarray) -> float:
@@ -106,6 +113,10 @@ class DetecteurPhrases:
     def _trame(self, trame: np.ndarray, t: float) -> list[Evenement]:
         r = self.reglages
         db = self.niveau_db(trame)
+        if db > -100:  # en dessous : silence numérique (micro pas encore ouvert), pas un bruit de fond
+            self._niveaux.append(db)
+        if len(self._niveaux) * 2 >= self._niveaux.maxlen and (fond := float(np.percentile(self._niveaux, 10))) > self.plancher_db:
+            self.plancher_db += 0.1 * (fond - self.plancher_db)
         seuil = max(r.seuil_absolu_db, self.plancher_db + r.marge_db)
         if self.ia_parle:
             seuil += r.marge_ia_parle_db

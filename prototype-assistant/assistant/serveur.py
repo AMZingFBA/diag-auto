@@ -220,6 +220,8 @@ def creer_app(reglages: Reglages | None = None) -> FastAPI:
                             await envoyer({"type": "statut", "session": session.id, "reprise": reprise, **(await statut())})
                             await session.envoyer_etat()
                             await session.rattraper()  # questions calculées pendant la coupure
+                            if not reprise:
+                                await session.ouvrir_visite()  # la première question, dès le lancement
                         elif session is not None:
                             await session.recevoir_controle(controle)
                 except (WebSocketDisconnect, RuntimeError):
