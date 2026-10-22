@@ -204,6 +204,9 @@ La commande `diagauto inspect` affiche ces contrôles.
 ### 2.2 Les briques
 
 **① App terrain.**
+
+> **Mis à jour le 22/10/2026** : décision de Noah. L'app reste une **PWA qui marche sur n'importe quel téléphone**, même ancien et sans LiDAR, et **sans dépendance à Apple RoomPlan**. Elle sert surtout à **filmer chaque pièce** en enregistrant la voix et les capteurs (boussole, gyroscope). **Tout le calcul est fait sur notre serveur** : reconstruction 3D, surfaces, orientation, équipements, transcription. Voir [02-capture-video.md](02-capture-video.md). Les mesures laser du Carrez sont **dictées**, ce qui évite la dépendance au Bluetooth.
+
 - Application web installable (PWA) qui fonctionne sur iPhone, Android et tablette Windows, **hors ligne** (stockage local, synchronisation au retour du réseau).
 - Saisie rapide pensée pour une main : pièces par boutons (Séjour, Chambre n…), mesures, hauteur sous plafond, cases « < 1,80 m », « annexe », photos rattachées à la pièce.
 - **Dictée** : la transcription est transformée en champs **proposés**, que le diagnostiqueur valide d'un geste. Jamais de remplissage silencieux. Si une info manque, le champ reste vide et signalé.
@@ -283,6 +286,20 @@ Imports officiels utiles (rang 2) :
 
 Chaque étape a un livrable vérifiable. On ne passe à la suivante que si le critère est atteint.
 
+> **Mise à jour du 22/10/2026 : nouvel objectif produit** (décision de Noah, détail dans [02-capture-video.md](02-capture-video.md)). Le MVP avance désormais sur **trois volets** :
+>
+> | Volet | Contenu | Étapes |
+> |---|---|---|
+> | **A. Sortie LICIEL** | Lire et générer les tables du dossier : pièces, puis Carrez, puis DPE. | E1 ✅, E2 → E4 (tableau ci-dessous, inchangées) |
+> | **B. Capture vidéo** | PWA sur tout téléphone (vidéo + voix + boussole) → **calcul serveur open source** (reconstruction 3D COLMAP/GLOMAP, mise à l'échelle par mesure laser dictée ou mire A4, murs / ouvertures / surfaces / orientation / ponts thermiques, IA vision, transcription) → JSON « Dossier terrain v1 » → écran de validation. Précision visée 3–5 % : bonne pour le DPE ; **Carrez = mesure laser dictée**. | V1 Preuve : vidéo d'une pièce → plan coté + surfaces → V2 Capture complète d'un logement → V3 De bout en bout (02-capture-video.md § 6) |
+> | **C. Données administratives** | Reprise du devis + enrichissement depuis l'adresse (RNB, altitude IGN, BDNB, ancien DPE ADEME). Le diagnostiqueur confirme seulement. | Intégré à V3 ; le service peut démarrer dès qu'on connaît le format du devis (Q2 de 02-capture-video.md) |
+>
+> - Tout se développe sur le PC actuel, sans Mac ni iPhone particulier. La reconstruction 3D demande un GPU : ce PC n'en a pas, donc CPU (lent) ou GPU loué à l'heure.
+> - **Prochaine étape recommandée : V1** (vidéos de 5 à 10 pièces réelles + mesures laser de référence), en parallèle de E2 (test d'injection des pièces par Hermes).
+> - L'étape E5 (saisie web manuelle) est **remplacée par V2** ; le pilote E6 devient V3.
+> - Pour le DPE, tant que l'injection des tables n'est pas prouvée, la sortie est une **fiche de saisie pré-remplie**.
+> - Coût serveur estimé : **≈ 0,50 à 2,50 € par dossier** (ordre de grandeur, à mesurer en V1).
+
 | Étape | Contenu | Livrable / critère de réussite | Prérequis |
 |---|---|---|---|
 | **E0** ✅ | Cadrage (ce document) | Questions de la section 4 tranchées | — |
@@ -290,10 +307,10 @@ Chaque étape a un livrable vérifiable. On ne passe à la suivante que si le cr
 | **E2** | **Preuve d'injection n°1 : les pièces.** Je génère, dans le dépôt, une version modifiée de `Table_General_Pieces_Toutes` (+ 2 pièces). **Hermes** la pose dans un dossier **jetable**, LICIEL fermé, et vérifie le résultat (H2 : aucune écriture de ma part sous `C:\LICIEL_*`). Variantes à tester par Hermes : 1 bis (« Terrain › Importation ») et 1 ter (import d'un `.LDossier`). | LICIEL ouvre le dossier, les pièces apparaissent, on peut enregistrer et rouvrir sans erreur. On sait aussi s'il faut remplir `Pieces_Visites` nous-mêmes. | Hermes disponible pour le test. La version d'essai suffit. |
 | **E3** | **Cartographie Carrez par saisie contrôlée.** Noah ou Hermes saisit dans LICIEL 4 cas : pièce rectangulaire simple ; pièce en L (2 ajouts) ; comble avec retrait < 1,80 m ; cave/balcon annexe. Comparaison des fichiers avant/après. | Chaque colonne de `Z_Carrez_*` documentée (`Surface_1..4`, `Data1..12`, `Code_Chk_Habitable`). On sait si LICIEL **recalcule** `Resume`/`General` à l'ouverture. | **Licence LICIEL** (N1) |
 | **E4** | **Générateur Carrez** : modèle JSON → 3 tables Carrez (+ pièces), avec tests unitaires des règles | Pour 3 logements réels, le rapport Carrez édité par LICIEL après injection est **identique** à celui obtenu par saisie manuelle (surfaces, commentaires, totaux). | E1 à E3 |
-| **E5** | **Saisie terrain v0 + injecteur.** Page web mobile hors ligne (pièces, mesures, HSP, cases < 1,80 m / annexe, photos), export JSON. Commande `diagauto injecter <n° dossier> <fichier.json>`. | Un diagnostiqueur saisit un logement sur téléphone, puis injecte en moins d'une minute au bureau. | E4, choix du matériel (N4) |
+| ~~**E5**~~ | *Remplacée par V1–V3 (capture vidéo, voir 02-capture-video.md). L'injecteur en ligne de commande reste à faire dans le volet A.* **Saisie terrain v0 + injecteur.** Page web mobile hors ligne (pièces, mesures, HSP, cases < 1,80 m / annexe, photos), export JSON. Commande `diagauto injecter <n° dossier> <fichier.json>`. | Un diagnostiqueur saisit un logement sur téléphone, puis injecte en moins d'une minute au bureau. | E4, choix du matériel (N4) |
 | **E6** | **Pilote réel** : 2–3 visites avec un diagnostiqueur Imodiag | Temps de ressaisie mesuré avant et après, liste des irritants, décision « on continue / on ajuste ». | N10 |
 
-**Après le MVP**, dans cet ordre indicatif, à confirmer avec Noah (N6) :
+**Après le MVP**, dans cet ordre indicatif, à confirmer avec Noah (N6). *Depuis le 22/10, la dictée et la mesure sont couvertes par le volet B (vidéo + voix) ; les mesures laser du Carrez sont dictées, et le télémètre Bluetooth devient un simple confort éventuel.*
 1. Dictée vocale → champs (avec validation humaine).
 2. Télémètre Bluetooth.
 3. Description des pièces (sols/murs/plafonds), qui sert ensuite à l'amiante, au CREP et aux termites.
