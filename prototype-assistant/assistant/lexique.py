@@ -43,6 +43,13 @@ CORRECTIONS: list[tuple[str, str]] = [
     (r"\bv[ée][ -]?(?:emm?e|èm|m)[ -]?c[ée]\b", "VMC"),
     (r"\bhydro[ -]?b[ée]?\b", "hygro B"),
     (r"\bict[ée]rieur\b", "extérieur"),  # « Ictérieur » : « Extérieur » mal transcrit (test de Noah)
+    # Rejeu du test réel du 22/10/2026 (étape 5) : « des combles bleus », « comblots » pour « combles perdus » ;
+    # « le mur y embrique » pour « est en brique » ; « le plafond des pays isolés », « plafonds DPE isolé »,
+    # « dépa isolés » pour « le plafond (n')est pas isolé ».
+    (r"\bcombles? bleus?\b", "combles perdus"),
+    (r"\bcomblots?\b", "combles"),
+    (r"\b(?:y |est )?embriques?\b", "est en brique"),
+    (r"\b(?:des pays|DPE|d[ée]pa|d[ée]p[ée])\s+(isol)", r"est pas \1"),
 ]
 
 # Phrases que Whisper invente sur du silence ou du bruit (connu en français).

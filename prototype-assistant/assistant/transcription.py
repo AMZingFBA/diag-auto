@@ -1,12 +1,14 @@
 """Transcription d'une phrase, sur notre machine : la voix ne quitte pas le serveur.
 
 Deux moteurs :
-- faster-whisper (licence MIT), par défaut ; le modèle est chargé une seule fois (téléchargé au
-  premier lancement dans le cache Hugging Face : environ 500 Mo pour « small ») ;
-- en option, le FastConformer français de NVIDIA (CC-BY-4.0) en version ONNX, via onnx-asr (MIT).
-  Mesuré sur l'enregistrement de Noah (22/10/2026) : 0,05 s par phrase au lieu de 2,3 s, sans
-  invention de valeurs métier sur du silence, mais des mots parfois abîmés et aucun vocabulaire
-  métier possible. À essayer en direct avant d'en faire le moteur par défaut.
+- le FastConformer français de NVIDIA (CC-BY-4.0) en version ONNX, via onnx-asr (MIT) : 0,05 s par
+  phrase sur ce PC au lieu de 2,3 s, sans invention de valeurs métier sur du silence, mais sans
+  vocabulaire métier possible ;
+- faster-whisper (licence MIT), guidé par le vocabulaire métier, mais ~2 s par phrase sur ce
+  processeur quelle que soit sa longueur (le modèle traite toujours 30 s de son).
+Par défaut (étape 5, « rapide ») : le FastConformer pour chaque phrase, Whisper en second avis
+seulement quand les règles n'ont pas compris. Les modèles sont chargés une seule fois (téléchargés au
+premier lancement dans le cache Hugging Face).
 """
 
 from __future__ import annotations
@@ -152,8 +154,39 @@ class TranscripteurFastConformer:
         return "" if est_hallucination(texte) else corriger(texte)
 
 
+class TranscripteurRapide:
+    """Mode par défaut depuis l'étape 5 : le FastConformer transcrit chaque phrase (0,05 s au lieu de 2,3 s sur ce
+    PC). Whisper, plus lent mais guidé par le vocabulaire métier, ne donne un second avis que pour une phrase que
+    les règles n'ont pas comprise ; il dit aussi si ce n'était que du bruit (son garde-fou sur le silence).
+
+    Mesuré sur le test réel de Noah (19 phrases, rejeu du 22/10/2026) : le FastConformer a mieux transcrit que
+    Whisper « Et le mur est en brique » (Whisper : « embrique »), « Le plafond n'est pas isolé » (« des pays
+    isolés »), « Il te faut quoi d'autre comme information ? » (« d'être ») ; moins bien « combles perdus »
+    (« comblots », rattrapé par le lexique)."""
+
+    def __init__(self, whisper: TranscripteurWhisper) -> None:
+        self.rapide = TranscripteurFastConformer()
+        self.whisper = whisper
+
+    @property
+    def nom(self) -> str:
+        return f"FastConformer FR (rapide) + {self.whisper.nom} en second avis"
+
+    def prechauffer(self) -> None:
+        self.rapide.prechauffer()
+        self.whisper.prechauffer()
+
+    def transcrire(self, audio: np.ndarray) -> str:
+        return self.rapide.transcrire(audio)
+
+    def second_avis(self, audio: np.ndarray) -> str:
+        """Transcription Whisper (vocabulaire métier) ; chaîne vide si ce n'était probablement pas de la parole."""
+        return self.whisper.transcrire(audio)
+
+
 def creer_transcripteur(mode: str, modele: str, appareil: str, faisceau: int):
-    """« whisper », « fastconformer », « simulation » ou « auto » (whisper s'il est installé)."""
+    """« rapide » (FastConformer + Whisper en second avis), « whisper », « fastconformer », « simulation » ou « auto »
+    (rapide si les deux moteurs sont installés, sinon whisper)."""
     if mode == "simulation":
         return TranscripteurSimulation()
     if mode == "fastconformer":
@@ -163,8 +196,17 @@ def creer_transcripteur(mode: str, modele: str, appareil: str, faisceau: int):
     try:
         import faster_whisper  # noqa: F401
     except ImportError:
-        if mode == "whisper":
+        if mode in ("whisper", "rapide"):
             raise
         log.warning("faster-whisper n'est pas installé : transcription en simulation")
         return TranscripteurSimulation()
+    if mode in ("rapide", "auto"):
+        try:
+            import onnx_asr  # noqa: F401
+        except ImportError:
+            if mode == "rapide":
+                raise
+            log.warning("onnx-asr n'est pas installé : transcription par Whisper seul (plus lente)")
+        else:
+            return TranscripteurRapide(TranscripteurWhisper(modele, appareil, faisceau))
     return TranscripteurWhisper(modele, appareil, faisceau)

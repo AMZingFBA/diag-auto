@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .cerveau import CerveauClaudeCode, trouver_claude
@@ -31,6 +31,7 @@ from .transcription import creer_transcripteur
 log = logging.getLogger(__name__)
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 IDENTIFIANT = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{6}$")
+NOM_IMAGE = re.compile(r"^\d{5}\.\d{2}\.jpg$")  # images/<instant>.jpg d'une visite
 TAILLE_MAX_VIDEO = 4 * 1024**3
 
 
@@ -139,6 +140,15 @@ def creer_app(reglages: Reglages | None = None) -> FastAPI:
         if not fichier.exists():
             raise HTTPException(status_code=404, detail="bilan pas encore disponible")
         return JSONResponse(json.loads(fichier.read_text(encoding="utf-8")))
+
+    @app.get("/api/sessions/{ident}/images/{nom}")
+    async def image(ident: str, nom: str, code: str = "") -> FileResponse:
+        """Vignette d'un élément, montrée avec la question qui le concerne (« le mur affiché »)."""
+        verifier_code(code)
+        chemin = dossier_session(ident) / "images" / nom
+        if not NOM_IMAGE.match(nom) or not chemin.is_file():
+            raise HTTPException(status_code=404, detail="image inconnue")
+        return FileResponse(chemin, media_type="image/jpeg")
 
     @app.websocket("/ws")
     async def liaison(websocket: WebSocket, code: str = "") -> None:

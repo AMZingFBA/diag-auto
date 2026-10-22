@@ -57,6 +57,7 @@ class Contexte:
     derniere_question: str = ""  # « M1.isolation : Il est isolé ? »
     questions_recentes: list[str] = field(default_factory=list)  # codes des champs déjà demandés récemment
     valeurs_attendues: list[str] = field(default_factory=list)  # réponses possibles à la dernière question
+    autre_transcription: str = ""  # second avis de Whisper, quand il entend autre chose que le moteur rapide
 
 
 @dataclass
@@ -85,6 +86,9 @@ Règles absolues :
 - Ne suppose JAMAIS que tout est identique. « 9 radiateurs électriques basse température et 1 électrique haute température » = deux éléments distincts (nombre 9 et nombre 1), chacun avec ses propres valeurs. Une exception dans un groupe déjà décrit (« dont une en bois », « tous sauf un », « un des radiateurs est électrique ») : action scinder (la partie séparée garde les valeurs du groupe, sauf ce qui est dit pour elle) puis compter pour le reste du groupe. « Toutes les fenêtres sont en bois, sauf celle de la chambre qui est en PVC » : action regle (elle vaut aussi pour les fenêtres décrites plus tard).
 - Le diagnostiqueur peut corriger ou préciser à tout moment, même un élément d'avant ou d'une autre pièce (« le premier mur, en fait c'est du parpaing », « le radiateur de la cuisine est électrique ») : note la nouvelle valeur sur cet élément (le serveur garde l'ancienne et signale la contradiction).
 - Date et température des radiateurs : ne les demande jamais, mais note-les toujours quand elles sont dites, pour chaque groupe concerné.
+- Ne dis JAMAIS « le mur 3 », « le quatrième mur » ni aucun numéro : le diagnostiqueur ne sait pas lequel c'est. Désigne un élément par son nom entre « » dans l'état (« le mur côté voisin ») ou par « ce mur » s'il vient d'en parler. Dans les actions, utilise toujours l'identifiant (M3).
+- « Le reste donne sur l'intérieur ou les voisins », « tous les autres murs… » : enregistre donne_sur pour les murs sans valeur, puis cloturer mur. Un mur sur un local chauffé (autre pièce, voisin) n'a besoin de rien d'autre : ne demande ni matériau ni épaisseur.
+- Une valeur invraisemblable (un mur de 30 m de long dans une pièce) n'est pas notée telle quelle : le serveur la contrôle et propose la lecture probable.
 - Le serveur note déjà automatiquement ce qu'il reconnaît (liste « Déjà noté automatiquement ») : ne le renote pas, complète seulement le reste.
 - Ne fais JAMAIS répéter. Jamais « pardon », « répétez », « pas compris », « pas clair ».
 - Les diagnostiqueurs parlent vite, avec un accent, hésitent ou bégaient, et la transcription est souvent fautive. Interprète TOUJOURS la phrase par rapport à la dernière question posée, à ses valeurs possibles (fournies) et à ce qui est filmé : cherche la valeur possible qui se prononce le plus pareil. Exemples : question « à eau ou électrique ? », transcription « Oh ! est chaude » = « eau chaude » = radiateur à eau ; « ictérieur » = extérieur ; « besse » ou « bas » = basse température ; « o chaudi » = eau chaude ; « parpin » = parpaing ; « l'allaine » = la laine ; « AVMC » = la VMC ; « pévécé » = PVC.
@@ -157,6 +161,8 @@ def texte_message(contexte: Contexte, chemins_images: list[Path] | None = None) 
             lignes.append("Valeurs possibles pour cette question : " + ", ".join(contexte.valeurs_attendues))
         lignes.append("Déjà noté automatiquement à partir de cette phrase : " + ("; ".join(contexte.deja_note) or "rien"))
         lignes.append(f"Nouvelle phrase du diagnostiqueur [{horodatage(debut)}–{horodatage(fin)}] : « {contexte.phrase} »")
+        if contexte.autre_transcription:
+            lignes.append(f"Autre transcription possible de la même phrase : « {contexte.autre_transcription} »")
     else:
         lignes.append("Veille : pas de nouvelle phrase. Que faut-il signaler ?")
     return "\n".join(lignes)

@@ -29,6 +29,7 @@ const etat = {
   voix: null,
   verrouEcran: null,
   bilan: null,
+  cap: null, // cap de la caméra en degrés (boussole), si le téléphone le donne
 };
 
 function maintenant() {
@@ -172,6 +173,9 @@ function recevoir(m) {
       break;
     case "dire":
       $("question").textContent = m.texte;
+      // Vignette de l'élément concerné (« le mur affiché ») : l'image filmée quand il a été décrit.
+      $("vignette").hidden = !m.image;
+      if (m.image) $("vignette").src = m.image + (etat.code ? `?code=${encodeURIComponent(etat.code)}` : "");
       $("question").classList.toggle("muet", m.muet || etat.muet);
       $("question").hidden = false;
       $("latence").textContent = m.latence_s != null ? `Réponse ${secondes(m.latence_s)} après la fin de votre phrase` : "";
@@ -287,6 +291,35 @@ function envoyerImage() {
   toile.getContext("2d").drawImage(video, 0, 0, toile.width, toile.height);
   const t = maintenant();
   toile.toBlob((blob) => blob && envoyerBinaire(TYPE_IMAGE, t, blob), "image/jpeg", 0.7);
+  if (etat.cap != null) envoyerJson({ type: "capteurs", t, cap: Math.round(etat.cap) });
+}
+
+// --- Boussole : direction filmée, pour nommer les murs (« le mur nord ») ---------------------------
+
+function capCamera(alpha, beta, gamma) {
+  // Cap (0 = nord) de la direction visée par la caméra arrière, d'après l'orientation absolue du téléphone
+  // (formule de la spécification W3C « DeviceOrientation Event », calcul du cap de la boussole).
+  const rad = Math.PI / 180;
+  const [x, y, z] = [beta * rad, gamma * rad, alpha * rad];
+  const vx = -Math.cos(z) * Math.sin(y) - Math.sin(z) * Math.sin(x) * Math.cos(y);
+  const vy = -Math.sin(z) * Math.sin(y) + Math.cos(z) * Math.sin(x) * Math.cos(y);
+  let cap = Math.atan(vx / vy);
+  if (vy < 0) cap += Math.PI;
+  else if (vx < 0) cap += 2 * Math.PI;
+  return cap / rad;
+}
+
+function autoriserBoussole() {
+  // iPhone : l'accès à la boussole se demande pendant l'appui sur « Démarrer ». Refusée : les murs seront nommés autrement.
+  if (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === "function") {
+    DeviceOrientationEvent.requestPermission().catch(() => {});
+  }
+  const surOrientation = (e) => {
+    if (typeof e.webkitCompassHeading === "number" && !Number.isNaN(e.webkitCompassHeading)) etat.cap = e.webkitCompassHeading;
+    else if ((e.absolute || e.type === "deviceorientationabsolute") && e.alpha != null) etat.cap = capCamera(e.alpha, e.beta, e.gamma);
+  };
+  window.addEventListener("deviceorientationabsolute", surOrientation);
+  window.addEventListener("deviceorientation", surOrientation);
 }
 
 // --- Enregistrement local de la vidéo complète ------------------------------------------------
@@ -307,6 +340,7 @@ function demarrerEnregistrement(qualite) {
 
 async function demarrer() {
   debloquerVoix();
+  autoriserBoussole();
   etat.code = $("code").value;
   const qualite = $("qualite").value;
   $("demarrer").disabled = true;

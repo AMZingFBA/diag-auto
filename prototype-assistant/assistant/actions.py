@@ -39,7 +39,7 @@ def _piece(checklist: Checklist, action: dict, t: float) -> str | None:
     return checklist.piece_pour(nom, t) if nom else None
 
 
-_AVEC_CITATION = ("enregistrer_reponse", "marquer_sans_objet", "cloturer", "copier", "scinder", "compter", "regle", "exception")
+_AVEC_CITATION = ("enregistrer_reponse", "marquer_sans_objet", "cloturer", "copier", "scinder", "compter", "regle", "exception", "murs")
 
 
 def appliquer_action(checklist: Checklist, action: dict, t: float, phrases: list[str]) -> dict:
@@ -56,9 +56,15 @@ def appliquer_action(checklist: Checklist, action: dict, t: float, phrases: list
                 resultat["raison"] = "pièce déduite de l'image, à confirmer"
         elif outil == "signaler_element":
             source = "voix" if _texte(action, "source") == "voix" else "image"
-            element = checklist.signaler_element(_texte(action, "type"), _texte(action, "description"), t, source=source,
-                                                 nombre=_nombre(action), piece=_piece(checklist, action, t))
+            if _texte(action, "element_id"):  # élément déjà connu : son repère ou son mur (« il y a 3 fenêtres dessus »)
+                element = checklist.completer(_texte(action, "element_id"), _texte(action, "repere"), _texte(action, "support"))
+            else:
+                element = checklist.signaler_element(_texte(action, "type"), _texte(action, "description"), t, source=source,
+                                                     nombre=_nombre(action), piece=_piece(checklist, action, t),
+                                                     repere=_texte(action, "repere"), support=_texte(action, "support"))
             resultat["element"] = element.id
+        elif outil == "murs":  # « cette pièce fait 4 murs »
+            checklist.compter_murs(_nombre(action) or 0, citation, t)
         elif outil in ("enregistrer_reponse", "marquer_sans_objet"):
             commun = dict(
                 type_element=_texte(action, "type"), champ=_texte(action, "champ"), citation=citation, t=t,

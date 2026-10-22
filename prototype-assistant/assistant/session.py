@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import statistics
 import time
 import wave
@@ -20,11 +21,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Awaitable, Callable
 
+from . import parcours, plausibilite
 from .actions import appliquer
 from .cerveau import Contexte, Decision, ImageInstant
-from .checklist import Checklist, cle_texte, horodatage
-from . import parcours
-from .extraction import VOCABULAIRE, Cible, extraire
+from .checklist import Checklist, Element, cle_texte, horodatage
+from .extraction import VOCABULAIRE, Cible, extraire, valeur_normalisee
+from .noms import orientation
 from .garde import Questions, champ_rempli
 from .simulation import CerveauSimulation
 from .reglages import Reglages
@@ -33,6 +35,11 @@ from .vad import TAUX, DetecteurPhrases, Phrase, ReglagesVad
 log = logging.getLogger(__name__)
 
 Envoyer = Callable[[dict], Awaitable[None]]
+
+# Ce qui manque, dit simplement (« il te faut quoi d'autre ? » « Pour ce mur, il me manque le matériau et l'épaisseur. »).
+LIBELLES_ORAUX = {"donne_sur": "sur quoi il donne", "materiau": "le matériau", "epaisseur": "l'épaisseur",
+                  "isolation": "l'isolation", "menuiserie": "la menuiserie", "vitrage": "le vitrage", "volets": "les volets",
+                  "type": "le type", "energie": "l'énergie", "annee": "l'année", "systeme": "le système"}
 
 # Phrase assez longue pour que Claude la relise en arrière-plan après les règles (description libre).
 MOTS_POUR_COMPLEMENT = 8
@@ -52,6 +59,25 @@ def valeurs_attendues(cible: Cible | None) -> list[str]:
         return ["oui", "non"]
     valeurs = list(dict.fromkeys(v for _, v in VOCABULAIRE.get((cible.type, cible.champ), [])))
     return ["oui", "non", *valeurs] if cible.genre == "confirmation" else valeurs
+
+
+def _de(nom: str) -> str:
+    """« le mur côté cave » → « du mur côté cave », « la fenêtre » → « de la fenêtre », « les 3 fenêtres » → « des 3 fenêtres »."""
+    for article, contraction in (("le ", "du "), ("les ", "des ")):
+        if nom.startswith(article):
+            return contraction + nom[len(article):]
+    return "de " + nom
+
+
+def _normaliser(actions) -> list[dict]:
+    """Valeurs proposées par Claude ramenées au vocabulaire du serveur (« toilettes » → « local chauffé : WC »),
+    pour que les règles (paroi sur local chauffé, questions utiles) s'y appliquent."""
+    normalisees = []
+    for a in actions:
+        if a.get("outil") == "enregistrer_reponse" and isinstance(a.get("valeur"), str):
+            a = {**a, "valeur": valeur_normalisee(str(a.get("type", "")), str(a.get("champ", "")), a["valeur"])}
+        normalisees.append(a)
+    return normalisees
 
 
 def phrase_inachevee(texte: str) -> bool:
@@ -113,6 +139,7 @@ class Session:
         self._dernier_element_id: str | None = None  # « Il est isolé ? » plutôt que « Le mur 2 est isolé ? »
         self._annonce = ""  # contradiction à dire avant la prochaine question : « Noté : parpaing au lieu de brique. »
         self._derniere_cle = ""  # clé de la dernière question du parcours (pour la reposer après une digression)
+        self.caps: deque[tuple[float, float]] = deque(maxlen=600)  # (instant, cap de la caméra en degrés) : boussole du téléphone
         self._complements: set[asyncio.Task] = set()  # relectures de Claude en arrière-plan
         self._compteurs = {"acceptees": 0, "refusees": 0, "questions": 0, "retenues": 0, "veilles": 0, "bips": 0, "relectures_claude": 0}
         self._pret = asyncio.Event()
@@ -254,6 +281,8 @@ class Session:
         elif genre == "silence":
             self.muet = bool(message.get("actif"))
             self.journaliser("silence", actif=self.muet)
+        elif genre == "capteurs" and isinstance(message.get("cap"), (int, float)) and isinstance(message.get("t"), (int, float)):
+            self.caps.append((float(message["t"]), float(message["cap"]) % 360))
         elif genre == "fin":
             await self.fin_visite()
 
@@ -273,12 +302,13 @@ class Session:
 
     async def _transcrire(self, genre: str, donnee, reference: float) -> None:
         attente = time.monotonic() - reference
+        son = None
         if genre == "audio":
             phrase: Phrase = donnee
             debut = time.perf_counter()
             texte = await asyncio.to_thread(self.transcripteur.transcrire, phrase.audio)
             duree = time.perf_counter() - debut
-            t_debut, t_fin = phrase.t_debut, phrase.t_fin
+            t_debut, t_fin, son = phrase.t_debut, phrase.t_fin, phrase.audio
         else:
             texte, t_debut, t_fin, duree = donnee, self.t_video, self.t_video, 0.0
         if not texte:
@@ -290,7 +320,7 @@ class Session:
         await self._envoyer({"type": "transcription", "t": round(t_fin, 2), "texte": texte})
         await self._file_textes.put({
             "source": genre, "texte": texte, "t_debut": t_debut, "t_fin": t_fin, "ligne": ligne, "reference": reference,
-            "attente_transcription_s": attente, "transcription_s": duree, "pret": time.monotonic(),
+            "attente_transcription_s": attente, "transcription_s": duree, "pret": time.monotonic(), "audio": son,
         })
 
     async def _boucle_reponses(self) -> None:
@@ -358,18 +388,28 @@ class Session:
 
         # 1. Extraction immédiate, sans IA : tout ce qui est reconnu est noté tout de suite.
         debut = time.perf_counter()
-        signales = len(self.checklist.signalements)
-        extraction = extraire(texte, self.checklist, self._cible)
-        resultats = appliquer(self.checklist, extraction.actions, contexte.t, self._phrases_recentes(contexte))
+        extraction, resultats, notes, proposition = await self._noter(texte, contexte, lot)
         mesure["extraction_ms"] = round((time.perf_counter() - debut) * 1000, 1)
-        notes = self._compter(resultats)
         compris = [r for r in resultats if r["statut"] == "accepte"]
+        son = lot[0].get("audio") if len(lot) == 1 else None
+        if not compris and not proposition and not extraction.demande and son is not None and hasattr(self.transcripteur, "second_avis"):
+            # 1 bis. Pas compris : second avis de Whisper, guidé par le vocabulaire métier (moteur « rapide »).
+            debut = time.perf_counter()
+            texte_whisper = await asyncio.to_thread(self.transcripteur.second_avis, son)
+            mesure["second_avis_s"] = round(time.perf_counter() - debut, 3)
+            self.journaliser("second_avis", rapide=texte, whisper=texte_whisper, duree_s=mesure["second_avis_s"])
+            if not texte_whisper:
+                self.journaliser("decision", mode="bruit", mesures=mesure)  # pas de vraie parole selon Whisper : rien à dire
+                return
+            if cle_texte(texte_whisper) != cle_texte(texte):
+                contexte.autre_transcription = texte_whisper
+                extraction2, resultats2, notes2, proposition2 = await self._noter(texte_whisper, contexte, lot)
+                if any(r["statut"] == "accepte" for r in resultats2) or proposition2 or extraction2.demande:
+                    texte, extraction, resultats, notes, proposition = texte_whisper, extraction2, resultats2, notes2, proposition2
+                    contexte.phrase, contexte.autre_transcription, mesure["texte"] = texte, "", texte
+                    compris = [r for r in resultats if r["statut"] == "accepte"]
+                    await self._envoyer({"type": "transcription", "t": round(dernier["t_fin"], 2), "texte": texte})
         mesure["valeurs_extraites"] = len(notes)
-        self._noter_contradictions(signales)
-        self.journaliser("extraction", resultats=resultats, devines=extraction.devines, contradictions=self._annonce,
-                         mesures={"extraction_ms": mesure["extraction_ms"]})
-        if resultats:
-            await self._envoyer_actions(resultats, "extraction")
         contexte.deja_note = [f"{r.get('element') or r['action'].get('type')}.{r['action'].get('champ')} = {r['action'].get('valeur') or 'sans objet'}"
                               for r in notes]
         if self._cible and champ_rempli(self._cible, self.checklist):
@@ -380,10 +420,15 @@ class Session:
         # Après l'extraction : la phrase a pu changer de pièce (« ici c'est la cuisine »).
         contexte.questions_recentes = self.questions.recentes(time.monotonic(), self.checklist.piece_courante)
 
-        if compris or extraction.proposition:
+        if not compris and not proposition and extraction.demande:
+            # « Quel mur ? », « il te faut quoi d'autre ? » : réponse du serveur, puis la question en attente reposée.
+            await self._repondre_a_la_demande(extraction.demande, reference, mesure, texte)
+            await self.envoyer_etat()
+            self.journaliser("decision", mode="demande", mesures=mesure)
+        elif compris or proposition:
             # 2. Compris : la question suivante du parcours part tout de suite, sans attendre Claude. Compris avec
             # un doute : on propose l'interprétation la plus probable (« J'ai compris…, c'est bien ça ? »).
-            question = extraction.proposition is not None and await self._confirmer(extraction.proposition, reference, mesure)
+            question = proposition is not None and await self._confirmer(proposition, reference, mesure)
             if (not question and not await self._question_du_parcours(reference, mesure, reposer=en_attente)
                     and not await self._annoncer(reference, mesure) and notes):
                 await self._bip(round(time.monotonic() - reference, 3))
@@ -400,12 +445,30 @@ class Session:
             # 3. Pas compris par les règles : Claude essaie, puis le parcours reprend.
             await self._decider(self.cerveau, contexte, reference, mesure)
 
+    async def _noter(self, texte: str, contexte: Contexte, lot: list[dict]) -> tuple:
+        """Extraction immédiate d'une phrase et application à la checklist : (extraction, résultats, valeurs notées,
+        proposition à confirmer). Une valeur invraisemblable (un mur de 30 m de long) n'est jamais notée : sa
+        lecture probable devient la proposition."""
+        signales = len(self.checklist.signalements)
+        extraction = extraire(texte, self.checklist, self._cible)
+        actions, invraisemblables, ecartees = plausibilite.filtrer(extraction.actions)
+        resultats = appliquer(self.checklist, actions, contexte.t, self._phrases_recentes(contexte) + [texte])
+        notes = self._compter(resultats)
+        self._noter_contradictions(signales)
+        self._situer(resultats, lot[0]["t_debut"], lot[-1]["t_fin"])
+        proposition = extraction.proposition or next(filter(None, (self._resoudre(p) for p in invraisemblables)), None)
+        self.journaliser("extraction", texte=texte, resultats=resultats, devines=extraction.devines, contradictions=self._annonce,
+                         invraisemblables=ecartees, demande=extraction.demande)
+        if resultats:
+            await self._envoyer_actions(resultats, "extraction")
+        return extraction, resultats, notes, proposition
+
     async def _confirmer(self, proposition: dict, reference: float, mesure: dict | None) -> bool:
         """« J'ai compris eau chaude, c'est bien ça ? » : une seule fois par valeur proposée. Vrai si posée."""
         if not proposition.get("element_id"):
             return False
         cible = Cible("confirmation", proposition["type"], proposition["champ"], proposition["element_id"], source=proposition["valeur"])
-        texte = f"J'ai compris {proposition['valeur']}, c'est bien ça ?"
+        texte = proposition.get("question") or f"J'ai compris {proposition['valeur']}, c'est bien ça ?"
         maintenant = time.monotonic()
         question, cible, raison, cle = self.questions.filtrer(texte, cible.code, self.checklist, maintenant)
         if raison:
@@ -441,6 +504,10 @@ class Session:
             attente = self._cible if self._cible and self._cible.genre == "confirmation" else None
             actions = [a for a in decision.actions if a.get("certitude") != "probable"
                        and not (attente and a.get("element_id") == attente.element_id and a.get("champ") == attente.champ)]
+            # Relecture : une valeur invraisemblable (« 30 m » de long) est écartée sans question (la question est déjà partie).
+            actions, _, ecartees = plausibilite.filtrer(_normaliser(actions))
+            if ecartees:
+                self.journaliser("invraisemblables", source="complement", actions=ecartees)
             resultats = appliquer(self.checklist, actions, contexte.t, self._phrases_recentes(contexte))
             self._compter(resultats)
             self.journaliser("complement", resultats=resultats, erreur=decision.erreur, brut=decision.brut[:2000], mesures=decision.mesures)
@@ -450,6 +517,72 @@ class Session:
         except Exception as e:
             log.exception("Complément de Claude")
             self.journaliser("erreur", etape="complement", message=str(e))
+
+    async def _repondre_a_la_demande(self, demande: str, reference: float, mesure: dict | None, texte: str = "") -> None:
+        """« Quel mur ? » : son nom parlant (et sa vignette à l'écran). « Il te faut quoi d'autre ? » : ce qui manque
+        pour l'élément de la question. Puis la question en attente est reposée, une fois."""
+        element = self._element_en_attente()
+        if demande == "manques" and (m := re.search(r"\b(mur|fen[eê]tre|radiateur|plafond|plancher)", cle_texte(texte))):
+            # « Il te faut quoi d'autre sur ce mur ? » : le mur dont on parlait, même si la question portait sur autre chose.
+            type_vise = {"fenetre": "fenetre", "radiateur": "emetteur"}.get(m.group(1), m.group(1))
+            ident = self.checklist.dernier.get(type_vise)
+            vise = self.checklist.element_de_piece(type_vise) if type_vise in ("plafond", "plancher") else (
+                self.checklist.trouver_element(ident) if ident else None)
+            element = vise or element
+        if element is not None:
+            nom = self.checklist.nom(element, demonstratif=False)
+            self.checklist.dernier[element.type] = element.id  # on vient de le nommer : « Il est isolé ? » suffit ensuite
+            if demande == "lequel":
+                affiche = ", affiché à l'écran" if element.image else ""
+                self._annonce = f"Je parle {_de(nom)}{affiche}."
+            else:
+                manques = [LIBELLES_ORAUX.get(c.cle, c.libelle) for c in element.champs_manquants()]
+                liste = ", ".join(manques[:-1]) + f" et {manques[-1]}" if len(manques) > 1 else "".join(manques)
+                self._annonce = f"Pour {nom}, il me manque {liste}." if manques else f"Pour {nom}, j'ai tout."
+        elif demande == "manques":
+            manques = self.checklist.manques_piece()
+            self._annonce = f"Dans cette pièce, il me manque {len(manques)} informations, à l'écran." if manques else "Rien ne manque ici."
+        elif self._cible is not None and self._cible.type == "mur":
+            self._annonce = "Un mur qu'on n'a pas encore décrit."  # « Il reste un mur… » « Quel mur ? »
+        self.questions.autoriser_encore(self._derniere_cle)
+        if not await self._question_du_parcours(reference, mesure, reposer=self._derniere_cle):
+            await self._annoncer(reference, mesure)
+
+    def _element_en_attente(self) -> Element | None:
+        if self._cible is not None and self._cible.element_id:
+            try:
+                return self.checklist.trouver_element(self._cible.element_id)
+            except ValueError:
+                return None
+        return None
+
+    def _resoudre(self, proposition: dict) -> dict | None:
+        """Une proposition sur un élément créé par la même phrase (nommé par sa description) : son identifiant."""
+        if proposition.get("element_id"):
+            return proposition
+        description = cle_texte(str(proposition.get("description", "")))
+        element = next((e for e in reversed(self.checklist.elements) if e.type == proposition.get("type")
+                        and cle_texte(e.description) == description), None)
+        return {**proposition, "element_id": element.id} if element is not None else None
+
+    def _situer(self, resultats: list[dict], t_debut: float, t_fin: float) -> None:
+        """Éléments créés ou désignés par cette phrase : leur vignette (l'image filmée pendant la phrase, montrée avec
+        les questions sur eux) et leur orientation d'après la boussole du téléphone (« le mur nord »)."""
+        caps = sorted(c for t, c in self.caps if t_debut - 0.5 <= t <= t_fin + 0.5)
+        image = min(self.images, key=lambda i: abs(i.t - t_fin), default=None)
+        for r in resultats:
+            if r["statut"] != "accepte" or not r.get("element"):
+                continue
+            try:
+                element = self.checklist.trouver_element(r["element"])
+            except ValueError:
+                continue
+            if element.piece is None or element.type in ("plafond", "plancher"):
+                continue
+            if not element.image and image is not None and image.chemin is not None:
+                element.image = image.chemin.name
+            if not element.orientation and caps and element.type in ("mur", "fenetre", "porte"):
+                element.orientation = orientation(caps[len(caps) // 2])
 
     def _noter_contradictions(self, depuis: int) -> None:
         """Contradictions relevées par la dernière phrase : la dernière valeur est gardée, et c'est dit au
@@ -500,7 +633,8 @@ class Session:
 
     def _phrases_recentes(self, contexte: Contexte) -> list[str]:
         recentes = [texte for _, t_fin, texte in self.phrases if t_fin >= contexte.t - 90]
-        return recentes + ([contexte.phrase] if contexte.phrase else [])  # phrases regroupées : citation à cheval
+        # Phrases regroupées : citation à cheval ; second avis de Whisper : Claude peut citer l'une ou l'autre transcription.
+        return recentes + [p for p in (contexte.phrase, contexte.autre_transcription) if p]
 
     async def _decider(self, cerveau, contexte: Contexte, reference: float, mesure: dict) -> Decision:
         """Claude, pour une phrase que les règles n'ont pas comprise. Il note ce qu'il comprend ; il ne
@@ -527,15 +661,19 @@ class Session:
         mesure["cerveau"] = decision.mesures
         # Interprétation seulement probable : pas notée, proposée au diagnostiqueur (« J'ai compris…, c'est bien ça ? »).
         probables = [a for a in decision.actions if a.get("certitude") == "probable" and a.get("outil") == "enregistrer_reponse"]
-        actions = [a for a in decision.actions if a not in probables]
+        actions, invraisemblables, ecartees = plausibilite.filtrer(_normaliser(a for a in decision.actions if a not in probables))
         signales = len(self.checklist.signalements)
         resultats = appliquer(self.checklist, actions, contexte.t, self._phrases_recentes(contexte))
         notes = self._compter(resultats)
         self._noter_contradictions(signales)
+        if t_phrase := contexte.t_phrase:
+            self._situer(resultats, *t_phrase)
         if resultats:
             await self._envoyer_actions(resultats, "cerveau")
         if probables and not mesure.get("question_dite"):
-            await self._confirmer({**probables[0], "note": "interprété par Claude"}, reference, mesure)
+            await self._confirmer({**_normaliser(probables)[0], "note": "interprété par Claude"}, reference, mesure)
+        if invraisemblables and not mesure.get("question_dite") and (proposition := self._resoudre(invraisemblables[0])):
+            await self._confirmer(proposition, reference, mesure)
         if any(r["statut"] == "accepte" for r in resultats) and not mesure.get("question_dite"):
             if not await self._question_du_parcours(reference, mesure) and not await self._annoncer(reference, mesure) and notes:
                 await self._bip()
@@ -574,8 +712,20 @@ class Session:
         if mesure is not None:
             self._mesure_par_dire[self._compteur_dire] = (mesure, reference)
         latence = round(maintenant - reference, 2) if mesure is not None else None
+        image = self._vignette(cible)
         self.journaliser("dire", id=self._compteur_dire, texte=texte, cible=cible.code if cible else "", muet=self.muet, latence_s=latence)
-        await self._envoyer({"type": "dire", "id": self._compteur_dire, "texte": texte, "muet": self.muet, "latence_s": latence})
+        await self._envoyer({"type": "dire", "id": self._compteur_dire, "texte": texte, "muet": self.muet, "latence_s": latence,
+                             "image": image})
+
+    def _vignette(self, cible: Cible | None) -> str | None:
+        """Adresse de l'image de l'élément dont parle la question, pour que le diagnostiqueur sache lequel c'est."""
+        if cible is None or not cible.element_id:
+            return None
+        try:
+            element = self.checklist.trouver_element(cible.element_id)
+        except ValueError:
+            return None
+        return f"/api/sessions/{self.id}/images/{element.image}" if element.image else None
 
     # --- Veille ---------------------------------------------------------------------------------
 

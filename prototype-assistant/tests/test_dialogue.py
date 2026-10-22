@@ -116,7 +116,7 @@ def test_le_cerveau_n_est_appele_que_si_les_regles_n_ont_pas_compris(tmp_path):
     cerveau = CerveauEspion()
     _, questions_apres, _ = asyncio.run(visite(tmp_path, ["Ici c'est le séjour.", "Euh voilà.", "Ce mur donne dehors."], cerveau))
     assert cerveau.appels == [("reponse", "Euh voilà.")]  # compris : le serveur répond seul, tout de suite
-    assert questions_apres == [["Décrivez le premier mur."], [], ["Le mur 1 est en quoi ?"]]  # « répétez » jamais dit
+    assert questions_apres == [["Décrivez le premier mur."], [], ["Ce mur est en quoi ?"]]  # « répétez » jamais dit
 
 
 def test_phrase_coupee_attend_la_suite(tmp_path):

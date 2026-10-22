@@ -57,7 +57,7 @@ def test_visite_par_texte_puis_video_et_bilan(client, tmp_path):
         valeurs = {r["champ"]: r["statut"] for r in actions["resultats"] if r["outil"] == "enregistrer_reponse"}
         assert valeurs == {"materiau": "accepte", "epaisseur": "accepte", "donne_sur": "accepte"}
         question = attendre(ws, "dire")  # posée tout de suite par le parcours du serveur
-        assert question["texte"] == "Le mur 1 est isolé ?" and question["latence_s"] >= 0
+        assert question["texte"] == "Ce mur est isolé ?" and question["latence_s"] >= 0
         etat = attendre(ws, "etat")
         assert etat["piece"] == "Cuisine" and etat["manques"][0] == "le mur 1 : isolation"
         ws.send_json({"type": "fin"})

@@ -154,6 +154,15 @@ def nom_groupe(singulier: str, pluriel: str, nombre: int, qualificatif: str = ""
     return f"{singulier}{suite}"
 
 
+def nom_de(description: str) -> tuple[str, str] | None:
+    """(pluriel, singulier) du nom qui commence la description : « le radiateur sous la fenêtre » est un radiateur,
+    « les 3 fenêtres en PVC » des fenêtres."""
+    for pluriel, singulier in NOMS:
+        if description.startswith(singulier) or re.match(rf"les \d+ (?:autres )?{re.escape(pluriel)}\b", description):
+            return pluriel, singulier
+    return None
+
+
 def description_auto(description: str) -> bool:
     """Nom donné par le serveur (« les 3 fenêtres », « le radiateur 2 ») et non par le diagnostiqueur ou
     l'image (« la fenêtre derrière le rideau ») : il peut être remplacé par un nom plus parlant."""
@@ -218,6 +227,11 @@ class Element:
     valeurs: dict[str, list[Valeur]] = field(default_factory=dict)
     sans_objet: dict[str, Valeur] = field(default_factory=dict)
     parent: str = ""  # « dont une en bois » : le groupe dont cet élément a été séparé
+    # Pour le nommer à l'oral (étape 5) : jamais « le mur 3 », mais ce qui a été dit ou vu de lui.
+    repere: str = ""  # repère dit : « avec la télé », « du fond », « de gauche »
+    support: str = ""  # fenêtre ou porte : le mur qui la porte (« il y a 3 fenêtres dessus »)
+    orientation: str = ""  # d'après la boussole du téléphone quand il a été filmé : « nord »… (à confirmer)
+    image: str = ""  # vignette montrée à l'écran avec les questions sur cet élément
 
     @property
     def type_element(self) -> TypeElement:
@@ -280,6 +294,7 @@ class Piece:
     citation: str = ""
     absences: dict[str, Valeur] = field(default_factory=dict)  # type -> « pas de fenêtre » cité
     clos: dict[str, Valeur] = field(default_factory=dict)  # type -> « pas d'autre mur » cité
+    nombre_murs: Valeur | None = None  # « cette pièce fait 4 murs »
 
 
 @dataclass
@@ -355,6 +370,7 @@ class Checklist:
         self.absences_logement: dict[str, Valeur] = {}  # type -> « pas de VMC » cité
         self.regles: list[Regle] = []
         self.signalements: list[Signalement] = []
+        self.dernier: dict[str, str] = {}  # type -> dernier élément dont le diagnostiqueur a parlé (« ce mur »)
         self._compteurs: dict[str, int] = {}
 
     # --- Pièces ---------------------------------------------------------------------------
@@ -403,6 +419,34 @@ class Checklist:
         if not citation:
             raise ErreurChecklist("clôture refusée : aucune citation du diagnostiqueur")
         self.pieces[self._piece_pour_element()].clos[type_element] = Valeur("complet", citation, t)
+
+    def compter_murs(self, nombre: int, citation: str, t: float) -> None:
+        """« Cette pièce fait 4 murs » : une fois ce nombre de murs décrits, on ne demande plus s'il y en a d'autres."""
+        citation = " ".join(citation.split())
+        if not citation:
+            raise ErreurChecklist("nombre de murs refusé : aucune citation du diagnostiqueur")
+        if not isinstance(nombre, int) or not 3 <= nombre <= 12:
+            raise ErreurChecklist(f"nombre de murs invraisemblable : {nombre!r}")
+        self.pieces[self._piece_pour_element()].nombre_murs = Valeur(str(nombre), citation, t)
+
+    def murs_complets(self, piece: str | None = None) -> bool:
+        """Tous les murs de la pièce sont annoncés : « pas d'autre mur », ou le nombre dit est atteint."""
+        cle = piece or self.piece_courante
+        if cle not in self.pieces:
+            return False
+        p = self.pieces[cle]
+        n = sum(e.nombre for e in self.elements_de(cle) if e.type == "mur")
+        return "mur" in p.clos or (p.nombre_murs is not None and n >= int(p.nombre_murs.valeur))
+
+    def nom(self, element: Element, demonstratif: bool = True) -> str:
+        """Nom à dire à l'oral : « ce mur » (on vient d'en parler), « le mur côté voisin », jamais « le mur 3 »
+        (voir noms.py). `demonstratif=False` : jamais « ce mur » (pour l'écran et pour Claude)."""
+        from .noms import nom_parlant
+
+        voisins = [e for e in self.elements_de(element.piece) if e.type == element.type]
+        fenetres = [e for e in self.elements_de(element.piece) if e.type in ("fenetre", "porte")]
+        courant = demonstratif and self.dernier.get(element.type) == element.id and element.piece == self.piece_courante
+        return nom_parlant(element, voisins, fenetres, courant)
 
     def copier(self, type_element: str, piece_source: str, citation: str, t: float) -> Element:
         """« Plafond pareil que le séjour » : recopie les valeurs de l'élément de l'autre pièce."""
@@ -457,11 +501,13 @@ class Checklist:
             element.nombre = nombre
 
     def signaler_element(self, type_element: str, description: str, t: float, source: str = "image", nombre: int | None = None,
-                         piece: str | None = None) -> Element:
+                         piece: str | None = None, repere: str = "", support: str = "") -> Element:
         """Ajoute un élément à décrire (ex. « le mur avec la télé »), éventuellement en plusieurs
         exemplaires identiques (« trois fenêtres »), dans la pièce courante ou dans `piece` (clé).
         Une description déjà connue dans la même pièce renvoie l'élément existant ; le plafond et le
-        plancher sont uniques dans une pièce. Un élément nouveau reçoit les règles du logement."""
+        plancher sont uniques dans une pièce. Un élément nouveau reçoit les règles du logement.
+        `repere` : ce qui a été dit pour le reconnaître (« avec la télé ») ; `support` : pour une
+        fenêtre, le mur qui la porte (identifiant ou nom)."""
         te = self._type(type_element)
         nombre = self._verifier_nombre(nombre)
         description = " ".join(description.split()) or te.designation
@@ -469,16 +515,35 @@ class Checklist:
             piece = piece if piece in self.pieces else self._piece_pour_element()
         else:
             piece = None
-        for element in self.elements_de(piece):
-            if element.type == te.cle and (te.cle in TOUJOURS_PRESENTS or cle_texte(element.description) == cle_texte(description)):
-                if nombre:
-                    self._fixer_nombre(element, nombre)
-                return element
-        element = Element(id=self._nouvel_id(te), type=te.cle, description=description, piece=piece, t=t, source=source, nombre=nombre or 1)
-        self.elements.append(element)
-        for regle in self.regles:
-            if regle.concerne(element):
-                self._appliquer_regle(regle, element)
+        element = next((e for e in self.elements_de(piece) if e.type == te.cle and (
+            te.cle in TOUJOURS_PRESENTS or cle_texte(e.description) == cle_texte(description))), None)
+        if element is not None:
+            if nombre:
+                self._fixer_nombre(element, nombre)
+        else:
+            element = Element(id=self._nouvel_id(te), type=te.cle, description=description, piece=piece, t=t, source=source,
+                              nombre=nombre or 1)
+            self.elements.append(element)
+            for regle in self.regles:
+                if regle.concerne(element):
+                    self._appliquer_regle(regle, element)
+        if repere and not element.repere:
+            element.repere = " ".join(repere.split())
+        if support and te.cle in ("fenetre", "porte"):
+            mur = next((e for e in self.elements_de(piece) if e.type == "mur" and support in (e.id, e.description)), None)
+            element.support = mur.id if mur else element.support
+        if source == "voix":
+            self.dernier[te.cle] = element.id
+        return element
+
+    def completer(self, element_id: str, repere: str = "", support: str = "") -> Element:
+        """Ajoute à un élément connu ce qui permet de le reconnaître : un repère dit, le mur qui porte une fenêtre."""
+        element = self.trouver_element(element_id)
+        if repere and not element.repere:
+            element.repere = " ".join(repere.split())
+        if support and element.type in ("fenetre", "porte") and not element.support:
+            mur = next((e for e in self.elements_de(element.piece) if e.type == "mur" and support in (e.id, e.description)), None)
+            element.support = mur.id if mur else ""
         return element
 
     def _element_cible(self, type_element: str, element_id: str | None, description: str, t: float, nombre: int | None = None,
@@ -527,7 +592,7 @@ class Checklist:
         if not " ".join(citation.split()):
             raise ErreurChecklist("nombre refusé : aucune citation du diagnostiqueur")
         if correction and nombre != element.nombre:
-            nom = next((p for p, s in NOMS if p in element.description or s in element.description), element.type_element.nom + "s")
+            nom = (nom_de(element.description) or (element.type_element.nom + "s",))[0]
             self.signalements.append(Signalement(element.id, "nombre", str(element.nombre), f"{nombre} {nom}", citation, t))
         self._fixer_nombre(element, nombre, description)
         return element
@@ -622,6 +687,8 @@ class Checklist:
         elif derniere.origine != "dit" and origine == "dit":
             element.valeurs[champ][-1] = nouvelle
         element.sans_objet.pop(champ, None)
+        if origine == "dit":
+            self.dernier[element.type] = element.id
         return element
 
     def marquer_sans_objet(
@@ -738,8 +805,10 @@ class Checklist:
         origine = {"image": "vu à l'image", "auto": "toujours présent"}.get(element.source, "dit")
         if element.parent:
             origine += f", séparé de {element.parent}"
+        if element.support:
+            origine += f", sur {element.support}"
         nombre = f" ×{element.nombre}" if element.nombre > 1 else ""
-        return f"- {element.id} {element.type_element.nom}{nombre} « {element.description} » ({origine}) : " + ", ".join(champs)
+        return f"- {element.id} {element.type_element.nom}{nombre} « {self.nom(element, demonstratif=False)} » ({origine}) : " + ", ".join(champs)
 
     def resume_pour_ia(self, max_manques: int = 12) -> str:
         """État compact envoyé à l'IA à chaque appel (le serveur reste la source de vérité)."""
@@ -796,6 +865,11 @@ class Checklist:
                 "source": e.source,
                 "nombre": e.nombre,
                 "parent": e.parent or None,
+                "nom": self.nom(e, demonstratif=False),
+                "repere": e.repere or None,
+                "support": e.support or None,
+                "orientation": e.orientation or None,
+                "image": e.image or None,
                 "champs": {
                     c.cle: {
                         "libelle": c.libelle,
@@ -822,6 +896,7 @@ class Checklist:
                     "taux_remplissage": self.taux_remplissage(cle),
                     "absences": {t: valeur(v) for t, v in p.absences.items()},
                     "clos": {t: valeur(v) for t, v in p.clos.items()},
+                    "nombre_murs": valeur(p.nombre_murs) if p.nombre_murs else None,
                     "elements": [element(e) for e in self.elements_de(cle)],
                     "manques": [manque(m) for m in self.manques_piece(cle)],
                 }

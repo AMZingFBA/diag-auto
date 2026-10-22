@@ -1,7 +1,9 @@
-"""Rejoue une vidéo de test comme si un téléphone filmait : envoie au serveur le son et une image
-par seconde, au rythme réel, affiche les échanges, puis le bilan (latences mesurées).
+"""Rejoue une vidéo de test, ou une visite enregistrée, comme si un téléphone filmait : envoie au
+serveur le son et une image par seconde, au rythme réel, affiche les échanges, puis le bilan
+(latences mesurées).
 
-    python -m assistant.rejouer ..\\samples\\video-001\\video.mp4 --serveur http://localhost:8765
+    python -m assistant.rejouer ..\\samples\\video-001\\video.mp4
+    python -m assistant.rejouer sessions\\20261022-083308-20ef54      (son audio.wav + images/ d'une visite)
 
 La voix de l'assistant n'est pas jouée : le début de « voix » est signalé dès réception de la
 question (comme un téléphone qui parlerait instantanément), et sa fin après une durée estimée.
@@ -16,6 +18,7 @@ import json
 import ssl
 import struct
 import time
+import wave
 from pathlib import Path
 
 import av
@@ -56,12 +59,22 @@ def decoder_images(chemin: Path, cote: int = 512) -> list[tuple[float, bytes]]:
     return images
 
 
+def lire_visite(dossier: Path) -> tuple[np.ndarray, list[tuple[float, bytes]]]:
+    """Son et images d'une visite enregistrée par le serveur (audio.wav, images/<instant>.jpg)."""
+    with wave.open(str(dossier / "audio.wav"), "rb") as wav:
+        if wav.getframerate() != TAUX or wav.getnchannels() != 1 or wav.getsampwidth() != 2:
+            raise ValueError("audio.wav doit être en 16 kHz, mono, 16 bits")
+        son = np.frombuffer(wav.readframes(wav.getnframes()), dtype="<i2")
+    images = sorted((float(chemin.stem), chemin.read_bytes()) for chemin in (dossier / "images").glob("*.jpg"))
+    return son, images
+
+
 def message_binaire(genre: int, t: float, donnees: bytes) -> bytes:
     return bytes([genre]) + struct.pack("<d", t) + donnees
 
 
 async def rejouer(video: Path, serveur: str, code: str, piece: str) -> dict:
-    son, images = decoder_son(video), decoder_images(video)
+    son, images = lire_visite(video) if video.is_dir() else (decoder_son(video), decoder_images(video))
     print(f"{video.name} : {len(son) / TAUX:.1f} s de son, {len(images)} images")
     url_ws = serveur.replace("https://", "wss://").replace("http://", "ws://").rstrip("/") + "/ws" + (f"?code={code}" if code else "")
     contexte_ssl = None

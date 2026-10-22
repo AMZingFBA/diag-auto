@@ -57,10 +57,11 @@ def avec_article(nom: str) -> str:
     return f"{article}{'' if article.endswith(chr(39)) else ' '}{nom}"
 
 
-def texte_champ(element: Element, champ: str, meme_element: bool) -> str:
+def texte_champ(element: Element, champ: str, meme_element: bool, nom: str = "") -> str:
     """Question courte sur un champ. Si la question précédente portait déjà sur cet élément, on
-    ne le renomme pas (« Il est isolé ? » plutôt que « Le mur 2 est isolé ? »)."""
-    d = _capitale(element.description)
+    ne le renomme pas (« Il est isolé ? »). Sinon, il est désigné par son nom parlant (`nom` :
+    « ce mur », « le mur côté voisin »), jamais par un numéro (étape 5 de Noah)."""
+    d = _capitale(nom or element.description)
     t = element.type
     if t == "mur":
         return {
@@ -131,13 +132,16 @@ QUESTION_PIECE_SUIVANTE = "Pièce terminée. Quelle est la pièce suivante ?"
 QUESTION_PIECE = "Dans quelle pièce êtes-vous ?"
 
 
-def _champs(elements: list[Element], dernier_id: str | None, separes: set[str] = frozenset()) -> Iterator[QuestionPlan]:
+def _champs(checklist: Checklist, elements: list[Element], dernier_id: str | None, separes: set[str] = frozenset()
+            ) -> Iterator[QuestionPlan]:
     for element in elements:
         for champ in element.champs_manquants():
             code = f"{element.id}.{champ.cle}"
-            # Un groupe qui vient d'être séparé (« deux en PVC et une en bois ») est nommé : « Des volets ? » serait ambigu.
-            meme = element.id == dernier_id and element.id not in separes
-            yield QuestionPlan(code, texte_champ(element, champ.cle, meme), code)
+            # Un groupe qui vient d'être séparé (« deux en PVC et une en bois ») est nommé : « Des volets ? » serait ambigu ;
+            # de même si le diagnostiqueur vient de parler d'un autre mur (« Il est isolé ? » : lequel ?).
+            meme = (element.id == dernier_id and element.id not in separes
+                    and checklist.dernier.get(element.type, element.id) == element.id)
+            yield QuestionPlan(code, texte_champ(element, champ.cle, meme, checklist.nom(element)), code)
 
 
 def _source_pareil(checklist: Checklist, type_element: str) -> str | None:
@@ -166,9 +170,13 @@ def questions(checklist: Checklist, dernier_id: str | None = None) -> Iterator[Q
     murs = du_type("mur")
     if not murs:
         yield QuestionPlan("presence:mur", QUESTIONS_PRESENCE["mur"], f"presence:mur@{piece_cle}")
-    yield from _champs(list(reversed(murs)), dernier_id, separes)
-    if murs and "mur" not in piece.clos and not any(m.champs_manquants() for m in murs):
-        yield QuestionPlan("suite:mur", QUESTIONS_SUITE["mur"], f"suite:mur@{piece_cle}#{len(murs)}")
+    yield from _champs(checklist, list(reversed(murs)), dernier_id, separes)
+    if murs and not checklist.murs_complets() and not any(m.champs_manquants() for m in murs):
+        # « Cette pièce fait 4 murs » : on sait combien il en reste.
+        reste = int(piece.nombre_murs.valeur) - sum(m.nombre for m in murs) if piece.nombre_murs else 0
+        texte = (QUESTIONS_SUITE["mur"] if reste <= 0 else "Il reste un mur : il donne sur quoi ?" if reste == 1
+                 else f"Il reste {reste} murs : le suivant donne sur quoi ?")
+        yield QuestionPlan("suite:mur", texte, f"suite:mur@{piece_cle}#{len(murs)}")
 
     # 2-3. Plafond puis plancher, avec « pareil que la pièce précédente ? » s'ils y sont connus.
     for type_element in ("plafond", "plancher"):
@@ -179,13 +187,13 @@ def questions(checklist: Checklist, dernier_id: str | None = None) -> Iterator[Q
         if source and not element.valeurs and not element.sans_objet:
             texte = f"{_capitale(TYPES[type_element].nom)} pareil que dans {avec_article(checklist.pieces[source].nom)} ?"
             yield QuestionPlan(f"pareil:{type_element}:{source}", texte, f"pareil:{type_element}@{piece_cle}")
-        yield from _champs([element], dernier_id, separes)
+        yield from _champs(checklist, [element], dernier_id, separes)
 
     # 4. Fenêtres et portes restantes.
     fenetres, portes = du_type("fenetre"), du_type("porte")
     if not fenetres and "fenetre" not in piece.absences and "fenetre" not in piece.clos:
         yield QuestionPlan("presence:fenetre", QUESTIONS_PRESENCE["fenetre"], f"presence:fenetre@{piece_cle}")
-    yield from _champs(fenetres + portes, dernier_id, separes)
+    yield from _champs(checklist, fenetres + portes, dernier_id, separes)
     if fenetres and "fenetre" not in piece.clos and not any(e.champs_manquants() for e in fenetres + portes):
         yield QuestionPlan("suite:fenetre", QUESTIONS_SUITE["fenetre"], f"suite:fenetre@{piece_cle}#{len(fenetres) + len(portes)}")
 
@@ -193,14 +201,14 @@ def questions(checklist: Checklist, dernier_id: str | None = None) -> Iterator[Q
     emetteurs = du_type("emetteur")
     if not emetteurs and "emetteur" not in piece.absences:
         yield QuestionPlan("presence:emetteur", QUESTIONS_PRESENCE["emetteur"], f"presence:emetteur@{piece_cle}")
-    yield from _champs(emetteurs, dernier_id, separes)
+    yield from _champs(checklist, emetteurs, dernier_id, separes)
 
     # 6. Une seule fois pour le logement : chauffage, eau chaude, ventilation, puis les détails secondaires.
     for type_element in PRESENCES_LOGEMENT:
         existants = [e for e in checklist.elements_de(None) if e.type == type_element]
         if not existants and type_element not in checklist.absences_logement:
             yield QuestionPlan(f"presence:{type_element}", QUESTIONS_PRESENCE[type_element], f"presence:{type_element}")
-        yield from _champs(existants, dernier_id, separes)
+        yield from _champs(checklist, existants, dernier_id, separes)
     for (type_element, champ) in checklist.manques_secondaires():
         if (type_element, champ) in QUESTIONS_SECONDAIRES:
             code = f"secondaire:{type_element}.{champ}"

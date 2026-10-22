@@ -197,7 +197,7 @@ def test_13_exception_dite_apres_la_regle():
     dire(c, "Une fenêtre double vitrage.")
     dire(c, "Sauf celle de la chambre.")
     assert c.trouver_element("F1").valeur("menuiserie") is None
-    assert question(c, "fenetre") == "La fenêtre 1 : PVC, bois ou alu ?"
+    assert question(c, "fenetre") == "Cette fenêtre : PVC, bois ou alu ?"
 
 
 def test_14_regle_de_la_piece_pour_les_radiateurs_ajoutes_ensuite():
@@ -227,7 +227,7 @@ def test_16_porte_fenetre_ajoutee_apres_la_cloture_des_fenetres():
     dire(c, "Non.", cible="suite:fenetre")
     dire(c, "Ah, il y a aussi une porte-fenêtre en alu.")
     assert groupes(c, "fenetre")[1] == (1, "la porte-fenêtre 2", {"menuiserie": "alu"})
-    assert question(c, "fenetre") == "La porte-fenêtre 2 : simple ou double vitrage ?"
+    assert question(c, "fenetre") == "Cette porte-fenêtre : simple ou double vitrage ?"
 
 
 def test_17_correction_du_nombre_signalee():

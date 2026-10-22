@@ -33,7 +33,7 @@ PIECE_A_4_MURS = [
     ("Ce mur donne dehors, brique 30 cm, isolé par l'intérieur.", "Un autre mur dans cette pièce ?"),
     ("Oui, celui-ci donne sur une pièce chauffée.", "Un autre mur dans cette pièce ?"),  # mur intérieur : rien d'autre
     ("Oui, en parpaing de 20, non isolé, sur le garage.", "Un autre mur dans cette pièce ?"),
-    ("Oui, le quatrième mur donne dehors.", "Le mur 4 est en quoi ?"),
+    ("Oui, le quatrième mur donne dehors.", "Ce mur est en quoi ?"),  # jamais « le mur 4 » (étape 5)
     ("Brique.", "Quelle épaisseur ?"),
     ("30 centimètres.", "Il est isolé ?"),
     ("Je ne sais pas.", "Un autre mur dans cette pièce ?"),
