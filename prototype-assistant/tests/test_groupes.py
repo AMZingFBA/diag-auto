@@ -235,7 +235,7 @@ def test_17_correction_du_nombre_signalee():
     dire(c, "Il y a 2 radiateurs à eau.")
     dire(c, "En fait il y a 3 radiateurs, pas 2.")
     assert groupes(c, "emetteur") == [(3, "les 3 radiateurs", {"type": "radiateur à eau"})]
-    assert [s.texte for s in c.signalements] == ["Noté : 3 radiateurs au lieu de 2."]
+    assert [s.texte for s in c.signalements] == ["Je corrige : il y en avait 2."]
 
 
 # --- 5. Corrections tardives et contradictions : la dernière est gardée, et signalée ------------------------
@@ -249,7 +249,7 @@ def test_18_correction_tardive_du_premier_mur():
     mur = c.trouver_element("M1")
     assert [v.valeur for v in mur.valeurs["materiau"]] == ["brique", "béton"] and mur.a_verifier("materiau")
     assert c.trouver_element("M2").valeur("materiau").valeur == "parpaing"  # le mur de la dernière question n'a pas bougé
-    assert [s.texte for s in c.signalements] == ["Noté : béton au lieu de brique."]
+    assert [s.texte for s in c.signalements] == ["Je remplace brique."]
 
 
 def test_19_correction_par_le_nom_du_mur():
@@ -268,7 +268,7 @@ def test_20_contradiction_sur_le_plafond():
     dire(c, "Finalement le plafond n'est pas isolé.")
     plafond = c.element_de_piece("plafond")
     assert plafond.valeur("isolation").valeur == "non isolé" and plafond.a_verifier("isolation")
-    assert [s.texte for s in c.signalements] == ["Noté : non isolé au lieu de isolé."]
+    assert [s.texte for s in c.signalements] == ["Je remplace isolé."]
 
 
 def test_21_regle_qui_contredit_une_valeur_deja_dite():
@@ -277,7 +277,7 @@ def test_21_regle_qui_contredit_une_valeur_deja_dite():
     dire(c, "Toutes les fenêtres du logement sont en bois.")
     fenetre = c.trouver_element("F1")
     assert fenetre.valeur("menuiserie").valeur == "bois" and fenetre.a_verifier("menuiserie")
-    assert [s.texte for s in c.signalements] == ["Noté : bois au lieu de PVC."]
+    assert [s.texte for s in c.signalements] == ["Je remplace PVC."]
 
 
 def test_22_exception_a_une_regle_n_est_pas_une_contradiction():
@@ -389,7 +389,7 @@ def test_dialogue_qui_s_adapte(tmp_path):
         ("Ce mur donne dehors, brique 30 cm, isolé par l'intérieur.", "Un autre mur dans cette pièce ?"),
         ("Oui, celui-ci donne sur une pièce chauffée.", "Un autre mur dans cette pièce ?"),
         # Correction tardive : gardée, signalée, puis la question restée en attente est reposée.
-        ("Le premier mur, en fait c'est du béton.", "Noté : béton au lieu de brique. Un autre mur dans cette pièce ?"),
+        ("Le premier mur, en fait c'est du béton.", "Je remplace brique. Un autre mur dans cette pièce ?"),
         ("Non, c'est tout.", "Au-dessus du plafond : combles, terrasse ou logement ?"),
         ("Logement au-dessus.", "Sous le plancher : terre-plein, vide sanitaire, cave ou logement ?"),
         ("Logement en dessous.", "Des fenêtres dans cette pièce ?"),
@@ -410,4 +410,4 @@ def test_dialogue_qui_s_adapte(tmp_path):
         (1, "le radiateur haute température", {"type": "radiateur électrique", "temperature": "haute"}),
     ]
     assert [v["volets"] for _, _, v in groupes(c, "fenetre")] == ["roulants", "roulants"]
-    assert session.bilan()["contradictions_signalees"] == ["Noté : béton au lieu de brique."]
+    assert session.bilan()["contradictions_signalees"] == ["Je remplace brique."]

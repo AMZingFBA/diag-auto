@@ -26,9 +26,10 @@ from . import parcours, plausibilite
 from .actions import appliquer
 from .cerveau import Contexte, Decision, ImageInstant, phrases_finies
 from .checklist import ORIENTABLES, TOUJOURS_PRESENTS, Checklist, Element, cle_texte, horodatage
-from .extraction import VOCABULAIRE, Cible, extraire, normaliser, valeur_normalisee
+from .extraction import VOCABULAIRE, Cible, extraire, normaliser, question_posee, valeur_normalisee
 from .boussole import MEME_COTE, Boussole, Mesure, ecart
 from .decor import Decor
+from .repetition import mots_repetes, reformulation
 from .garde import Questions, champ_rempli, demande_de_repeter, nom_abstrait
 from .simulation import CerveauSimulation
 from .reglages import Reglages
@@ -124,6 +125,23 @@ def _avec_article(nom: str) -> str:
     return f"{'le' if cle in _MASCULINS else 'la'} {bas}"
 
 
+# Claude affirme un doublon (« je l'avais déjà noté », « je retire mon doublon ») : jamais dit sans preuve (étape 9).
+_DOUBLON_AFFIRME = re.compile(r"\bdoublons?\b|\bje (?:le |la |les )?retire\b|\bd[ée]j[àa] (?:été )?not[ée]|\bd[ée]j[àa] dans (?:la liste|l'[ée]tat)"
+                              r"|\bc'est (?:le|la) m[êe]me\b", re.IGNORECASE)  # « je pense que c'est le même mur » : la question suffit
+# Il demande lui-même d'oublier ou de retirer quelque chose : la seule façon de supprimer un élément ou une valeur ancienne.
+_SUPPRESSION = re.compile(r"\b(?:oublie[zr]?|annule[zr]?|supprime[zr]?|retire[zr]?|efface[zr]?|enl[eè]ve[zr]?|vire[zr]?)\b"
+                          r"|\bc est (?:le|la) m[eê]me\b|\ben double\b|\bdoublon\b|\bn existe pas\b", re.IGNORECASE)
+
+
+def suppression_demandee(phrase: str) -> bool:
+    return bool(_SUPPRESSION.search(cle_texte(phrase).replace("'", " ")))
+
+
+def _meme_que(type_element: str) -> str:
+    return {"fenetre": "la même fenêtre que", "porte": "la même porte que", "emetteur": "le même radiateur que"}.get(
+        type_element, "le même mur que" if type_element == "mur" else "le même que")
+
+
 def relance_utile(phrase: str) -> bool:
     """Une vraie phrase (au moins deux mots, ou une question) attend une réponse ; pas un mot isolé (débris, « euh »)."""
     return "?" in phrase or len([m for m in phrase.split() if any(c.isalpha() for c in m)]) >= 2
@@ -184,6 +202,9 @@ class Session:
         self._compteur_accuses = 0
         self._compteur_relances = 0
         self.decor = Decor()  # nouveau décor filmé : Claude vérifie la pièce au prochain silence
+        self._dits: list[str] = []  # tout ce que l'assistant a dit (pour compter les mots répétés)
+        self._doublon_propose: tuple[str, str] | None = None
+        self._doublons_a_verifier: list[tuple[str, str]] = []
         self._piece_du_decor: str | None = None
         self.vad = DetecteurPhrases(ReglagesVad(fin_silence_s=reglages.fin_silence_s))
         self.images: deque[ImageInstant] = deque(maxlen=30)
@@ -537,23 +558,28 @@ class Session:
         if self.conversation:
             # Pré-rempli par les règles : « Noté. » à voix haute tout de suite (avec la contradiction relevée, s'il y en a
             # une), puis la phrase va à Claude, qui la vérifie et enchaîne (étape 8 : la voix part en moins de 2 s).
-            deja_dit = ""
-            if notes:
-                deja_dit = self._annonce or self._accuse()
-                mesure["accuse_s"] = mesure["question_s"] = round(time.monotonic() - reference, 3)
-                await self.dire(deja_dit, reference, mesure, forcer=True, question=False)
-                if self.muet:
+            # Étape 9 : un bip suffit (« ne pas répéter ce que je dis ») ; seule une contradiction relevée est dite.
+            deja_dit, bip = "", False
+            if notes or compris:
+                mesure["accuse_s"] = round(time.monotonic() - reference, 3)
+                if self._annonce:
+                    deja_dit = self._annonce
+                    mesure["question_s"] = mesure["accuse_s"]
+                    await self.dire(deja_dit, reference, mesure, forcer=True, question=False)
+                else:
+                    bip = True
+                    mesure["bip_s"] = mesure["accuse_s"]
                     await self._bip(mesure["accuse_s"])
                 await self.envoyer_etat()
             pre_rempli = {"phrases": [texte], "signalements": avant["signalements"],
                           "valeurs": {(r.get("element"), r["action"].get("champ")) for r in notes
                                       if r["action"].get("outil") == "enregistrer_reponse"},
-                          "crees": [e.id for e in self.checklist.elements if e.id not in avant["ids"]]}
+                          "crees": [e.id for e in self.checklist.elements if e.id not in avant["ids"]], "compris": bool(compris)}
             await self._file_claude.put({"contexte": contexte, "reference": reference, "mesure": mesure, "demande": extraction.demande,
                                          "notes": notes, "proposition": proposition, "en_attente": en_attente,
                                          "pre_rempli": pre_rempli, "lignes": lignes, "deja_dit": deja_dit,
                                          "paroles": dernier.get("paroles", self._paroles),
-                                         "etat": self._etat_reponse(reference, mesure, deja_dit, texte)})
+                                         "etat": self._etat_reponse(reference, mesure, deja_dit, texte, bip=bip)})
         elif not compris and not proposition and extraction.demande:
             # « Quel mur ? », « il te faut quoi d'autre ? » : réponse du serveur, puis la question en attente reposée.
             await self._repondre_a_la_demande(extraction.demande, reference, mesure, texte)
@@ -642,7 +668,8 @@ class Session:
             "pre_rempli": {"phrases": [p for a in attente for p in a["pre_rempli"]["phrases"]],
                            "signalements": premier["pre_rempli"]["signalements"],
                            "valeurs": set().union(*(a["pre_rempli"]["valeurs"] for a in attente)),
-                           "crees": [i for a in attente for i in a["pre_rempli"]["crees"]]},
+                           "crees": [i for a in attente for i in a["pre_rempli"]["crees"]],
+                           "compris": any(a["pre_rempli"].get("compris") for a in attente)},
             "deja_dit": deja_dit, "paroles": dernier.get("paroles", 0),
             # Ce qui a été dit pour les phrases réunies (« Noté. », « Alors… ») : la réponse de Claude le prolonge. (Le même
             # dictionnaire que celui de la relance de la dernière phrase, qui peut encore partir.)
@@ -688,6 +715,9 @@ class Session:
         debut = time.perf_counter()
         dit = etat or self._etat_reponse(reference, mesure, deja_dit, contexte.phrase)
         dit.update(question=False, abandonnees=[], claude=False)
+        contexte.bip = dit.get("bip", False)
+        # Une description (pas une question à l'assistant, ni une demande) : rien de ce qu'il a dit n'est répété.
+        description = not demande and not question_posee(contexte.phrase)
         paroles = self._paroles
         relance = dit.get("relance")
 
@@ -705,10 +735,20 @@ class Session:
                     dit["abandonnees"].append((phrase, code_cible, cle, question_de_claude))
                     dit.setdefault("paroles_interruption", self._paroles)
                     continue
-                if deja_dit and not dit["claude"] and not question_de_claude:
-                    phrase = sans_accuse(phrase)
-                    if not phrase:
+                if not question_de_claude:
+                    if _DOUBLON_AFFIRME.search(phrase) and not suppression_demandee(contexte.phrase):
+                        # « Je l'avais déjà noté, je retire mon doublon » : jamais affirmé sans preuve (étape 9).
+                        self.journaliser("phrase_filtree", texte=phrase, raison="doublon affirmé")
                         continue
+                    if description:
+                        phrase = sans_accuse(phrase)
+                        if deja_dit and re.search(r"\bcorrig|\bremplac", phrase, re.IGNORECASE):
+                            self.journaliser("phrase_filtree", texte=phrase, raison="correction déjà dite par le serveur")
+                            continue
+                        if not phrase or reformulation(contexte.phrase, phrase):
+                            # « Laine de verre 30 centimètres. » : il vient de le dire (étape 9).
+                            self.journaliser("phrase_filtree", texte=phrase, raison="reprend ce qu'il vient de dire")
+                            continue
                 dit["claude"] = True
                 premiere = dit["phrases"] == 0
                 if question_de_claude:
@@ -749,13 +789,28 @@ class Session:
         resultats = appliquer(self.checklist, actions, contexte.t, self._phrases_recentes(contexte))
         notes_claude = self._compter(resultats)
         self._noter_contradictions(signales)
+        if deja_dit and self._annonce:
+            # « Je remplace 2015. » déjà dit pour cette phrase : la même contradiction, recréée par la correction de Claude,
+            # n'est pas redite à la phrase suivante.
+            self._annonce = " ".join(t for t in re.split(r"(?<=[.!?])\s+", self._annonce) if t and t not in deja_dit)
         self._suivre(resultats)
+        for ident, meme in self._doublons_a_verifier:
+            # Dans le doute, l'élément reste et on lui demande, brièvement (étape 9). La preuve (même repère, même
+            # orientation, même description) est notée au journal ; sans elle, rien n'est jamais affirmé.
+            if self._doublon_possible(ident, meme):
+                self._doublon_propose = (ident, meme)
+                commandes.append(f"doublon {ident}={meme} ({self._preuve_doublon(ident, meme) or 'sans preuve : demandé'})")
+                break
+            self.journaliser("doublon_refuse", element=ident, meme_que=meme, raison="éléments différents ou introuvables")
+        self._doublons_a_verifier = []
         if contexte.t_phrase:
             self._situer(resultats, *contexte.t_phrase)
         if resultats:
             await self._envoyer_actions(resultats, "cerveau")
-        quelque_chose = (dit["phrases"] or notes or notes_claude or commandes or decision.erreur
-                         or any(r["statut"] == "accepte" for r in resultats))
+        # Quelque chose a été compris ou répondu (même si sa réponse, une simple reprise, n'a pas été dite) : la visite
+        # reprend avec la question du parcours.
+        quelque_chose = (dit["phrases"] or notes or notes_claude or commandes or decision.erreur or decision.dire.strip()
+                         or pre_rempli.get("compris") or any(r["statut"] == "accepte" for r in resultats))
         if decision.erreur and demande and not dit["phrases"]:
             # Claude indisponible : le serveur répond seul à « quel mur ? », comme sans conversation.
             self._annonce = f"{self._annonce} {self._texte_demande(demande, contexte.phrase)}".strip()
@@ -769,8 +824,14 @@ class Session:
                         doute, reference, mesure_question, suite=suite):
                     break
             else:
-                if not self.en_pause and not await self._question_du_parcours(reference, mesure_question, reposer=en_attente, suite=suite):
+                # Un doublon possible (avec une preuve) se demande avant la question du parcours.
+                question = bool(self._doublon_propose) and await self._demander_doublon(reference, mesure_question, suite)
+                if not question and not self.en_pause and not await self._question_du_parcours(reference, mesure_question,
+                                                                                                 reposer=en_attente, suite=suite):
                     await self._annoncer(reference, mesure_question)
+        self._doublon_propose = None
+        if description:
+            mesure["mots_repetes"] = mots_repetes(contexte.phrase, " ".join(self._dits[dit.get("debut_dits", len(self._dits)):]))
         if dit["abandonnees"]:
             self._interrompue = {"paroles": dit["paroles_interruption"], "phrases": dit["abandonnees"], "en_attente": en_attente}
         self.journaliser("decision", mode="conversation", dire=decision.dire, cible=decision.cible, commandes=commandes,
@@ -800,10 +861,10 @@ class Session:
                 return
             await self.dire(phrase, reference, None, suite=k > 0, question=False)
 
-    def _etat_reponse(self, reference: float, mesure: dict, deja_dit: str, phrase: str) -> dict:
-        """Ce qui a déjà été dit pour une phrase (« Noté. », « Alors… »), et sa relance : « Alors… » part 1,4 s après la
-        fin de phrase si rien n'a été dit, même si Claude répond encore à la phrase précédente (étape 8)."""
-        etat = {"phrases": 1 if deja_dit else 0, "paroles": self._paroles}
+    def _etat_reponse(self, reference: float, mesure: dict, deja_dit: str, phrase: str, bip: bool = False) -> dict:
+        """Ce qui a déjà été dit pour une phrase (une contradiction, « Alors… »), et sa relance : « Alors… » part 1,4 s
+        après la fin de phrase si rien n'a été dit ni bippé, même si Claude répond encore à la phrase précédente."""
+        etat = {"phrases": 1 if deja_dit else 0, "paroles": self._paroles, "bip": bip, "debut_dits": len(self._dits)}
 
         async def relancer() -> None:
             await asyncio.sleep(max(0.0, reference + RELANCE_S - time.monotonic()))
@@ -812,7 +873,7 @@ class Session:
                 mesure["relance_s"] = mesure["question_s"] = round(time.monotonic() - reference, 3)
                 await self.dire(self._relance(), reference, mesure, forcer=True, question=False)
 
-        etat["relance"] = asyncio.create_task(relancer()) if not deja_dit and relance_utile(phrase) else None
+        etat["relance"] = asyncio.create_task(relancer()) if not deja_dit and not bip and relance_utile(phrase) else None
         return etat
 
     def _accuse(self) -> str:
@@ -938,16 +999,24 @@ class Session:
                 self.en_pause = False
                 commandes.append("reprendre")
             elif outil == "annuler":
-                # Un pré-remplissage faux de cette phrase, ou ce qu'il demande d'oublier (« oublie ce que je viens de dire
-                # sur la fenêtre ») : la valeur revient à la précédente ; sans champ, l'élément est retiré.
+                # Une valeur pré-remplie à tort dans cette phrase : corrigée. Une valeur plus ancienne, ou un élément :
+                # seulement s'il le demande (« oublie ce que je viens de dire sur la fenêtre ») ; jamais de lui-même
+                # (étape 9 : « je retire mon doublon » avait supprimé un vrai mur).
                 ident, champ = str(action.get("element_id") or "").strip().upper(), str(action.get("champ") or "").strip()
+                demandee = any(suppression_demandee(phrase) for phrase in pre_rempli["phrases"])
                 if champ and (ident, champ) in pre_rempli["valeurs"]:
                     self._retirer_pre_rempli(ident, champ, pre_rempli)
                     commandes.append(f"annuler {ident}.{champ}")
-                elif champ and self._oublier_valeur(ident, champ):
+                elif champ and demandee and self._oublier_valeur(ident, champ):
                     commandes.append(f"annuler {ident}.{champ}")
-                elif not champ and self._oublier_element(ident):
+                elif not champ and demandee and self._oublier_element(ident):
                     commandes.append(f"annuler {ident}")
+                else:
+                    self.journaliser("suppression_refusee", element=ident, champ=champ, raison="pas demandée par le diagnostiqueur")
+            elif outil == "doublon":
+                # « Peut-être le même que… » : vérifié après ses autres actions (une orientation qu'il vient de donner).
+                self._doublons_a_verifier.append((str(action.get("element_id") or "").strip().upper(),
+                                                  str(action.get("meme_que") or "").strip().upper()))
             else:
                 if outil == "enregistrer_reponse" and (str(action.get("element_id") or "").strip().upper(), action.get("champ")) in pre_rempli["valeurs"]:
                     self._retirer_pre_rempli(str(action["element_id"]).strip().upper(), str(action["champ"]), pre_rempli)
@@ -955,6 +1024,47 @@ class Session:
         if commandes:
             self.journaliser("commandes", commandes=commandes)
         return reste, commandes
+
+    def _doublon_possible(self, ident: str, meme: str) -> bool:
+        try:
+            a, b = self.checklist.trouver_element(ident), self.checklist.trouver_element(meme)
+        except ValueError:
+            return False
+        return a is not b and a.type == b.type and a.piece == b.piece
+
+    def _preuve_doublon(self, ident: str, meme: str) -> str:
+        """Ce qui prouve que deux éléments sont peut-être le même (même repère, même orientation, même description) ;
+        "" sans preuve : alors ce sont deux éléments."""
+        try:
+            a, b = self.checklist.trouver_element(ident), self.checklist.trouver_element(meme)
+        except ValueError:
+            return ""
+        if a is b or a.type != b.type or a.piece != b.piece:
+            return ""
+        if a.repere and cle_texte(a.repere) == cle_texte(b.repere):
+            return f"même repère : {a.repere}"
+        if a.orientation and a.orientation == b.orientation and a.type in ORIENTABLES:
+            return f"même orientation : {a.orientation}"
+        if cle_texte(a.description) == cle_texte(b.description) or (a.image and a.image == b.image):
+            return "même description" if cle_texte(a.description) == cle_texte(b.description) else "même image"
+        return ""
+
+    async def _demander_doublon(self, reference: float, mesure: dict | None, suite: bool) -> bool:
+        """« C'est le même mur que le mur côté couloir ? » : une seule fois par paire ; « oui » les réunit."""
+        ident, meme = self._doublon_propose
+        self._doublon_propose = None
+        try:
+            a, b = self.checklist.trouver_element(ident), self.checklist.trouver_element(meme)
+        except ValueError:
+            return False
+        cible = Cible("doublon", a.type, "", a.id, source=b.id)
+        texte = f"C'est {_meme_que(a.type)} {self.checklist.nom(b, demonstratif=False)} ?"
+        question, cible, raison, cle = self.questions.filtrer(texte, cible.code, self.checklist, time.monotonic())
+        if raison:
+            return False
+        self.journaliser("doublon_demande", element=ident, meme_que=meme)
+        await self.dire(question, reference, mesure, cible=cible, cle=cle, une_fois=True, suite=suite)
+        return True
 
     def _oublier_valeur(self, element_id: str, champ: str) -> bool:
         try:
@@ -1282,6 +1392,7 @@ class Session:
             self._dernier_element_id = cible.element_id if cible and cible.element_id else None
             self._derniere_question_texte = f"{cible.code} : « {texte} »" if cible else f"« {texte} »"
         self.dialogue.append(f"[{horodatage(self.t_video)}] Assistant : « {texte} »")
+        self._dits.append(texte)
         if mesure is not None:
             self._mesure_par_dire[self._compteur_dire] = (mesure, reference)
         latence = round(maintenant - reference, 2) if mesure is not None else None
@@ -1378,6 +1489,7 @@ class Session:
         phrases = [m for m in self.mesures if m.get("source") in ("audio", "texte")]
         audio = [m for m in phrases if m["source"] == "audio"]
         cout = sum((m.get("cerveau") or {}).get("cout_equivalent_api_usd") or 0 for m in self.mesures)
+        repetitions = [m for m in self.mesures if "mots_repetes" in m]
         return {
             "session": self.id,
             "cerveau": self.cerveau.nom,
@@ -1391,6 +1503,9 @@ class Session:
             "manques_visite": len(self.checklist.manques_visite()),
             "regles_dites": len(self.checklist.regles),
             "contradictions_signalees": [s.texte for s in self.checklist.signalements],
+            # Étape 9 : mots de sa phrase repris dans la réponse à une description (objectif : aucun).
+            "mots_repetes_par_reponse": round(statistics.mean(len(m["mots_repetes"]) for m in repetitions), 2) if repetitions else None,
+            "reponses_mesurees": len(repetitions),
             "latences_s": {
                 "fin_de_phrase (silence attendu)": self.reglages.fin_silence_s,
                 "attente_dans_la_file": stats([m.get("attente_s") for m in audio]),

@@ -334,7 +334,8 @@ class Regle:
 @dataclass
 class Signalement:
     """Contradiction relevée : la dernière valeur dite est gardée, l'ancienne reste dans l'historique.
-    Dite au diagnostiqueur tout de suite (« Noté : parpaing au lieu de brique. ») et montrée à la validation."""
+    Dite au diagnostiqueur tout de suite (« Je remplace brique. ») et montrée à la validation. Étape 9 : sans répéter la
+    valeur qu'il vient de dire, seulement celle qui est remplacée."""
 
     element_id: str
     champ: str  # ou « nombre », « orientation »
@@ -342,11 +343,15 @@ class Signalement:
     nouvelle: str
     citation: str
     t: float
-    message: str = ""  # texte à dire, s'il n'est pas « Noté : … au lieu de … »
+    message: str = ""  # texte à dire, s'il n'est pas « Je remplace … »
 
     @property
     def texte(self) -> str:
-        return self.message or f"Noté : {self.nouvelle} au lieu de {self.ancienne}."
+        if self.message:
+            return self.message
+        if self.champ == "nombre":
+            return f"Je corrige : il y en avait {self.ancienne}."
+        return f"Je remplace {self.ancienne}."
 
 
 @dataclass
@@ -562,6 +567,27 @@ class Checklist:
                 autre.support = ""
         if self.dernier.get(element.type) == element.id:
             del self.dernier[element.type]
+
+    def fusionner(self, element_id: str, meme_que: str) -> Element:
+        """« C'est le même mur que le mur côté couloir ? » « Oui. » : le diagnostiqueur confirme un doublon (étape 9 ;
+        jamais sans sa confirmation). Ce qui n'était dit que du doublon passe à l'élément gardé, puis le doublon
+        disparaît."""
+        doublon, garde = self.trouver_element(element_id), self.trouver_element(meme_que)
+        if doublon is garde or doublon.type != garde.type:
+            raise ErreurChecklist("fusion impossible : éléments identiques ou de types différents")
+        for champ, historique in doublon.valeurs.items():
+            if not garde.est_rempli(champ):
+                garde.valeurs[champ] = list(historique)
+        garde.repere = garde.repere or doublon.repere
+        garde.image = garde.image or doublon.image
+        if garde.cap is None and garde.lacet is None:
+            garde.cap, garde.lacet = doublon.cap, doublon.lacet
+        for autre in self.elements:
+            if autre.support == doublon.id:
+                autre.support = garde.id
+        self.retirer(doublon.id)
+        self.dernier[garde.type] = garde.id
+        return garde
 
     def completer(self, element_id: str, repere: str = "", support: str = "") -> Element:
         """Ajoute à un élément connu ce qui permet de le reconnaître : un repère dit, le mur qui porte une fenêtre."""

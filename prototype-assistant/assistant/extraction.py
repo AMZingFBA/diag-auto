@@ -507,6 +507,14 @@ class Cible:
             return cls("pareil", type_element, source=source) if type_element in TYPES and source in checklist.pieces else None
         if prefixe == "piece" and reste in ("suivante", "nom"):
             return cls("piece", champ=reste)
+        if prefixe == "doublon":
+            # « C'est le même mur que le mur côté couloir ? » : doublon proposé, jamais fusionné sans son « oui » (étape 9).
+            nouveau, _, ancien = reste.partition("=")
+            try:
+                element, _ = checklist.trouver_element(nouveau), checklist.trouver_element(ancien)
+            except ValueError:
+                return None
+            return cls("doublon", element.type, "", element.id, source=ancien.strip().upper())
         if prefixe == "piece" and reste.startswith("proposee:") and reste.split(":", 1)[1].strip():
             # « On est dans la cuisine ? » : pièce reconnue sur les images, à confirmer (étape 8).
             return cls("piece", champ="proposee", source=reste.split(":", 1)[1].strip())
@@ -551,6 +559,7 @@ class Cible:
             "pareil": f"pareil:{self.type}:{self.source}",
             "piece": f"piece:{self.champ}" + (f":{self.source}" if self.champ == "proposee" else ""),
             "element": f"element:{self.element_id}",
+            "doublon": f"doublon:{self.element_id}={self.source}",
             "confirmation": f"confirmer:{self.element_id}.{self.champ}={self.source}",
             "orientation": f"orientation:{self.element_id}",
         }.get(self.genre, f"secondaire:{self.type}.{self.champ}")
@@ -572,6 +581,8 @@ class _Segment:
     partie_de: int | None = None  # « un des radiateurs » : 1
     tous: bool = False  # « tous les radiateurs », « toutes les fenêtres »
     correction: bool = False  # « en fait », « finalement », « pas 2 » : un nombre corrigé
+    demonstratif: bool = False  # « cette fenêtre » (et pas « une fenêtre ») : peut reprendre celle qu'il vient d'annoncer
+    article: str = ""  # mot juste avant l'élément : « le » radiateur, « un » radiateur…
     ancien_nombre: int | None = None  # « …, pas 2 »
 
 
@@ -812,7 +823,9 @@ def _segments(texte: str, type_courant: str | None) -> tuple[str, list[_Segment]
         debuts.append(debut_segment)
         fins.append(fin)
         segments.append(_Segment(type_element, "", nombre, nouveau, singulier, pluriel, total, nouveau_fort, debut_segment,
-                                 rang=rang, partie_de=partie_de, tous=bool(_TOUS.search(" ".join(avant.split()[-3:])))))
+                                 rang=rang, partie_de=partie_de, tous=bool(_TOUS.search(" ".join(avant.split()[-3:]))),
+                                 demonstratif=bool(set(precedent[-1:]) & {"ce", "cet", "cette", "ces"}),
+                                 article=precedent[-1] if precedent else ""))
     lu = "".join(lu)
     for k, segment in enumerate(segments):
         segment.texte = lu[debuts[k]: debuts[k + 1] if k + 1 < len(segments) else len(texte)]
@@ -928,6 +941,9 @@ def extraire(phrase: str, checklist: Checklist, cible: Cible | None = None) -> E
     elif cible and cible.genre == "piece" and cible.champ == "proposee" and _OUI.match(texte.strip(" ,")):
         action("piece_courante", nom=cible.source)  # « On est dans la cuisine ? » « Oui. »
         return resultat
+    elif cible and cible.genre == "doublon" and _OUI.match(texte.strip(" ,")):
+        action("fusionner", element_id=cible.element_id, meme_que=cible.source)  # « C'est le même mur ? » « Oui. »
+        return resultat
     courante = _PIECES[piece.group(1)] if piece else checklist.nom_piece(checklist.piece_courante) if checklist.piece_courante else ""
     if courante and not re.search(r"\b(?:sauf|excepte|a part|hormis)\b", texte):  # « sauf celle de la chambre » : une exception
         texte = _sans_la_piece(texte, courante)
@@ -965,6 +981,8 @@ def extraire(phrase: str, checklist: Checklist, cible: Cible | None = None) -> E
     if type_courant == "chauffage" and len(segments) == 1 and segments[0].type == "emetteur" and not segments[0].nombre:
         # « Quel est le chauffage principal ? » « Les radiateurs électriques » : c'est le chauffage qui est décrit.
         segments[0].type, segments[0].singulier, segments[0].pluriel = "chauffage", TYPES["chauffage"].designation, "générateurs"
+
+    segments = _montres_un_par_un(segments)
 
     # « Sauf celle de la chambre, qui est en PVC », sans nommer l'élément : une exception de pièce, traitée à part.
     debut = _exceptions_sans_element(checklist, cible, debut, action)
@@ -1033,7 +1051,7 @@ def _decrire_segment(checklist: Checklist, cible: Cible | None, segment: _Segmen
     """Un élément cité dans la phrase : le créer, le compléter, le séparer en groupes, ou en tirer une règle.
     `mur_de_la_phrase` : le dernier mur cité dans la phrase ; une fenêtre citée ensuite est sur ce mur (« ce mur donne
     dehors, il y a 3 fenêtres dessus »)."""
-    repere, point, apres_mot = "", "", segment.texte[segment.fin_mot:]
+    repere, point, apres_mot, mot_repere = "", "", segment.texte[segment.fin_mot:], ""
     apres_mot, lieu = _situer_dans_la_piece(checklist, segment, apres_mot, lieu)
     if segment.type in ORIENTABLES:
         if o := _ORIENTATION_APRES_MOT.match(apres_mot):  # « le mur nord », « la baie plein sud »
@@ -1045,6 +1063,7 @@ def _decrire_segment(checklist: Checklist, cible: Cible | None, segment: _Segmen
         segment.nombre = None  # « il y a 4 murs » : chaque mur a ses caractéristiques, jamais de groupe
         if r := _REPERE.match(apres_mot):  # « le mur avec la télé », « le mur (nord) du fond »
             repere = _REPERES.get(r.group(1) or "") or _POSITIONS.get(r.group(2) or "", "")
+            mot_repere = cle_texte(r.group(1) or r.group(2) or "")
     support = mur_de_la_phrase.get("ref", "") if segment.type in ("fenetre", "porte") else ""
     piece = checklist.trouver_piece(lieu) if lieu else None  # None si la pièce nommée n'est pas encore visitée
     groupes_possibles = segment.type not in PAROIS  # murs, plafonds, planchers : un par un (étape 5)
@@ -1099,9 +1118,18 @@ def _decrire_segment(checklist: Checklist, cible: Cible | None, segment: _Segmen
                                                         _Groupe(k, valeurs, herite=True, autre=not valeurs)], action, pris)
             return
 
+    # « Le mur du tableau » : le mur déjà nommé par ce repère (test de Noah, étape 9 : rangé sur le mur du miroir, puis
+    # le mur du tableau supprimé comme « doublon »).
+    par_repere = None
+    if mot_repere and not segment.nouveau_fort:
+        par_repere = next((e for e in _existants(checklist, segment.type, piece)
+                           if mot_repere in cle_texte(e.repere) or mot_repere in cle_texte(e.description).split()), None)
+
     # 3. L'élément décrit.
     if par_orientation is not None:
         vise = par_orientation
+    elif par_repere is not None:
+        vise = par_repere
     elif (cible and cible.genre in ("champ", "confirmation") and segment.type == cible.type and not segment.nouveau_fort
             and not segment.rang and not lieu):
         # « Le mur 1 donne sur quoi ? » « C'est une cloison » : la réponse décrit l'élément de la question.
@@ -1115,13 +1143,15 @@ def _decrire_segment(checklist: Checklist, cible: Cible | None, segment: _Segmen
         vise = None  # pièce pas encore visitée : un élément nouveau, qui y sera rangé
     else:
         vise = _element_vise(checklist, segment, valeurs, piece)
-    if repere and vise is not None and (vise.repere and vise.repere != repere or (
+    if repere and vise is not None and vise is not par_repere and (vise.repere and vise.repere != repere or (
             not vise.repere and vise.valeurs and not vise.champs_manquants())):
         vise = None  # « le mur avec la télé » : un autre mur que celui, complet ou nommé autrement, dont on parlait
 
     # 4. Plusieurs groupes ou des exceptions : « 9 radiateurs électriques basse température et 1 électrique haute
     # température », « 3 fenêtres en PVC dont une en simple vitrage », « 2 en fonte et 1 en acier ».
-    if parties:
+    mot = segment.texte[: segment.fin_mot].split()
+    un_seul = segment.article in ("le", "la", "l") and not segment.nombre and not tous and not (mot and mot[-1].endswith(("s", "x")))
+    if parties and not un_seul:  # « le radiateur est électrique, un vieux grille-pain » : un seul radiateur (étape 9)
         existant = vise is not None and not segment.nombre
         total = segment.nombre or (vise.nombre if vise is not None else None)
         if groupes := _repartir(segment.type, decoupage, parties, total, existant):
@@ -1129,6 +1159,16 @@ def _decrire_segment(checklist: Checklist, cible: Cible | None, segment: _Segmen
             return
 
     # 5. Un seul groupe : le cas courant.
+    if (vise is None and segment.demonstratif and crees and crees[-1]["type"] == segment.type
+            and (not segment.nombre or segment.nombre == crees[-1]["nombre"])
+            and not crees[-1]["valeurs"] and crees[-1]["piece"] == (piece if lieu else checklist.piece_courante)):
+        # « Il y a aussi une fenêtre, cette fenêtre en bois », « trois fenêtres, ces trois fenêtres sont en PVC » : celles
+        # qu'il vient d'annoncer (étape 9 : pas un second groupe).
+        crees[-1]["valeurs"] = valeurs
+        reference = {"element_id": "", "description": crees[-1]["description"], **dans_lieu}
+        for champ, valeur in valeurs.items():
+            action("enregistrer_reponse", type=segment.type, champ=champ, valeur=valeur, **reference)
+        return
     if vise is None:
         description = _nouvelle_description(checklist, segment.type, segment.nombre, segment.singulier, segment.pluriel,
                                             deja=nouveaux.get(segment.type, 0))
@@ -1163,6 +1203,18 @@ def _decrire_segment(checklist: Checklist, cible: Cible | None, segment: _Segmen
             for champ, valeur in valeurs.items():
                 if autre is not vise and not autre.est_rempli(champ):
                     action("enregistrer_reponse", element_id=autre.id, type=segment.type, champ=champ, valeur=valeur)
+
+
+def _montres_un_par_un(segments: list[_Segment]) -> list[_Segment]:
+    """« Une fenêtre ici, une fenêtre ici, une fenêtre aussi là-bas » : trois fenêtres montrées une par une, sans rien
+    dire de chacune. Un seul élément de 3 (étape 9 : pas une fenêtre plus « les autres fenêtres »)."""
+    for type_element in ("fenetre", "porte", "emetteur"):
+        du_type = [s for s in segments if s.type == type_element]
+        if (len(du_type) >= 2 and all(s.article in ("un", "une") and not s.nombre and not s.partie_de
+                                       and not _valeurs(type_element, s.texte[s.fin_mot:]) for s in du_type)):
+            du_type[0].nombre, du_type[0].nouveau = len(du_type), True
+            segments = [s for s in segments if s not in du_type[1:]]
+    return segments
 
 
 def _situer_dans_la_piece(checklist: Checklist, segment: _Segment, apres_mot: str, lieu: str | None) -> tuple[str, str | None]:

@@ -130,7 +130,7 @@ def test_reponse_coupee_par_une_vraie_phrase_pas_redite(tmp_path):
         return recus[debut:]
 
     recus = asyncio.run(scenario())
-    assert dits(recus) == ["Une fuite de chaleur.", "Noté.", "Ce mur est en quoi ?"]  # sa phrase a sa propre réponse
+    assert dits(recus) == ["Une fuite de chaleur.", "Ce mur est en quoi ?"]  # sa phrase a sa propre réponse
 
 
 def test_toujours_une_voix_en_moins_de_2_s(tmp_path):
@@ -147,9 +147,9 @@ def test_toujours_une_voix_en_moins_de_2_s(tmp_path):
     assert suites(apres[1]) == [False, True, True]
     relance = next(m for m in apres[1] if m["type"] == "dire")
     assert RELANCE_S <= relance["latence_s"] < 1.6
-    # Quelque chose de noté : « Noté. » tout de suite, Claude enchaîne avec la question.
-    accuse = next(m for m in apres[2] if m["type"] == "dire")
-    assert accuse["texte"] == "Noté." and accuse["latence_s"] < 0.3 and dits(apres[2])[-1] == "Ce mur est en quoi ?"
+    # Quelque chose de noté : un bip tout de suite (étape 9 : sans mots), Claude enchaîne avec la question.
+    bip = next(m for m in apres[2] if m["type"] == "bip")
+    assert bip["latence_s"] < 0.3 and dits(apres[2]) == ["Ce mur est en quoi ?"]
     # Un mot isolé (débris, « euh ») : pas de relance.
     assert not set(dits(apres[3])) & set(RELANCES)
 
@@ -170,9 +170,9 @@ def test_phrase_inachevee_pre_remplie_sans_attendre(tmp_path):
         return session, recus[debut:]
 
     session, recus = asyncio.run(scenario())
-    # « Noté. » tout de suite, sans attendre la fin (au test de Noah, la file restait bloquée 8 s) ; Claude, lui, a attendu
-    # la suite et répond à l'ensemble, en un seul appel.
-    assert dits(recus)[0] == "Noté." and recus[[m["type"] for m in recus].index("dire")]["latence_s"] < 0.3
+    # Bip tout de suite, sans attendre la fin (au test de Noah, la file restait bloquée 8 s) ; Claude, lui, a attendu la
+    # suite et répond à l'ensemble, en un seul appel.
+    assert next(m for m in recus if m["type"] == "bip")["latence_s"] < 0.3
     assert cerveau.phrases[-1] == "Ce mur donne dehors, en brique, et l'isolant c'est du laine de verre."
 
 
@@ -319,7 +319,7 @@ def test_debris_et_mots_colles():
 def test_claude_ne_redit_pas_note_apres_le_serveur(tmp_path):
     cerveau = CerveauScenario(poli(defaut="Noté, mur en brique."))
     _, apres, _ = asyncio.run(visite(tmp_path, ["Ici c'est le séjour.", "Ce mur donne dehors, en brique."], cerveau))
-    assert dits(apres[1]) == ["Noté.", "Mur en brique.", "Ce mur, quelle épaisseur ?"]
+    assert dits(apres[1]) == ["Ce mur, quelle épaisseur ?"]  # étape 9 : ni « Noté », ni « Mur en brique »
     assert sans_accuse("Oui, brique, c'est noté.") == "Oui, brique." and sans_accuse("D'accord, noté.") == ""
 
 

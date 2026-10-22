@@ -40,7 +40,7 @@ def _piece(checklist: Checklist, action: dict, t: float) -> str | None:
 
 
 _AVEC_CITATION = ("enregistrer_reponse", "marquer_sans_objet", "cloturer", "copier", "scinder", "compter", "regle", "exception", "murs",
-                  "orienter")
+                  "orienter", "fusionner")
 
 
 def appliquer_action(checklist: Checklist, action: dict, t: float, phrases: list[str]) -> dict:
@@ -79,6 +79,8 @@ def appliquer_action(checklist: Checklist, action: dict, t: float, phrases: list
                     raise ErreurChecklist("élément à orienter introuvable")
                 ident = element.id
             resultat["element"] = checklist.orienter(ident, _texte(action, "orientation"), citation, t).id
+        elif outil == "fusionner":  # « C'est le même mur ? » « Oui. » : doublon confirmé par le diagnostiqueur (étape 9)
+            resultat["element"] = checklist.fusionner(_texte(action, "element_id"), _texte(action, "meme_que")).id
         elif outil == "murs":  # « cette pièce fait 4 murs »
             checklist.compter_murs(_nombre(action) or 0, citation, t)
         elif outil in ("enregistrer_reponse", "marquer_sans_objet"):

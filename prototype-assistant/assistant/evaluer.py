@@ -21,7 +21,8 @@ from pathlib import Path
 
 from .cerveau import CerveauClaudeCode
 from .checklist import Checklist
-from .extraction import Cible
+from .repetition import mots_repetes
+from .extraction import Cible, question_posee
 from .reglages import Reglages
 from .session import Session
 from .simulation import CerveauSimulation
@@ -160,9 +161,18 @@ async def evaluer_conversation(sortie: Path | None) -> None:
     await session.demarrer()
     await session._pret.wait()
     ecrire("## Mise en place de la visite\n")
+    repris: list[int] = []  # étape 9 : mots de sa phrase repris dans la réponse à une description (objectif : aucun)
+
+    def repetes(texte: str, dits: list[str]) -> str:
+        if question_posee(texte):
+            return ""
+        mots = mots_repetes(texte, " ".join(dits))
+        repris.append(len(mots))
+        return f" — mots repris : {', '.join(mots)}" if mots else ""
+
     for texte in MISE_EN_PLACE:
         dits, _, _ = await phrase(texte)
-        ecrire(f"- « {texte} » → « {' '.join(dits)} »")
+        ecrire(f"- « {texte} » → « {' '.join(dits) or '(bip)'} »{repetes(texte, dits)}")
     ecrire("\n## 30 phrases libres\n")
     premieres, totaux = [], []
     for numero, (categorie, texte) in enumerate(CONVERSATION_LIBRE, 1):
@@ -171,7 +181,7 @@ async def evaluer_conversation(sortie: Path | None) -> None:
         premieres += [premiere] if isinstance(premiere, (int, float)) else []
         totaux += [total] if isinstance(total, (int, float)) else []
         ecrire(f"{numero}. *{categorie}* — « {texte} »")
-        ecrire(f"   - **Assistant** : « {' '.join(dits) or '(rien)'} »")
+        ecrire(f"   - **Assistant** : « {' '.join(dits) or '(rien)'} »{repetes(texte, dits)}")
         for qui, faites in notes.items():
             if faites:
                 ecrire(f"   - {'pré-rempli par les règles' if qui == 'règles' else 'Claude'} : {' ; '.join(faites)}")
@@ -185,6 +195,9 @@ async def evaluer_conversation(sortie: Path | None) -> None:
                f"(après la fin de phrase ; + 0,7 s de silence et ~0,05 s de transcription au téléphone)")
     if totaux:
         ecrire(f"- réponse complète de Claude : médiane {_s(statistics.median(totaux))} s")
+    if repris:
+        ecrire(f"- mots de sa phrase repris dans la réponse à une description : {_s(statistics.mean(repris))} par réponse en "
+               f"moyenne, sur {len(repris)} réponses ({sum(1 for n in repris if n)} en reprennent au moins un)")
     if sortie:
         sortie.write_text("\n".join(lignes) + "\n", encoding="utf-8")
 
