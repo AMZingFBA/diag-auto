@@ -12,13 +12,13 @@ Ce prototype correspond à l'étape **V1bis** du plan ([docs/02-capture-video.md
 2. Le **serveur** (ce PC) :
    - repère la fin de chaque phrase, et attend la suite si elle est coupée (« Il est… ») ;
    - la transcrit sur place, en 0,05 s : **la voix ne quitte pas le PC** (voir « Étape 5 ») ;
-   - **pré-remplit tout de suite**, sans IA, tout ce qu'il reconnaît dans la phrase (quelques millisecondes ; un bip dit « noté ») ;
+   - **pré-remplit tout de suite**, sans IA, tout ce qu'il reconnaît dans la phrase, et le dit : « Noté. » (étape 8) ;
    - calcule la question suivante du parcours (voir « Parcours de la visite » plus bas).
 3. **Claude est le cerveau de chaque phrase** (étape 7) :
    - il comprend n'importe quelle phrase, comme dans une vraie conversation, et y répond : question générale, remarque, ordre (« on fait une pause », « reviens au salon »), correction, récapitulatif ;
    - il vérifie le pré-remplissage du serveur, le corrige ou l'annule si besoin ;
    - puis il reprend la visite avec la question proposée par le parcours ;
-   - sa réponse est lue **dès sa première phrase**, pendant qu'il écrit la suite ;
+   - sa réponse est lue **dès sa première phrase**, pendant qu'il écrit la suite ; s'il tarde, « Alors… » part au bout de 1,4 s ;
    - pendant les silences, il regarde les images et signale les éléments visibles (fenêtre, radiateur…), sans parler.
 4. **Le serveur vérifie tout** :
    - une valeur n'est notée que si sa citation se retrouve dans ce que le diagnostiqueur a réellement dit ;
@@ -638,8 +638,69 @@ Le prototype compte 215 tests.
 - **Réponses aux questions générales** : elles viennent des connaissances de Claude (Haiku), sans vérification par le serveur. Elles sont justes dans l'essai, mais parfois approximatives (validité des anciens DPE). Les consignes lui demandent de dire quand il n'est pas sûr.
 - **Récapitulatifs** : justes, mais parfois maladroits (« il reste à voir les radiateurs, déjà notés »).
 - **Latence** : environ 1,5 à 2 s de plus qu'à l'étape 5 avant la question. Elle monte à 4 s quand Claude écrit une longue première phrase, au premier message de la visite, ou au remplacement de son processus (tous les 30 messages).
-- **Diagnostiqueur qui parle sans pause** : la réponse en cours est abandonnée dès qu'il reparle, pour ne pas lui couper la parole. Un bruit fort peut aussi l'interrompre.
+- **Diagnostiqueur qui parle sans pause** : la réponse en cours est abandonnée dès qu'il reparle, pour ne pas lui couper la parole. (Un bruit l'interrompait aussi : corrigé à l'étape 8.)
 - **Vouvoiement** : l'assistant vouvoie le diagnostiqueur, comme les questions du parcours. C'est une ligne des consignes, facile à changer.
+
+## Étape 8 : plus fluide (test de Noah du 22/10/2026 après l'étape 7)
+
+Retour de Noah (`sessions/20261022-120410-53ecb1`, séjour puis cuisine, 5 min 48) : « pas assez fluide, il s'arrête de parler, il répète, il ne prend pas toutes les infos, il ne comprend pas quand je change de pièce, il ne repère pas bien les murs, il parle des lampes ». Diagnostic complet, et visite rejouée avant/après : [rejeux/20261022-etape8-fluidite.md](rejeux/20261022-etape8-fluidite.md).
+
+**1. « Il s'arrête de parler »** : la cause principale était un **claquement de 0,1 à 0,3 s** qui arrive dans le micro juste après chaque phrase de l'assistant (le téléphone qui bascule sa sortie son ; visible sur `audio.wav`). Le serveur le prenait pour une prise de parole : il coupait la voix et abandonnait la réponse. À 222 s et 287 s, la réponse n'a jamais été entendue.
+- La voix n'est plus coupée que par une **parole confirmée** : 0,35 s de parole, 0,6 s quand l'assistant parle (son écho n'est pas une prise de parole).
+- Une réponse coupée par un bruit (transcrit vide) est **redite**.
+- Un bruit transcrit « . » ne part plus ni à Whisper ni à Claude. Au début de la visite, Whisper avait inventé « Laine de verre. » sur ce bruit, et Claude s'était mis à décrire l'image.
+- Plus de second avis de Whisper en conversation : il coûtait 2 à 3 s et bloquait la phrase suivante.
+- Une phrase inachevée (« … et l'isolant est du ») bloquait tout jusqu'à 8 s. Maintenant, elle est notée tout de suite, et seul Claude attend la suite (2,5 s au plus).
+
+**2. Toujours une voix en moins de 2 s** (avant : 3,1 s en médiane, Claude réfléchissant avant d'écrire) :
+- « **Noté.** » est dit tout de suite quand les règles ont noté quelque chose. S'il y a une contradiction, c'est elle qui est dite : « Noté : parpaing au lieu de brique. ».
+- Sinon, « **Alors…** » ou « Voyons… » est dit si rien n'est encore parti 1,4 s après la fin de phrase, même quand Claude répond encore à la phrase précédente. Rien n'est dit pour un mot isolé (débris, « euh »).
+- Claude enchaîne sans redire « noté » : le serveur retire ce mot de sa première phrase.
+- Claude reçoit une seule image par phrase (au lieu de trois), et son processus est renouvelé toutes les 12 phrases (au lieu de 30). Il a moins à relire et répond plus vite.
+- Rejeu de la visite : première chose dite à **0,9 s** en médiane (2,6 s avant), 1,4 s pour 90 % des phrases (3,9 s avant).
+
+**3. Hors sujet** : les consignes de Claude interdisent de décrire la décoration (rideau, lampe, appareil). Un objet ne sert qu'à nommer un mur (« le mur avec la télé »).
+
+**4. Infos perdues ou mal rangées** :
+- **Élément en cours** : une phrase qui ne nomme rien (« l'isolant, c'est de la laine de verre 30 cm ») complète l'élément qu'il est en train de décrire, et non celui de la dernière question. Au test, cette phrase avait été rangée sur le plafond. Cet élément n'est valable que dans sa pièce.
+- **Interprétation probable de Claude** : elle est notée, avec la mention « à vérifier » pour l'écran de validation. Avant, elle était perdue puis redemandée (« une autre maison derrière, mais c'est pas la mienne » : demandé deux fois de plus).
+- Préciser une valeur (« isolé », puis « isolé laine de verre 30 cm ») n'est plus une contradiction.
+- Consigne : ne jamais redemander ce qui a été dit, même mal rangé. Le ranger au lieu de le redemander.
+
+**5. Phrases globales** : « Tous les murs de la maison sont en brique » est une **règle du logement**, comprise aussi par les règles du serveur. Elle vaut pour les murs déjà décrits et à venir, dans toutes les pièces, et le matériau n'est plus demandé.
+
+**6. Changement de pièce** :
+- Par la parole : « là c'est la cuisine », « après il y a un couloir », « on retourne dans… ». « On a changé de pièce » sans nom : Claude la reconnaît sur les images.
+- Par la vidéo : pendant les silences, Claude regarde les images. S'il voit une autre pièce, l'assistant demande « **On est dans la cuisine ?** », et « oui » change de pièce.
+  - Un « nouveau décor » (couleurs de l'image jamais vues dans la pièce, voir `assistant/decor.py`) avance ce coup d'œil.
+  - Ce signal ne décide jamais seul : mesuré sur la visite, tourner la caméra dans une même pièce change autant les couleurs que changer de pièce.
+
+**7. « Ce mur, ce mur et ce mur »** : chaque « ce mur » (ou « un mur ici ») désigne le mur filmé à cet instant.
+- Un mur est créé pour chacun. Son instant est estimé d'après sa place dans la phrase, et le mur reçoit l'image et la visée de la boussole de cet instant. Il n'est pas créé si la caméra visait un mur déjà connu.
+- Claude reçoit ces images et donne à chacun un repère visuel. La question suivante porte sur eux, et non plus « un autre mur ? ».
+
+**8. Transcription** : mots collés corrigés (« cemur », « semur » → « ce mur » ; « murici » → « mur ici » ; « qui faut quoi doute ? » → « il te faut quoi d'autre ? »). Les débris (« Pourourir », « Djaddi ») sont ignorés par Claude.
+
+**Tests** : `tests/test_fluidite.py` (18 tests) reprend chaque constat avec un faux Claude et du son fabriqué :
+- claquement sans coupure ;
+- réponse redite après un bruit ;
+- voix en moins de 2 s ;
+- phrase inachevée notée tout de suite ;
+- pas de décoration ;
+- élément en cours ;
+- valeur probable notée ;
+- « tous les murs » ;
+- changements de pièce (parole et images) ;
+- murs montrés un par un (image et boussole de chaque instant) ;
+- débris et mots collés.
+
+Le prototype compte 233 tests.
+
+**Limites** :
+- **Le rejeu ne reproduit pas le téléphone** : la coupure de la voix par le claquement est corrigée côté serveur, à vérifier au prochain test de Noah.
+- **La réflexion de Claude** (impossible à couper par Claude Code) reste le plus long : 1 à 5 s avant sa première phrase. « Noté. » et « Alors… » la masquent, mais le contenu de la réponse arrive ensuite.
+- **L'instant de chaque « ce mur »** est estimé d'après sa place dans la phrase (pas de minutage mot à mot avec le moteur de transcription rapide) : à une seconde près.
+- **« On est dans la cuisine ? »** ne vient que pendant un silence (la veille de Claude) ou si Claude le remarque en répondant.
 
 ## Réglages (variables d'environnement)
 
@@ -670,7 +731,7 @@ Le prototype compte 215 tests.
   - l'installation de la page comme une application (PWA) ne marche pas avec ce certificat.
   - Pour l'installation, ou pour un test hors du Wi-Fi, il faudra un tunnel HTTPS (par exemple Cloudflare Tunnel), avec un code d'accès.
 - La vidéo est gardée **dans la mémoire du téléphone** jusqu'à la fin. Cela convient pour des tests de quelques minutes ; en 1080p, environ 60 Mo par minute.
-- La **détection de fin de phrase** se fait sur le volume du son, ce qui est simple. Silero VAD reste à évaluer, une fois sa licence vérifiée.
+- La **détection de fin de phrase** se fait sur le volume du son, ce qui est simple. Silero VAD reste à évaluer, une fois sa licence vérifiée. Depuis l'étape 8, une prise de parole doit durer 0,35 s (0,6 s pendant que l'assistant parle) pour couper la voix.
 - La **voix** est celle du navigateur ; Piper (voix fr_FR-siwis, sur le serveur) viendra ensuite.
 - La **boussole** et le **gyroscope** du téléphone sont enregistrés (une mesure par seconde) : voir « Étape 6 ». La boussole n'a pas encore été essayée sur un vrai téléphone ; le cap de la caméra de l'iPhone tenu droit (étape 7) est à vérifier au test terrain.
 - **Deux processus Claude Code par visite** : un pour les réponses, un pour la veille, pour que la veille ne retarde jamais une réponse.
@@ -686,6 +747,7 @@ Le prototype compte 215 tests.
 | `assistant/groupes.py` | Découpage d'une phrase en groupes, quantités et exceptions (« 9 … et 1 … », « dont une », « tous sauf un »). |
 | `assistant/noms.py` | Noms parlants à l'oral : « ce mur », « le mur côté voisin », « le mur nord », jamais « le mur 3 ». |
 | `assistant/plausibilite.py` | Contrôle des valeurs invraisemblables (un mur de 30 m de long) avant de les noter. |
+| `assistant/decor.py` | Nouveau décor filmé : avance le coup d'œil de Claude sur la pièce (étape 8). |
 | `assistant/boussole.py`, `boussole.toml` | Boussole et gyroscope du téléphone : orientation des murs et des fenêtres, fiabilité ; seuils réglables. |
 | `assistant/citations.py`, `assistant/actions.py` | Vérification des citations ; application des actions proposées. |
 | `assistant/lexique.py` | Lexique métier pour la transcription, corrections connues (« parpin » → parpaing). |
