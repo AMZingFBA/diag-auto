@@ -6,3 +6,7 @@ __pycache__/
 build/
 dist/
 samples/
+
+# Prototype assistant : sessions enregistrées (vidéo, audio, images) et certificats locaux
+prototype-assistant/sessions/
+prototype-assistant/certificats/
