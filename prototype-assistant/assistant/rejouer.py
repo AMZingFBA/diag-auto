@@ -90,7 +90,8 @@ async def rejouer(video: Path, serveur: str, code: str, piece: str) -> dict:
                 elif m["type"] == "transcription":
                     print(f"{horloge()} DIAGNOSTIQUEUR ({m['t']:.1f} s) : « {m['texte']} »")
                 elif m["type"] == "dire":
-                    print(f"{horloge()} ASSISTANT : « {m['texte']} »")
+                    latence = f" (question {m['latence_s']} s après la fin de phrase détectée)" if m.get("latence_s") is not None else ""
+                    print(f"{horloge()} ASSISTANT : « {m['texte']} »{latence}")
                     await ws.send(json.dumps({"type": "tts", "etat": "debut", "id": m["id"]}))
                     asyncio.get_running_loop().call_later(
                         0.07 * len(m["texte"]), lambda: asyncio.ensure_future(ws.send(json.dumps({"type": "tts", "etat": "fin"}))))
@@ -99,7 +100,7 @@ async def rejouer(video: Path, serveur: str, code: str, piece: str) -> dict:
                         detail = f"{r.get('element') or ''} {r.get('champ') or ''} = {r.get('valeur') or ''}".strip()
                         print(f"{horloge()}    {'✓' if r['statut'] == 'accepte' else '✗'} {r['outil']} {detail} {r['raison']}")
                 elif m["type"] == "bip":
-                    print(f"{horloge()}    (bip)")
+                    print(f"{horloge()}    (bip : noté {m.get('latence_s')} s après la fin de phrase détectée)")
                 elif m["type"] == "erreur":
                     print(f"{horloge()} ERREUR : {m['message']}")
                 elif m["type"] == "bilan":

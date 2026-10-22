@@ -35,6 +35,10 @@ function maintenant() {
   return (performance.now() - etat.debut) / 1000;
 }
 
+function secondes(s) {
+  return `${s.toFixed(1).replace(".", ",")} s`;
+}
+
 function horodatage(t) {
   const s = Math.max(0, Math.round(t));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
@@ -170,10 +174,12 @@ function recevoir(m) {
       $("question").textContent = m.texte;
       $("question").classList.toggle("muet", m.muet || etat.muet);
       $("question").hidden = false;
+      $("latence").textContent = m.latence_s != null ? `Réponse ${secondes(m.latence_s)} après la fin de votre phrase` : "";
       if (!m.muet && !etat.muet) parler(m.texte, m.id);
       break;
     case "bip":
       bip();
+      if (m.latence_s != null) $("latence").textContent = `✓ Noté ${secondes(m.latence_s)} après la fin de votre phrase`;
       break;
     case "etat":
       majEtat(m);
@@ -204,7 +210,8 @@ function majActions(resultats) {
   for (const r of resultats) {
     if (!["enregistrer_reponse", "marquer_sans_objet", "piece_courante"].includes(r.outil)) continue;
     const li = document.createElement("li");
-    const quoi = r.outil === "piece_courante" ? "pièce" : `${r.element || ""} ${r.champ || ""} = ${r.valeur || "sans objet"}`;
+    const nombre = r.nombre > 1 ? ` ×${r.nombre}` : "";
+    const quoi = r.outil === "piece_courante" ? "pièce" : `${r.element || ""}${nombre} ${r.champ || ""} = ${r.valeur || "sans objet"}`;
     li.textContent = r.statut === "accepte" ? `✓ ${quoi}` : `✗ refusé (${r.raison}) : ${quoi}`;
     li.className = r.statut === "accepte" ? "" : "refuse";
     liste.prepend(li);

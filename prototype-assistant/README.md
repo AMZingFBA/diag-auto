@@ -10,14 +10,25 @@ Ce prototype correspond à l'étape **V1bis** du plan ([docs/02-capture-video.md
    - filme et garde la vidéo complète en mémoire ;
    - envoie au serveur le son et **une image par seconde**.
 2. Le **serveur** (ce PC) :
-   - repère la fin de chaque phrase ;
+   - repère la fin de chaque phrase, et attend la suite si elle est coupée (« Il est… ») ;
    - la transcrit sur place : **la voix ne quitte pas le PC** ;
-   - envoie à **Claude** la phrase, 1 à 3 images réduites et l'état de la checklist DPE.
-3. **Claude** répond par la question suivante, s'il y en a une, et par les valeurs à noter.
-4. **Le serveur vérifie chaque valeur** : elle n'est notée que si sa citation se retrouve dans ce que le diagnostiqueur a réellement dit. Sinon, elle est refusée.
-5. Le **téléphone** lit la question à voix haute (voix du navigateur) :
-   - il se tait dès que le diagnostiqueur reparle ;
-   - il fait un **bip** quand une valeur est notée sans question à poser.
+   - **note tout de suite**, sans IA, tout ce qu'il reconnaît dans la phrase (quelques millisecondes, puis un **bip**) ;
+   - envoie ensuite à **Claude** la phrase, 1 à 3 images réduites et l'état de la checklist DPE.
+3. **Claude** complète ce que le serveur n'a pas compris et choisit **une seule** question.
+4. **Le serveur vérifie tout** :
+   - une valeur n'est notée que si sa citation se retrouve dans ce que le diagnostiqueur a réellement dit ;
+   - une question est bloquée si elle demande de répéter, si elle porte sur un champ déjà rempli, ou si elle a déjà été posée dans les 2 dernières minutes ;
+   - s'il y a deux questions, seule la première est gardée. Si la question de Claude est bloquée, le serveur pose la suivante de la checklist.
+5. Le **téléphone** lit la question à voix haute (voix du navigateur), et se tait dès que le diagnostiqueur reparle. Il affiche aussi le temps de réponse.
+
+**Description libre** (retour de Noah après son test du 22/10/2026) : le diagnostiqueur peut tout dire d'un coup, par exemple « ce mur fait 4 m 50 de long, brique 30 cm, isolé par l'intérieur, il y a trois fenêtres en bois double vitrage, deux radiateurs à eau ».
+- Tout est noté en une fois : le mur avec ses 4 valeurs, un groupe de **3 fenêtres** identiques, un groupe de **2 radiateurs**.
+- Seul ce qui n'a pas été dit est demandé ensuite.
+
+**Pas de « répétez »** :
+- un mot mal transcrit est deviné avec le vocabulaire du champ demandé, par exemple « Ictérieur » donne extérieur ou « BESSE » donne basse ;
+- la correction est gardée pour l'écran de validation ;
+- « je ne sais pas » est noté « inconnu », marqué à vérifier, et l'assistant passe à la suite.
 
 C'est **notre serveur** qui tient la checklist et calcule ce qui manque, pas l'IA. L'IA ne fait que poser des questions et proposer ce qu'elle a entendu. Une donnée qui n'a pas été dite reste vide.
 
@@ -67,10 +78,11 @@ Au premier lancement, le modèle de transcription se télécharge (environ 500 M
 2. Un avertissement de sécurité s'affiche, parce que le certificat est fait maison. Touchez « Paramètres avancés », puis « Continuer vers le site ». C'est normal pour ce prototype : le HTTPS est obligatoire pour que le téléphone autorise la caméra et le micro.
 3. Branchez une **oreillette**, de préférence. Sans oreillette, la voix de l'assistant passe par le haut-parleur et peut être captée par le micro.
 4. Touchez **Démarrer la visite** et autorisez la caméra et le micro.
-5. Filmez en parlant normalement :
+5. Filmez en parlant normalement, en décrivant librement :
    - « ici c'est la cuisine » ;
-   - « ce mur-là, brique, 30 cm, il donne dehors » ;
-   - « la fenêtre, PVC double vitrage, volets roulants » ;
+   - « ce mur fait 4 m 50 de long, brique 30 cm, isolé par l'intérieur, il donne dehors » ;
+   - « il y a trois fenêtres en bois double vitrage, deux radiateurs à eau » ;
+   - en réponse à une question, un seul mot suffit : « extérieur », « basse », « roulants » ;
    - « je ne sais pas » ;
    - « pas de radiateur ici ».
 6. Les boutons :
@@ -98,7 +110,7 @@ set DIAGAUTO_CERVEAU=simulation
 ..\.venv\Scripts\python -m assistant
 ```
 
-Un « cerveau » simple, à base de règles, reconnaît quelques mots du métier (brique, PVC, double vitrage, radiateur…) et pose la question suivante de la checklist. Il ne voit pas les images.
+Les valeurs sont notées par l'extraction immédiate, la même qu'avec Claude. La simulation pose ensuite la question suivante de la checklist. Elle ne voit pas les images.
 
 Si faster-whisper n'est pas installé, ou avec `DIAGAUTO_TRANSCRIPTION=simulation`, rien n'est transcrit : on écrit alors les phrases dans « Outils de test ».
 
@@ -117,6 +129,20 @@ puis, dans un **autre** terminal :
 cd prototype-assistant
 ..\.venv\Scripts\python -m assistant.rejouer ..\samples\video-001\video.mp4 --serveur http://localhost:8765
 ```
+
+## Évaluer sur 10 phrases réalistes
+
+Ces 10 phrases de diagnostiqueur contiennent les fautes de transcription réellement entendues pendant le test de Noah. Le script les fait passer par la chaîne complète (extraction immédiate, Claude, garde-fous) et affiche, pour chacune :
+- ce qui a été noté ;
+- la question posée ;
+- le temps de chaque étape.
+
+```
+cd prototype-assistant
+..\.venv\Scripts\python -m assistant.evaluer
+```
+
+Ajoutez `--simulation` pour l'exécuter sans Claude. Les mêmes 10 phrases sont aussi vérifiées par les tests automatiques (`tests/test_extraction.py`).
 
 ## Ce qui est enregistré
 
@@ -180,15 +206,38 @@ Soit **environ 4,8 s entre la fin de la phrase et le début de la réponse**. L'
 
 Claude Code indique aussi ce que la visite aurait coûté au tarif de l'API : environ 0,02 à 0,03 $ pour 40 s de vidéo. **Ce n'est pas facturé avec l'abonnement.** C'est plus que l'estimation du plan, à cause de la réflexion.
 
-**Comportement observé** sur la vidéo de test :
-- **ce qui marche** :
-  - les valeurs dites sont notées avec leur citation : M1 brique 30 cm, M2 parpaing 40 cm ;
-  - les questions désignent ce qui est filmé (« Le mur avec la commode, il est isolé ? ») ;
-  - quand c'est ambigu (deux « celui-ci » dans la même phrase), l'assistant demande au lieu de deviner.
-- **l'erreur corrigée** :
-  - une phrase mal transcrite avait d'abord produit une isolation inventée ;
-  - la consigne demande maintenant de faire répéter une phrase douteuse : c'est ce que fait l'assistant depuis.
-- **à régler avec Noah** : sur une parole décousue, l'assistant demande souvent des précisions.
+## Après le test de Noah sur iPhone (22/10/2026)
+
+**Ce que le test a montré** (7 minutes dans un séjour) : l'assistant comprenait mal et faisait répéter. Le journal en donne trois causes.
+
+1. **Transcription mauvaise sur les réponses courtes** : « Sainte », « Ictérieur », « BESSE », « O, chaudi », parfois 5 à 14 s par phrase.
+   - Cause : la détection de phrase ne gardait que 0,3 s de son avant le premier mot ; sur un ou deux mots, Whisper manque de contexte. Il recommençait aussi plusieurs fois quand il hésitait, et partait parfois en boucle.
+   - Correction : 1 s de son gardé avant la phrase et 0,5 s après, recherche plus large (faisceau 5), anti-répétition, longueur de texte plafonnée.
+   - Vérifié en rejouant l'enregistrement de Noah :
+     - « Il est isolé par l'intérieur », « BAS ! », « Eau chaude. » sont maintenant justes ;
+     - plus de boucle ;
+     - 2,3 s par phrase en médiane (+0,2 s), et le pire cas passe de 5,9 s à 3,6 s.
+2. **Phrases coupées pendant les hésitations** (« Il est… » / « Et il fait… » / « 20 mètres 5 »). Le serveur attend maintenant la suite tant que le diagnostiqueur parle encore.
+3. **Claude faisait répéter et reposait des questions.** Trois corrections :
+   - une extraction immédiate par règles note tout ce qui est reconnu, y compris dans une description libre ;
+   - de nouvelles consignes à Claude : tout extraire, deviner, une seule question ;
+   - des garde-fous sur les questions, appliqués par le serveur.
+
+**Évaluation sur 10 phrases réalistes avec le vrai Claude** (`python -m assistant.evaluer`) :
+- **26 valeurs notées sur 26, aucune refusée** : description libre complète, groupes de 3 fenêtres et 2 radiateurs, « Ictérieur » → extérieur, « BESSE » → basse, « parpin » → parpaing, « je sais pas » → inconnu.
+- **0** demande de répétition, **0** question double, **0** question redemandée dans la même pièce.
+- Questions courtes et utiles : « Ce mur donne sur l'extérieur ? », « Les 3 fenêtres ont des volets ? », « Les radiateurs sont basse ou haute température ? ».
+
+| Étape (phrase reçue en texte) | Médiane | Plage |
+|---|---|---|
+| Extraction immédiate (bip « noté ») | **2 ms** | 0,5 à 13 ms |
+| Question de Claude prête | **1,5 s** | 0,9 à 2,7 s |
+
+**Sur le téléphone**, il faut ajouter environ 0,7 s de silence de fin de phrase et environ 2,3 s de transcription. Cela donne :
+- le bip « noté » environ **3 s** après la fin de la phrase ;
+- la question environ **4,5 s** après.
+
+Le temps de réponse est maintenant affiché sous chaque question à l'écran.
 
 ## Réglages (variables d'environnement)
 
@@ -201,6 +250,7 @@ Claude Code indique aussi ce que la visite aurait coûté au tarif de l'API : en
 | `DIAGAUTO_CLAUDE` | trouvé automatiquement | Chemin de `claude.exe`. |
 | `DIAGAUTO_TRANSCRIPTION` | `auto` | `whisper`, `simulation`, ou `auto`. |
 | `DIAGAUTO_WHISPER_MODELE` | `auto` | `auto` = `large-v3-turbo` avec carte graphique, `small` sinon. |
+| `DIAGAUTO_WHISPER_FAISCEAU` | `5` | Largeur de recherche de Whisper. `1` est un peu plus rapide (−0,2 s) mais se trompe davantage sur les mots courts. |
 | `DIAGAUTO_FIN_SILENCE` | `0.7` | Silence (en secondes) qui termine une phrase. Trop court, l'assistant coupe la parole ; trop long, il paraît lent. |
 | `DIAGAUTO_VEILLE_S` | `10` | Pendant un silence, l'assistant regarde les images toutes les N secondes et peut poser une question. |
 | `DIAGAUTO_QUESTIONS_MINUTE` | `6` | Nombre maximal de questions par minute. |
@@ -208,7 +258,9 @@ Claude Code indique aussi ce que la visite aurait coûté au tarif de l'API : en
 
 ## Limites connues de ce prototype
 
-- **Pas encore testé sur un vrai téléphone** (Android récent, Android ancien, iPhone) : c'est le prochain test, avec Noah.
+- **Testé une fois sur iPhone par Noah** (version précédente). Restent à tester : Android récent, Android ancien, et cette version corrigée.
+- **L'extraction immédiate** ne connaît que le vocabulaire listé dans `assistant/extraction.py`. Le reste est compris par Claude.
+- **« Celui-ci »** désigne pour l'instant l'élément dont on donne les valeurs. Le parcours mur par mur dans la pièce viendra à l'étape 2.
 - **Certificat fait maison** :
   - l'avertissement du navigateur est à accepter à chaque nouveau téléphone ;
   - l'installation de la page comme une application (PWA) ne marche pas avec ce certificat.
@@ -230,8 +282,11 @@ Claude Code indique aussi ce que la visite aurait coûté au tarif de l'API : en
 | `assistant/citations.py`, `assistant/actions.py` | Vérification des citations ; application des actions proposées. |
 | `assistant/lexique.py` | Lexique métier pour la transcription, corrections connues (« parpin » → parpaing). |
 | `assistant/vad.py`, `assistant/transcription.py` | Fin de phrase ; transcription faster-whisper. |
+| `assistant/extraction.py` | Extraction immédiate, sans IA, de tout ce qui est dit (description libre, réponse courte, mot mal transcrit deviné, « je ne sais pas »). |
+| `assistant/garde.py` | Garde-fous sur les questions : une seule, jamais « répétez », jamais un champ déjà rempli ou déjà demandé. |
 | `assistant/cerveau.py` | Claude via Claude Code : consignes, messages, processus gardé ouvert. |
-| `assistant/simulation.py` | Cerveau de simulation, sans Claude. |
+| `assistant/simulation.py` | Cerveau de simulation, sans Claude : question suivante de la checklist. |
+| `assistant/evaluer.py` | Évaluation sur 10 phrases réalistes, avec latence de chaque étape. |
 | `assistant/session.py` | Une visite : chaîne son → texte → Claude → voix, veille, journal, bilan. |
 | `assistant/serveur.py`, `assistant/__main__.py` | Serveur web et lancement. |
 | `assistant/rejouer.py` | Rejouer une vidéo de test. |
