@@ -164,36 +164,54 @@ def creer_app(reglages: Reglages | None = None) -> FastAPI:
             async with verrou:  # plusieurs tâches écrivent : un message à la fois
                 await websocket.send_text(json.dumps(message, ensure_ascii=False))
 
+        code_fin = None
         try:
             while True:
                 message = await websocket.receive()
                 if message["type"] == "websocket.disconnect":
+                    code_fin = message.get("code")
                     break
-                if message.get("bytes"):
-                    donnees = message["bytes"]
-                    if session is None or len(donnees) < 9:
-                        continue
-                    t = struct.unpack("<d", donnees[1:9])[0]
-                    if donnees[0] == 1:
-                        await session.recevoir_audio(t, donnees[9:])
-                    elif donnees[0] == 2:
-                        await session.recevoir_image(t, donnees[9:])
-                elif message.get("text"):
-                    controle = json.loads(message["text"])
-                    if controle.get("type") == "debut":
-                        session, reprise = await gestionnaire.ouvrir(controle.get("session"), str(controle.get("piece") or ""))
-                        session.envoyer = envoyer
-                        session.journaliser("connexion", reprise=reprise, appareil=str(controle.get("appareil", ""))[:300])
-                        await envoyer({"type": "statut", "session": session.id, "reprise": reprise, **(await statut())})
-                        await session.envoyer_etat()
-                    elif session is not None:
-                        await session.recevoir_controle(controle)
-        except WebSocketDisconnect:
-            pass
+                try:
+                    if message.get("bytes"):
+                        donnees = message["bytes"]
+                        if session is None or len(donnees) < 9:
+                            continue
+                        t = struct.unpack("<d", donnees[1:9])[0]
+                        if donnees[0] == 1:
+                            await session.recevoir_audio(t, donnees[9:])
+                        elif donnees[0] == 2:
+                            await session.recevoir_image(t, donnees[9:])
+                    elif message.get("text"):
+                        controle = json.loads(message["text"])
+                        if controle.get("type") == "ping":
+                            # Battement de cœur (étape 10) : réponse immédiate, même quand Claude réfléchit ; c'est ce qui
+                            # distingue « serveur lent » de « pas de réseau » côté téléphone.
+                            await envoyer({"type": "pong", "n": controle.get("n")})
+                        elif controle.get("type") == "debut":
+                            session, reprise = await gestionnaire.ouvrir(controle.get("session"), str(controle.get("piece") or ""))
+                            session.envoyer = envoyer
+                            session.journaliser("connexion", reprise=reprise, appareil=str(controle.get("appareil", ""))[:300],
+                                                coupures=controle.get("coupures") or [])
+                            await envoyer({"type": "statut", "session": session.id, "reprise": reprise, **(await statut())})
+                            await session.envoyer_etat()
+                            await session.rattraper()  # questions calculées pendant la coupure
+                        elif session is not None:
+                            await session.recevoir_controle(controle)
+                except (WebSocketDisconnect, RuntimeError):
+                    raise
+                except Exception as e:
+                    # Une erreur sur un message ne coupe plus la liaison (avant : le téléphone affichait « Hors réseau »).
+                    log.exception("Message du téléphone")
+                    if session is not None:
+                        session.journaliser("erreur", etape="liaison", message=str(e))
+        except WebSocketDisconnect as e:
+            code_fin = e.code
+        except RuntimeError:
+            pass  # liaison déjà fermée
         finally:
             if session is not None and session.envoyer is envoyer:
                 session.envoyer = None
-                session.journaliser("deconnexion")
+                session.journaliser("deconnexion", code=code_fin)
 
     @app.post("/api/sessions/{ident}/terminer")
     async def terminer(ident: str, request: Request) -> JSONResponse:

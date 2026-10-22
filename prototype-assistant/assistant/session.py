@@ -90,6 +90,7 @@ def _normaliser(actions) -> list[dict]:
 ACCUSES = ("Noté.", "C'est noté.", "D'accord, noté.")
 RELANCES = ("Alors…", "Voyons…")
 RELANCE_S = 1.4
+RATTRAPAGE_S = 60.0  # étape 10 : une phrase non remise pendant une coupure est redite si elle a moins d'une minute
 # « Ce mur, ce mur et ce mur », « un mur ici, un mur ici » : des murs montrés un par un (texte normalisé).
 _DESIGNATION_MUR = re.compile(r"\b(?:(?:ce|cet)\s+mur(?:\s+(?:ici|la))?|un\s+mur\s+(?:ici|la))\b"
                               r"(?!\s+(?:de|du|des|d|en|est|donne|fait|avec|qui)\b)")
@@ -204,6 +205,7 @@ class Session:
         self.decor = Decor()  # nouveau décor filmé : Claude vérifie la pièce au prochain silence
         self._dits: list[str] = []  # tout ce que l'assistant a dit (pour compter les mots répétés)
         self._doublon_propose: tuple[str, str] | None = None
+        self._non_remis: deque = deque(maxlen=6)  # phrases dites pendant une coupure (étape 10)
         self._doublons_a_verifier: list[tuple[str, str]] = []
         self._piece_du_decor: str | None = None
         self.vad = DetecteurPhrases(ReglagesVad(fin_silence_s=reglages.fin_silence_s))
@@ -316,12 +318,24 @@ class Session:
         self._journal.flush()
 
     async def _envoyer(self, message: dict) -> None:
-        if self.envoyer is None:
-            return
-        try:
-            await self.envoyer(message)
-        except Exception:  # téléphone déconnecté : la visite continue, il se reconnectera
-            self.envoyer = None
+        if self.envoyer is not None:
+            try:
+                await self.envoyer(message)
+                return
+            except Exception:  # téléphone déconnecté : la visite continue, il se reconnectera
+                self.envoyer = None
+        if message.get("type") == "dire":
+            # Pas de liaison : la phrase est gardée et redite à la reconnexion (étape 10), si elle est encore récente.
+            self._non_remis.append((time.monotonic(), message))
+
+    async def rattraper(self) -> None:
+        """Le téléphone se reconnecte : ce qui lui a été dit pendant la coupure (dans la dernière minute) lui est envoyé."""
+        recents = [m for t, m in self._non_remis if time.monotonic() - t <= RATTRAPAGE_S]
+        self._non_remis.clear()
+        if recents:
+            self.journaliser("rattrapage", phrases=[m["texte"] for m in recents])
+        for k, message in enumerate(recents):
+            await self._envoyer({**message, "suite": k > 0, "rattrapage": True})
 
     async def envoyer_etat(self) -> None:
         manques = self.checklist.manques_piece()

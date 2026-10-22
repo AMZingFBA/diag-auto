@@ -8,7 +8,9 @@ const TYPE_SON = 1;
 const TYPE_IMAGE = 2;
 
 const etat = {
-  ws: null,
+  liaison: null, // web/liaison.js : battement de cœur, reconnexion silencieuse, rattrapage (étape 10)
+  attenteReponse: null, // « L'assistant réfléchit… » : Claude lent n'est pas une coupure
+  images: 0,
   session: null,
   code: "",
   flux: null,
@@ -87,18 +89,18 @@ function parler(texte, id, suite = false) {
   let commence = false;
   u.onstart = () => {
     commence = true;
-    envoyerJson({ type: "tts", etat: "debut", id });
+    envoyerJson({ type: "tts", etat: "debut", id }, false);
   };
-  u.onend = u.onerror = () => envoyerJson({ type: "tts", etat: "fin", id });
+  u.onend = u.onerror = () => envoyerJson({ type: "tts", etat: "fin", id }, false);
   speechSynthesis.speak(u);
   // Certains Android ne signalent pas le début de la voix : on le signale nous-mêmes.
-  setTimeout(() => { if (!commence && speechSynthesis.speaking) envoyerJson({ type: "tts", etat: "debut", id }); }, 1500);
+  setTimeout(() => { if (!commence && speechSynthesis.speaking) envoyerJson({ type: "tts", etat: "debut", id }, false); }, 1500);
 }
 
 function couperVoix() {
   if ("speechSynthesis" in window && speechSynthesis.speaking) {
     speechSynthesis.cancel();
-    envoyerJson({ type: "tts", etat: "fin" });
+    envoyerJson({ type: "tts", etat: "fin" }, false);
   }
 }
 
@@ -118,41 +120,58 @@ function bip() {
 
 // --- Liaison avec le serveur ----------------------------------------------------------------
 
-function envoyerJson(message) {
-  if (etat.ws && etat.ws.readyState === WebSocket.OPEN) etat.ws.send(JSON.stringify(message));
+// `garder` : envoyé dès le retour de la liaison s'il ne peut pas partir maintenant (son, images, capteurs, phrases) ;
+// sinon abandonné (état de la voix, qui n'a plus de sens plus tard).
+function envoyerJson(message, garder = true) {
+  if (etat.liaison) etat.liaison.envoyerJson(message, garder);
 }
 
-function envoyerBinaire(type, t, donnees) {
-  if (!etat.ws || etat.ws.readyState !== WebSocket.OPEN) return;
-  if (etat.ws.bufferedAmount > 2_000_000) return; // réseau saturé : on saute plutôt que d'accumuler du retard
+function envoyerBinaire(type, t, donnees, garder = true) {
+  if (!etat.liaison) return;
   const entete = new ArrayBuffer(9);
   const vue = new DataView(entete);
   vue.setUint8(0, type);
   vue.setFloat64(1, t, true);
-  etat.ws.send(new Blob([entete, donnees]));
+  etat.liaison.envoyer(new Blob([entete, donnees]), garder);
 }
 
+// Étape 10 : « Hors réseau » seulement si le serveur est vraiment injoignable (3 battements de 2 s sans réponse, ou
+// reconnexion impossible depuis 6 s). Une coupure brève (écran verrouillé, serveur redémarré) se répare en silence.
 function connecter() {
   const protocole = location.protocol === "https:" ? "wss://" : "ws://";
   const code = etat.code ? `?code=${encodeURIComponent(etat.code)}` : "";
-  const ws = new WebSocket(`${protocole}${location.host}/ws${code}`);
-  ws.binaryType = "arraybuffer";
-  etat.ws = ws;
-  $("connexion").className = "pastille";
-  ws.onopen = () => {
-    $("connexion").className = "pastille ok";
-    ws.send(JSON.stringify({ type: "debut", session: etat.session, piece: $("piece").value, appareil: navigator.userAgent }));
-  };
-  ws.onmessage = (e) => recevoir(JSON.parse(e.data));
-  ws.onclose = (e) => {
-    $("connexion").className = "pastille ko";
-    if (e.code === 4401) return alerte("Code d'accès incorrect.");
-    if (!etat.termine) {
-      // Hors réseau : l'enregistrement local continue ; on retente la liaison.
-      alerte("Hors réseau : l'enregistrement continue, l'assistant reprendra au retour du réseau.");
-      setTimeout(() => { if (!etat.termine) connecter(); }, 2000);
-    }
-  };
+  etat.liaison = new Liaison({
+    creerSocket: () => {
+      const ws = new WebSocket(`${protocole}${location.host}/ws${code}`);
+      ws.binaryType = "arraybuffer";
+      return ws;
+    },
+    debut: (coupures) => ({ type: "debut", session: etat.session, piece: $("piece").value, appareil: navigator.userAgent, coupures }),
+    surMessage: recevoir,
+    surEtat: afficherLiaison,
+  });
+  etat.liaison.demarrer();
+  document.addEventListener("visibilitychange", () => etat.liaison && etat.liaison.pageCachee(document.hidden));
+  window.addEventListener("online", () => etat.liaison && etat.liaison.reconnecterVite());
+}
+
+function afficherLiaison(e) {
+  const pastilles = { connecte: "pastille ok", lent: "pastille", hors_reseau: "pastille ko", refuse: "pastille ko" };
+  $("connexion").className = pastilles[e] || "pastille";
+  $("connexion").title = { connecte: "Connecté", lent: "Réseau lent", reconnexion: "Reconnexion…", pause: "En pause (page cachée)",
+                           hors_reseau: "Hors réseau", refuse: "Code d'accès incorrect", connexion: "Connexion…" }[e] || e;
+  if (e === "refuse") return alerte("Code d'accès incorrect.");
+  if (e === "hors_reseau") return alerte("Hors réseau : l'enregistrement continue, l'assistant reprendra au retour du réseau.");
+  if (e === "connecte" && $("alerte").textContent.startsWith("Hors réseau")) {
+    alerte("Réseau revenu : l'assistant rattrape ce qui a été dit.");
+    setTimeout(() => { if ($("alerte").textContent.startsWith("Réseau revenu")) alerte(""); }, 4000);
+  }
+}
+
+// Claude réfléchit (rien n'est dit 3 s après la phrase) : ce n'est pas une coupure, on le montre.
+function attendreReponse() {
+  clearTimeout(etat.attenteReponse);
+  etat.attenteReponse = setTimeout(() => ($("latence").textContent = "L'assistant réfléchit…"), 3000);
 }
 
 function alerte(texte) {
@@ -172,8 +191,10 @@ function recevoir(m) {
       break;
     case "transcription":
       $("vous").textContent = `Vous (${horodatage(m.t)}) : « ${m.texte} »`;
+      attendreReponse();
       break;
     case "dire":
+      clearTimeout(etat.attenteReponse);
       // Réponse de Claude lue phrase par phrase (étape 7) : les phrases « suite » s'ajoutent à la précédente.
       $("question").textContent = m.suite ? `${$("question").textContent} ${m.texte}` : m.texte;
       // Vignette de l'élément concerné (« le mur affiché ») : l'image filmée quand il a été décrit.
@@ -185,6 +206,7 @@ function recevoir(m) {
       if (!m.muet && !etat.muet) parler(m.texte, m.id, m.suite);
       break;
     case "bip":
+      clearTimeout(etat.attenteReponse);
       bip();
       if (m.latence_s != null) $("latence").textContent = `✓ Noté ${secondes(m.latence_s)} après la fin de votre phrase`;
       break;
@@ -255,7 +277,7 @@ function traiterSon(entree, tauxEntree) {
     for (let i = 0; i < 1600; i++) pcm[i] = Math.max(-32768, Math.min(32767, Math.round(bloc[i] * 32767)));
     const t = etat.debutSon + etat.echantillonsLus / TAUX;
     etat.echantillonsLus += 1600;
-    envoyerBinaire(TYPE_SON, t, pcm.buffer); // sans réseau, le bloc est perdu pour l'assistant, pas pour la vidéo
+    envoyerBinaire(TYPE_SON, t, pcm.buffer); // sans réseau, gardé et envoyé au retour (étape 10)
   }
 }
 
@@ -286,14 +308,16 @@ async function demarrerSon() {
 
 function envoyerImage() {
   const video = $("camera");
-  if (!video.videoWidth || !etat.ws || etat.ws.readyState !== WebSocket.OPEN) return;
+  if (!video.videoWidth || !etat.liaison) return;
   const echelle = 512 / Math.max(video.videoWidth, video.videoHeight);
   const toile = envoyerImage.toile || (envoyerImage.toile = document.createElement("canvas"));
   toile.width = Math.round(video.videoWidth * echelle);
   toile.height = Math.round(video.videoHeight * echelle);
   toile.getContext("2d").drawImage(video, 0, 0, toile.width, toile.height);
   const t = maintenant();
-  toile.toBlob((blob) => blob && envoyerBinaire(TYPE_IMAGE, t, blob), "image/jpeg", 0.7);
+  // Pendant une coupure, une image sur trois est gardée pour le rattrapage (le son, lui, est gardé en entier).
+  const garder = etat.liaison.ouverte() || etat.images++ % 3 === 0;
+  toile.toBlob((blob) => blob && envoyerBinaire(TYPE_IMAGE, t, blob, garder), "image/jpeg", 0.7);
   envoyerCapteurs(t);
 }
 
@@ -455,7 +479,7 @@ async function arreter() {
       if (r.ok) bilan = await r.json();
     } catch { /* hors réseau : le bilan reste celui reçu en direct */ }
   }
-  if (etat.ws) etat.ws.close();
+  if (etat.liaison) etat.liaison.arreter();
   afficherFin(bilan);
 }
 
