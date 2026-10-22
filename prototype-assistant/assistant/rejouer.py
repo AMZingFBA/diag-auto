@@ -103,7 +103,8 @@ async def rejouer(video: Path, serveur: str, code: str, piece: str) -> dict:
                 elif m["type"] == "transcription":
                     print(f"{horloge()} DIAGNOSTIQUEUR ({m['t']:.1f} s) : « {m['texte']} »")
                 elif m["type"] == "dire":
-                    latence = f" (question {m['latence_s']} s après la fin de phrase détectée)" if m.get("latence_s") is not None else ""
+                    latence = (f" (question {m['latence_s']} s après la fin de phrase détectée)" if m.get("latence_s") is not None
+                               else " (suite)" if m.get("suite") else "")  # réponse de Claude lue phrase par phrase
                     print(f"{horloge()} ASSISTANT : « {m['texte']} »{latence}")
                     await ws.send(json.dumps({"type": "tts", "etat": "debut", "id": m["id"]}))
                     asyncio.get_running_loop().call_later(

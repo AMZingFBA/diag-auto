@@ -551,6 +551,16 @@ class Checklist:
             self.dernier[te.cle] = element.id
         return element
 
+    def retirer(self, element_id: str) -> None:
+        """Élément créé à tort (par les règles du serveur, corrigées par Claude) : il disparaît."""
+        element = self.trouver_element(element_id)
+        self.elements.remove(element)
+        for autre in self.elements:
+            if autre.support == element.id:
+                autre.support = ""
+        if self.dernier.get(element.type) == element.id:
+            del self.dernier[element.type]
+
     def completer(self, element_id: str, repere: str = "", support: str = "") -> Element:
         """Ajoute à un élément connu ce qui permet de le reconnaître : un repère dit, le mur qui porte une fenêtre."""
         element = self.trouver_element(element_id)
@@ -951,6 +961,8 @@ class Checklist:
             manques = self.manques_piece(cle)
             detail = ", ".join(m.code for m in manques[:5]) or "rien"
             lignes.append(f"Autre pièce : {self.pieces[cle].nom} ({round(100 * self.taux_remplissage(cle))} % rempli, manque : {detail})")
+            # En détail : « tu as noté quoi pour la cuisine ? » (étape 7, conversation libre).
+            lignes += ["  " + self._ligne_element(e) for e in self.elements_de(cle) if e.valeurs or e.type not in TOUJOURS_PRESENTS]
         equipements = self.elements_de(None)
         lignes.append("Équipements du logement :" if equipements else "Équipements du logement : aucun signalé")
         lignes += [self._ligne_element(e) for e in equipements]

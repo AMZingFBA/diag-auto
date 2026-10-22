@@ -1,11 +1,12 @@
 import asyncio
 import sys
+import time
 from pathlib import Path
 
 from assistant.actions import appliquer
 from assistant.cerveau import (
     CerveauClaudeCode, Contexte, ImageInstant, analyser_reponse, commande_claude, consignes, contenu_message,
-    env_claude, extraire_cible, extraire_dire,
+    dire_partiel, env_claude, extraire_cible, extraire_dire, phrases_finies,
 )
 from assistant.checklist import Checklist
 
@@ -49,6 +50,40 @@ def test_extraire_dire_des_qu_il_est_complet():
     assert extraire_dire('{"dire": "Il est is') is None
     assert extraire_dire('{"dire": "Il est \\"isolé\\" ?", "act') == 'Il est "isolé" ?'
     assert extraire_cible('{"cible": "M1.isolation", "dire": "Il est') == "M1.isolation"
+
+
+def test_dire_lu_phrase_par_phrase_pendant_qu_il_s_ecrit():
+    # Étape 7 : la voix démarre dès la première phrase de Claude, sans attendre la fin de sa réponse.
+    assert dire_partiel("""{"cible": "", "dire": "Un pont thermique, c'est une fuite. Souv""") == ("Un pont thermique, c'est une fuite. Souv", False)
+    assert dire_partiel(r'{"cible": "", "dire": "Il dit \"oui\". Il est isolé ?", "actions": []}') == ('Il dit "oui". Il est isolé ?', True)
+    assert dire_partiel(r'{"cible": "", "dire": "Accent \u00e9') == ("Accent é", False)
+    assert dire_partiel(r'{"cible": "", "dire": "Coupé \u00')[1] is False  # échappement pas encore arrivé en entier
+    assert dire_partiel('{"cible": "M1.isolation", "di') == ("", False)
+    assert phrases_finies("Une fuite de chaleur. Souvent aux jonctions. Il est isol", complet=False) == [
+        "Une fuite de chaleur.", "Souvent aux jonctions."]
+    assert phrases_finies("D'accord ! Je t'attends… Il est isolé ?") == ["D'accord !", "Je t'attends…", "Il est isolé ?"]
+
+
+def test_cerveau_lit_la_premiere_phrase_avant_la_fin_de_la_reponse(tmp_path):
+    async def scenario():
+        cerveau = CerveauClaudeCode(tmp_path, commande=FAUX_CLAUDE, delai_s=5)
+        await cerveau.demarrer()
+        dits = []
+
+        async def dire(texte, cible):
+            dits.append((texte, cible, time.perf_counter()))
+
+        decision = await cerveau.decider(contexte(phrase="PONT"), dire)
+        fin = time.perf_counter()
+        await cerveau.fermer()
+        return decision, dits, fin
+
+    decision, dits, fin = asyncio.run(scenario())
+    assert [(t, c) for t, c, _ in dits] == [("Un pont thermique, c'est une fuite de chaleur.", "M1.isolation"),
+                                            ('Souvent aux jonctions, "entre" mur et plancher.', "M1.isolation"),
+                                            ("Il est isolé ?", "M1.isolation")]
+    assert fin - dits[0][2] >= 0.3  # la première phrase est partie pendant que Claude écrivait encore
+    assert decision.mesures["premiere_phrase_s"] is not None and decision.dire.endswith("Il est isolé ?")
 
 
 def test_analyser_reponse_tolerante():

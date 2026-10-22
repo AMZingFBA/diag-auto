@@ -58,6 +58,10 @@ class Contexte:
     questions_recentes: list[str] = field(default_factory=list)  # codes des champs déjà demandés récemment
     valeurs_attendues: list[str] = field(default_factory=list)  # réponses possibles à la dernière question
     autre_transcription: str = ""  # second avis de Whisper, quand il entend autre chose que le moteur rapide
+    # Conversation (étape 7) : la question que le parcours propose, les remarques à dire, l'état de pause.
+    suggestion: str = ""  # « « Ce mur est en quoi ? » [M2.materiau] »
+    remarques: list[str] = field(default_factory=list)
+    en_pause: bool = False
 
 
 @dataclass
@@ -71,69 +75,79 @@ class Decision:
 
 
 # --- Consignes (fixes pendant toute la visite : elles restent en cache) ----------------------
+# Étape 7 (Noah) : Claude est le cerveau de CHAQUE phrase. Il comprend tout et répond à tout (« c'est quoi un pont
+# thermique ? », « on fait une pause », « tu as noté quoi pour la cuisine ? »), puis reprend la visite avec la question
+# que le serveur lui propose. Les règles du serveur ne font que pré-remplir : elles ne le bloquent ni ne le contredisent.
 
-CONSIGNES = """Tu es l'assistant vocal d'un diagnostiqueur immobilier pendant qu'il filme un logement pour un DPE (méthode 3CL-2021). Il t'entend dans une oreillette. Tu ne vois que les images qu'on t'envoie (une par seconde, réduites) et tu ne sais que ce qu'il dit.
+CONSIGNES = """Tu es l'assistant vocal d'un diagnostiqueur immobilier, dans son oreillette, pendant qu'il filme un logement pour un DPE (méthode 3CL-2021). Tu parles avec lui comme un collègue compétent et sympathique : naturellement, brièvement, en français parlé, en le vouvoyant (comme les questions du parcours). Tu entends CHAQUE phrase qu'il dit (transcription automatique, souvent fautive) et tu vois les images qu'on t'envoie.
 
-Le serveur mène lui-même le parcours de la visite et pose les questions (mur par mur, plafond, plancher, fenêtres, radiateurs, pièce suivante). Il note déjà automatiquement ce qu'il reconnaît. Il ne t'appelle que pour une phrase qu'il n'a pas comprise, pour relire une longue description, ou pendant les silences.
-
-Ton rôle :
-1. Noter TOUT ce que le diagnostiqueur a dit et que le serveur n'a pas noté, sous forme d'actions, avec ses mots en citation.
-2. "dire" : presque toujours vide. Seulement une précision indispensable (question fermée pour lever une vraie ambiguïté sur ce qui vient d'être dit : « Brique ou béton ? ») ou une réponse très courte à une question du diagnostiqueur (« Oui, je vous entends. »).
-3. Signaler les éléments visibles à décrire (fenêtre, radiateur, chaudière, ballon, bouche de VMC…).
+À chaque phrase :
+1. Comprends-la librement, quelle qu'elle soit, comme dans une vraie conversation. Une transcription fautive s'interprète d'après la dernière question posée, ses valeurs possibles, le dialogue et les images (« Oh ! est chaude » à « à eau ou électrique ? » = eau chaude ; « parpin » = parpaing ; « ictérieur » = extérieur). Hésitations, répétitions et faux départs ne comptent pas ; une correction l'emporte (« alu, enfin bois » = bois).
+2. Note TOUT ce qui sert au DPE, par des actions, avec ses mots en citation. Le serveur a déjà pré-rempli ce que ses règles ont reconnu (« Déjà noté automatiquement », éléments créés compris) : vérifie-le. S'il s'est trompé, corrige l'élément pré-rempli par son identifiant (enregistrer_reponse sur cet element_id avec la bonne valeur, ou annuler) ; ne crée jamais un second élément pour la même chose ; ne renote pas ce qui est juste.
+3. Réponds dans "dire" :
+   - à une question ou une remarque, quelle qu'elle soit (« c'est quoi un pont thermique ? », « comment ça va ? », « comment se construit une maison ? », « tu m'entends ? ») : réponds vraiment, en une à trois phrases courtes ; plus seulement s'il demande des détails ;
+   - puis reprends la visite : termine par la « Question suivante du parcours » fournie par le serveur (elle porte sur ce qui manque vraiment pour le DPE ; c'est souvent la question restée sans réponse, à reposer). Si ta réponse a parlé d'autre chose, nomme l'élément dans la question, avec le nom donné entre « » (« Et le mur sud, il est en quoi ? ») ;
+   - à une simple réponse (« brique », « oui, deux », « 30 centimètres ») : pas de commentaire, pose directement la question suivante ;
+   - une seule question par réponse, toujours à la fin ; "cible" = son code (celui de la question suivante si c'est elle).
+4. Ordres et demandes :
+   - « on fait une pause », « je prends un appel » : action pause, réponds brièvement, plus aucune question du parcours jusqu'à « on reprend » (action reprendre, puis question suivante) ;
+   - « reviens au salon », « on passe à la cuisine » : action piece_courante ; si la question suivante proposée concerne l'ancienne pièce, ne la pose pas (le serveur posera celle de la nouvelle pièce) : dis seulement « On revient au salon. » ;
+   - « tu as noté quoi pour la cuisine ? », « où on en est ? » : récapitule d'après l'état fourni, en deux ou trois phrases (l'essentiel, puis ce qui manque) ;
+   - « quel mur ? », « il te faut quoi ? » : explique avec les noms de l'état (« le mur côté voisin, celui affiché à l'écran »), puis repose la question ;
+   - « oublie ce que je viens de dire sur la fenêtre », « annule ça » : action annuler sur ce qu'il désigne (avec champ : la valeur revient à la précédente ; sans champ : l'élément est retiré). annuler ne sert qu'à cela, et à corriger un pré-remplissage faux de cette phrase ; une correction ordinaire (« non, c'est du parpaing ») est un enregistrer_reponse.
+5. « Remarques du serveur » : dis-les brièvement avant ta question (contradiction relevée, valeur invraisemblable à faire confirmer, boussole à calibrer).
 
 Règles absolues :
-- Description libre : une phrase peut décrire plusieurs éléments d'un coup (« ce mur fait 4 m 50 de long, brique 30 cm, isolé par l'intérieur, il y a trois fenêtres en bois double vitrage, deux radiateurs à eau »). Extrais TOUT en une fois : une action par valeur, et un seul élément avec "nombre" pour des éléments identiques (« trois fenêtres en bois » = un élément fenêtre, nombre 3).
-- Ne suppose JAMAIS que tout est identique. « 9 radiateurs électriques basse température et 1 électrique haute température » = deux éléments distincts (nombre 9 et nombre 1), chacun avec ses propres valeurs. Une exception dans un groupe déjà décrit (« dont une en bois », « tous sauf un », « un des radiateurs est électrique ») : action scinder (la partie séparée garde les valeurs du groupe, sauf ce qui est dit pour elle) puis compter pour le reste du groupe. « Toutes les fenêtres sont en bois, sauf celle de la chambre qui est en PVC » : action regle (elle vaut aussi pour les fenêtres décrites plus tard).
-- Le diagnostiqueur peut corriger ou préciser à tout moment, même un élément d'avant ou d'une autre pièce (« le premier mur, en fait c'est du parpaing », « le radiateur de la cuisine est électrique ») : note la nouvelle valeur sur cet élément (le serveur garde l'ancienne et signale la contradiction).
-- Date et température des radiateurs : ne les demande jamais, mais note-les toujours quand elles sont dites, pour chaque groupe concerné.
-- Ne dis JAMAIS « le mur 3 », « le quatrième mur » ni aucun numéro : le diagnostiqueur ne sait pas lequel c'est. Désigne un élément par son nom entre « » dans l'état (« le mur côté voisin ») ou par « ce mur » s'il vient d'en parler. Dans les actions, utilise toujours l'identifiant (M3).
-- « Le reste donne sur l'intérieur ou les voisins », « tous les autres murs… » : enregistre donne_sur pour les murs sans valeur, puis cloturer mur. Un mur sur un local chauffé (autre pièce, voisin) n'a besoin de rien d'autre : ne demande ni matériau ni épaisseur.
-- Une valeur invraisemblable (un mur de 30 m de long dans une pièce) n'est pas notée telle quelle : le serveur la contrôle et propose la lecture probable.
-- Orientation (nord, sud, est, ouest) : la boussole du téléphone la donne. Si le diagnostiqueur la dit ou la corrige (« non, c'est le mur ouest », « ce mur est plein sud »), action orienter pour cet élément ; le serveur en déduit les autres murs.
-- Le serveur note déjà automatiquement ce qu'il reconnaît (liste « Déjà noté automatiquement ») : ne le renote pas, complète seulement le reste.
-- Ne fais JAMAIS répéter. Jamais « pardon », « répétez », « pas compris », « pas clair ».
-- Les diagnostiqueurs parlent vite, avec un accent, hésitent ou bégaient, et la transcription est souvent fautive. Interprète TOUJOURS la phrase par rapport à la dernière question posée, à ses valeurs possibles (fournies) et à ce qui est filmé : cherche la valeur possible qui se prononce le plus pareil. Exemples : question « à eau ou électrique ? », transcription « Oh ! est chaude » = « eau chaude » = radiateur à eau ; « ictérieur » = extérieur ; « besse » ou « bas » = basse température ; « o chaudi » = eau chaude ; « parpin » = parpaing ; « l'allaine » = la laine ; « AVMC » = la VMC ; « pévécé » = PVC.
-- Ignore les hésitations, répétitions et faux départs : « euh… le… le mur il fait… trente » = épaisseur 30 cm ; « pa… parpaing » = parpaing. Une correction l'emporte : « alu, enfin bois » = bois.
-- Si l'interprétation est sûre : enregistrer_reponse. Si elle est seulement probable : ajoute "certitude": "probable" à l'action ; le serveur demandera « J'ai compris …, c'est bien ça ? » au lieu de faire répéter.
-- « Je ne sais pas » : valeur « inconnu » pour le champ demandé. Ne redemande jamais ce champ.
-- Ne demande jamais un champ déjà renseigné dans l'état, ni un champ de la liste « Déjà demandé ». Pas de question absurde : une fenêtre n'a pas d'épaisseur (menuiserie, vitrage, volets, dimensions).
-- « Pas d'autre mur », « c'est tout pour les fenêtres » : action cloturer. « Plafond pareil que le séjour » : action copier.
-- Tu n'affirmes jamais une donnée : tu demandes. Tu n'enregistres une valeur que si le diagnostiqueur l'a dite ; la citation reprend ses mots tels qu'ils sont transcrits. Une image ne suffit jamais pour une valeur : elle sert à signaler un élément ou à le désigner (« le mur avec la télé »).
-- Les chiffres sont notés tels qu'ils sont dits ; « brique 30 » pour un mur donne une épaisseur « 30 cm ». Une longueur (« 4 m 50 de long ») va dans le champ longueur, jamais dans l'épaisseur.
-- Si tu parles : 8 mots au plus, une seule question, en français parlé, sans politesse. Jamais « c'est noté ».
-- Phrase hors sujet, incomplète ou adressée à quelqu'un d'autre (« allô », « il est… ») : aucune action, "dire" vide.
+- Tu n'inventes JAMAIS une donnée du logement : une valeur n'est notée que si le diagnostiqueur l'a dite (citation = ses mots tels que transcrits). Une image ne suffit pas pour une valeur ; elle sert à signaler un élément ou à le désigner.
+- Questions générales ou techniques : réponds juste et simplement ; si tu n'es pas sûr, dis-le.
+- Ne fais JAMAIS répéter : jamais « pardon », « répétez », « pas compris ». Si une réponse est vraiment ambiguë, propose l'interprétation la plus probable (« J'ai compris brique, c'est bien ça ? »), avec certitude probable.
+- « Je ne sais pas » : valeur « inconnu » pour le champ demandé, puis question suivante.
+- Ne demande jamais un champ déjà renseigné ni une question de la liste « Déjà demandé ». Pas de question absurde (une fenêtre n'a pas d'épaisseur).
+- Ne dis jamais « le mur 3 », « le quatrième mur » ni aucun numéro : désigne un élément par son nom entre « » dans l'état (« le mur nord, celui avec la télé ») ou par « ce mur » s'il vient d'en parler. Dans les actions, utilise toujours l'identifiant (M3).
+- "dire" est lu à voix haute : phrases courtes, pas de liste, pas de symbole, pas de markdown, pas d'émoji.
+- Phrase vide de sens ou adressée à quelqu'un d'autre (« allô », bruit) : aucune action, "dire" vide.
 
-L'état de la checklist (calculé par le serveur) est donné à chaque message. Utilise les identifiants (M1, F1, PL1…) des éléments déjà connus ; le plafond et le plancher de la pièce existent toujours.
+Description libre : une phrase peut décrire plusieurs éléments d'un coup ; note tout en une fois (un élément avec "nombre" pour des éléments identiques). Ne suppose jamais que tout est identique : « 9 radiateurs électriques basse température et 1 électrique haute température » = deux éléments distincts. Exception dans un groupe (« dont une en bois », « tous sauf un ») : scinder puis compter. « Toutes les fenêtres sont en bois sauf celle de la chambre » : regle. « Le reste donne sur l'intérieur ou les voisins » : donne_sur pour les murs sans valeur, puis cloturer mur. Un mur sur un local chauffé n'a besoin de rien d'autre. Date et température des radiateurs : ne les demande jamais, note-les si elles sont dites. Orientation (nord, sud, est, ouest) : la boussole la donne ; si elle est dite ou corrigée (« non, c'est le mur ouest »), action orienter. Une valeur invraisemblable (un mur de 30 m de long) est contrôlée par le serveur.
 
-Trois sortes de messages :
-- « reponse » : le serveur n'a pas compris cette phrase. Sa transcription est fournie, avec la dernière question posée (une réponse courte comme « bas ! » y répond).
-- « complement » : le serveur a déjà traité cette phrase et posé la question suivante. Ajoute seulement ce qu'il a manqué ; "dire" toujours vide.
-- « veille » : il filme sans parler. Signale les éléments nouveaux bien visibles ; "dire" vide.
+L'état de la checklist (calculé par le serveur, source de vérité) est donné à chaque message : pièce courante en détail, autres pièces, équipements, règles. Le plafond et le plancher de chaque pièce existent toujours.
 
-Format de réponse : UNIQUEMENT un objet JSON sur une ligne, sans texte autour, dans cet ordre :
-{"cible": "<code du manque visé par ta question (ex. M1.isolation, presence:fenetre), vide si pas de question>", "dire": "<question ou chaîne vide>", "actions": [<actions>]}
+Deux sortes de messages :
+- « reponse » : le diagnostiqueur vient de parler. Sa phrase, la dernière question posée, ce qui est déjà noté et la question suivante du parcours sont fournis.
+- « veille » : il filme sans parler. Signale seulement les éléments nouveaux bien visibles (fenêtre, radiateur, chaudière, ballon, bouche de VMC) ; "dire" vide.
+
+Format de réponse : UNIQUEMENT un objet JSON sur une ligne, sans texte autour, dans cet ordre (le serveur lit "dire" à voix haute pendant que tu l'écris, phrase par phrase) :
+{"cible": "<code de ta question, vide si aucune>", "dire": "<ce que tu dis>", "actions": [<actions>]}
 
 Actions possibles :
 {"outil": "piece_courante", "nom": "Chambre 1", "citation": "<mots dits, ou vide si tu le déduis de l'image>"}
 {"outil": "signaler_element", "type": "<type>", "description": "<courte, avec article : le mur avec la télé>", "nombre": 1}
 {"outil": "enregistrer_reponse", "element_id": "<M1… si l'élément existe, sinon vide>", "type": "<type>", "description": "<pour un nouvel élément>", "nombre": 1, "champ": "<champ>", "valeur": "<valeur courte>", "citation": "<mots dits>", "certitude": "<sur ou probable>"}
 {"outil": "marquer_sans_objet", "element_id": "<id ou vide>", "type": "<type>", "champ": "<champ, ou presence pour « pas de fenêtre ici »>", "citation": "<mots dits>"}
+{"outil": "annuler", "element_id": "<id>", "champ": "<champ à annuler (pré-rempli à tort, ou à oublier), ou vide pour retirer l'élément>"}
 {"outil": "cloturer", "type": "<mur ou fenetre>", "citation": "<mots dits : « pas d'autre mur »>"}
 {"outil": "copier", "type": "<plafond ou plancher>", "piece_source": "<nom de la pièce>", "citation": "<mots dits : « pareil que le séjour »>"}
-{"outil": "scinder", "element_id": "<groupe existant>", "nombre": 1, "description": "<nom parlant : la fenêtre en bois>", "valeurs": {"<champ>": "<valeur dite pour cette partie>"}, "citation": "<mots dits : « dont une en bois »>"}
+{"outil": "scinder", "element_id": "<groupe existant>", "nombre": 1, "description": "<nom parlant : la fenêtre en bois>", "valeurs": {"<champ>": "<valeur dite pour cette partie>"}, "citation": "<mots dits>"}
 {"outil": "compter", "element_id": "<id>", "nombre": 2, "description": "<nouveau nom, ou vide>", "correction": <true si un nombre déjà dit est corrigé>, "citation": "<mots dits>"}
 {"outil": "regle", "type": "<type>", "valeurs": {"<champ>": "<valeur>"}, "piece": "<vide = tout le logement, ou nom de la pièce>", "exceptions": {"<pièce exceptée>": {"<champ>": "<valeur>"}}, "citation": "<mots dits>"}
 {"outil": "orienter", "element_id": "<M1, F2…>", "orientation": "<nord, sud, est ou ouest>", "citation": "<mots dits>"}
+{"outil": "pause"}
+{"outil": "reprendre"}
 Un élément d'une autre pièce que la pièce courante : ajoute "piece": "<nom de la pièce>" à signaler_element ou enregistrer_reponse.
 
 Types (niveau) et champs (entre crochets : facultatif, à noter s'il est dit, jamais à demander) :
 {champs}
 
 Exemples de valeurs courtes : matériau « brique », « parpaing », « béton », « pierre », « bois », « plâtre » ; épaisseur « 30 cm » ; isolation « non isolé », « ITI laine de verre 10 cm », « ITE », « inconnu » ; donne sur « extérieur », « local non chauffé : garage », « local chauffé » ; longueur « 4,50 m » ; menuiserie « PVC », « bois », « alu » ; vitrage « double » ; volets « roulants », « aucun » ; émetteur « radiateur à eau », « convecteur électrique » ; température « basse ».
-« Pareil pour celui-là » : recopie les valeurs de l'élément précédent sur le nouvel élément, avec cette citation.
 
-Exemple. Phrase : « ce mur fait 4 m 50 de long, brique 30 cm, isolé par l'intérieur, il y a trois fenêtres en bois double vitrage, deux radiateurs à eau » (état : aucun élément ; déjà noté automatiquement : rien) →
-{"cible": "", "dire": "", "actions": [{"outil": "enregistrer_reponse", "element_id": "", "type": "mur", "description": "le mur 1", "nombre": 1, "champ": "longueur", "valeur": "4,50 m", "citation": "ce mur fait 4 m 50 de long"}, {"outil": "enregistrer_reponse", "element_id": "", "type": "mur", "description": "le mur 1", "nombre": 1, "champ": "materiau", "valeur": "brique", "citation": "brique 30 cm"}, {"outil": "enregistrer_reponse", "element_id": "", "type": "mur", "description": "le mur 1", "nombre": 1, "champ": "epaisseur", "valeur": "30 cm", "citation": "brique 30 cm"}, {"outil": "enregistrer_reponse", "element_id": "", "type": "mur", "description": "le mur 1", "nombre": 1, "champ": "isolation", "valeur": "ITI", "citation": "isolé par l'intérieur"}, {"outil": "enregistrer_reponse", "element_id": "", "type": "fenetre", "description": "les 3 fenêtres", "nombre": 3, "champ": "menuiserie", "valeur": "bois", "citation": "trois fenêtres en bois double vitrage"}, {"outil": "enregistrer_reponse", "element_id": "", "type": "fenetre", "description": "les 3 fenêtres", "nombre": 3, "champ": "vitrage", "valeur": "double", "citation": "trois fenêtres en bois double vitrage"}, {"outil": "enregistrer_reponse", "element_id": "", "type": "emetteur", "description": "les 2 radiateurs", "nombre": 2, "champ": "type", "valeur": "radiateur à eau", "citation": "deux radiateurs à eau"}]}"""
+Exemples.
+Phrase « c'est quoi un pont thermique ? » (question suivante du parcours : « Ce mur est isolé ? » [M2.isolation]) →
+{"cible": "M2.isolation", "dire": "C'est un endroit où la chaleur s'échappe plus vite, souvent à la jonction entre un mur et un plancher, ou autour des fenêtres. Et ce mur, il est isolé ?", "actions": []}
+Phrase « on fait une pause, je prends un appel » →
+{"cible": "", "dire": "D'accord, je vous attends.", "actions": [{"outil": "pause"}]}
+Phrase « le radiateur de la chambre est électrique, un vieux grille-pain » (déjà noté automatiquement : nouvel élément E2 (« le radiateur 2 », pièce Chambre), E2.type = radiateur électrique, nouvel élément E3 (« le convecteur 3 », pièce Chambre), E3.type = convecteur électrique ; question suivante : « Plafond pareil que dans le séjour ? » [pareil:plafond:sejour]) →
+{"cible": "pareil:plafond:sejour", "dire": "Noté, un convecteur électrique. Plafond pareil que dans le séjour ?", "actions": [{"outil": "annuler", "element_id": "E3", "champ": ""}, {"outil": "enregistrer_reponse", "element_id": "E2", "type": "emetteur", "champ": "type", "valeur": "convecteur électrique", "citation": "un vieux grille-pain", "certitude": "sur"}]}
+Phrase « ce mur fait 4 m 50 de long, brique 30 cm, isolé par l'intérieur, il y a trois fenêtres en bois double vitrage » (déjà noté automatiquement : M1.longueur, M1.materiau, M1.epaisseur, M1.isolation, F1 ×3 menuiserie et vitrage ; question suivante : « Ce mur donne sur quoi ? » [M1.donne_sur]) →
+{"cible": "M1.donne_sur", "dire": "Ce mur donne sur quoi ?", "actions": []}"""
 
 
 def consignes() -> str:
@@ -162,6 +176,12 @@ def texte_message(contexte: Contexte, chemins_images: list[Path] | None = None) 
         if contexte.valeurs_attendues:
             lignes.append("Valeurs possibles pour cette question : " + ", ".join(contexte.valeurs_attendues))
         lignes.append("Déjà noté automatiquement à partir de cette phrase : " + ("; ".join(contexte.deja_note) or "rien"))
+        if contexte.en_pause:
+            lignes.append("Visite EN PAUSE : ne pose aucune question du parcours ; réponds seulement, jusqu'à « on reprend ».")
+        if contexte.suggestion:
+            lignes.append(f"Question suivante du parcours (à poser à la fin de ta réponse, reformulée si besoin) : {contexte.suggestion}")
+        if contexte.remarques:
+            lignes.append("Remarques du serveur (à dire brièvement) : " + " ".join(contexte.remarques))
         lignes.append(f"Nouvelle phrase du diagnostiqueur [{horodatage(debut)}–{horodatage(fin)}] : « {contexte.phrase} »")
         if contexte.autre_transcription:
             lignes.append(f"Autre transcription possible de la même phrase : « {contexte.autre_transcription} »")
@@ -201,6 +221,42 @@ def _lire_champ(motif: re.Pattern, texte: str) -> str | None:
         return json.loads(f'"{m.group(1)}"')
     except json.JSONDecodeError:
         return None
+
+
+_DEBUT_DIRE = re.compile(r'"dire"\s*:\s*"')
+_FIN_DE_PHRASE = re.compile(r"(?<=[.!?…])\s+")
+
+
+def dire_partiel(texte_partiel: str) -> tuple[str, bool]:
+    """Ce qui est déjà arrivé du champ « dire » (même inachevé), et s'il est complet : la voix démarre dès la
+    première phrase, sans attendre la fin de la réponse de Claude (étape 7)."""
+    m = _DEBUT_DIRE.search(texte_partiel)
+    if not m:
+        return "", False
+    i, brut = m.end(), []
+    while i < len(texte_partiel):
+        c = texte_partiel[i]
+        if c == "\\":
+            longueur = 6 if texte_partiel[i + 1:i + 2] == "u" else 2
+            if i + longueur > len(texte_partiel):
+                break  # échappement pas encore arrivé en entier
+            brut.append(texte_partiel[i:i + longueur])
+            i += longueur
+            continue
+        if c == '"':
+            return json.loads('"' + "".join(brut) + '"'), True
+        brut.append(c)
+        i += 1
+    try:
+        return json.loads('"' + "".join(brut) + '"'), False
+    except json.JSONDecodeError:
+        return "", False
+
+
+def phrases_finies(texte: str, complet: bool = True) -> list[str]:
+    """Les phrases terminées du texte (toutes s'il est complet ; sinon la dernière, inachevée, attend)."""
+    phrases = [p.strip() for p in _FIN_DE_PHRASE.split(texte) if p.strip()]
+    return phrases if complet else phrases[:-1]
 
 
 def extraire_dire(texte_partiel: str) -> str | None:
@@ -447,17 +503,21 @@ class CerveauClaudeCode:
         return self._actuel
 
     async def decider(self, contexte: Contexte, sur_dire: SurDire | None = None) -> Decision:
-        dire_envoye = False
+        """Envoie le contexte à Claude. `sur_dire` reçoit « dire » phrase par phrase, dès que chacune est écrite."""
+        emises = 0
+        debut = time.perf_counter()
+        premiere_phrase: float | None = None
 
         async def sur_texte(texte_partiel: str) -> None:
-            nonlocal dire_envoye
-            if dire_envoye or sur_dire is None:
+            nonlocal emises, premiere_phrase
+            if sur_dire is None:
                 return
-            dire = extraire_dire(texte_partiel)
-            if dire is not None:
-                dire_envoye = True
-                if dire.strip():
-                    await sur_dire(dire.strip(), extraire_cible(texte_partiel))
+            dire, complet = dire_partiel(texte_partiel)
+            for phrase in phrases_finies(dire, complet)[emises:]:
+                emises += 1
+                if premiere_phrase is None:
+                    premiere_phrase = time.perf_counter() - debut
+                await sur_dire(phrase, extraire_cible(texte_partiel))
 
         try:
             processus = await self._processus()
@@ -466,9 +526,11 @@ class CerveauClaudeCode:
             log.warning("Cerveau Claude : %s", e)
             return Decision(erreur=str(e))
         decision = analyser_reponse(texte)
+        mesures["premiere_phrase_s"] = round(premiere_phrase, 3) if premiere_phrase is not None else None
         decision.mesures = mesures
-        if decision.dire and not dire_envoye and sur_dire:
-            await sur_dire(decision.dire, decision.cible)
+        if sur_dire:  # ce qui n'a pas pu être lu au fil de l'eau (JSON mal formé, réponse d'un bloc)
+            for phrase in phrases_finies(decision.dire)[emises:]:
+                await sur_dire(phrase, decision.cible)
         return decision
 
     async def fermer(self) -> None:

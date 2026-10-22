@@ -17,10 +17,11 @@ from assistant.simulation import CerveauSimulation
 from assistant.transcription import TranscripteurSimulation
 
 
-async def visite(dossier, echanges, cerveau=None):
+async def visite(dossier, echanges, cerveau=None, conversation="claude"):
     """Joue les phrases une par une ; renvoie la session et, pour chaque phrase, les questions posées après."""
     cerveau = cerveau or CerveauSimulation()
-    reglages = Reglages(cerveau="simulation", transcription="simulation", dossier_sessions=dossier, veille_s=1000, questions_par_minute=60)
+    reglages = Reglages(cerveau="simulation", transcription="simulation", dossier_sessions=dossier, veille_s=1000, questions_par_minute=60,
+                        conversation=conversation)
     session = Session("essai", dossier, cerveau, cerveau, TranscripteurSimulation(), reglages)
     recus: list[dict] = []
 
@@ -78,6 +79,20 @@ def test_piece_complete_a_4_murs(tmp_path):
     assert statistics.median(latences) < 0.25 and max(latences) < 1.5
 
 
+def test_mise_en_place_de_la_conversation_comprise_par_les_regles_seules(tmp_path):
+    # La visite jouée avant les 30 phrases libres (python -m assistant.evaluer --conversation) : sans Claude, les règles
+    # suivent tout le parcours, « Pas d'autre mur. » compris.
+    from assistant.evaluer import MISE_EN_PLACE
+    session, questions_apres, _ = asyncio.run(visite(tmp_path, MISE_EN_PLACE))
+    assert questions_apres == [
+        ["Décrivez le premier mur."], ["Un autre mur dans cette pièce ?"], ["Un autre mur dans cette pièce ?"],
+        ["Au-dessus du plafond : combles, terrasse ou logement ?"], ["Sous le plancher : terre-plein, vide sanitaire, cave ou logement ?"],
+        ["Les 2 fenêtres : des volets ?"], ["D'autres fenêtres, ou une porte vers l'extérieur ?"], ["Des radiateurs dans cette pièce ?"],
+        ["Quel est le chauffage principal ?"], ["Et l'eau chaude, comment est-elle produite ?"], ["Décrivez le premier mur."],
+        ["Un autre mur dans cette pièce ?"]]
+    assert "mur" in session.checklist.pieces["sejour"].clos
+
+
 def test_piece_suivante_plafond_pareil_et_plancher_different(tmp_path):
     echanges = [phrase for phrase, _ in PIECE_A_4_MURS] + [
         "Ce mur donne dehors, parpaing 20, non isolé.",
@@ -119,9 +134,11 @@ class CerveauEspion:
         return Decision(dire="Pardon, pouvez-vous répéter ?")
 
 
-def test_le_cerveau_n_est_appele_que_si_les_regles_n_ont_pas_compris(tmp_path):
+def test_mode_rapide_le_cerveau_n_est_appele_que_si_les_regles_n_ont_pas_compris(tmp_path):
+    # Mode « rapide » (DIAGAUTO_CONVERSATION=rapide, étape 5) ; par défaut, Claude lit chaque phrase (test_conversation.py).
     cerveau = CerveauEspion()
-    _, questions_apres, _ = asyncio.run(visite(tmp_path, ["Ici c'est le séjour.", "Euh voilà.", "Ce mur donne dehors."], cerveau))
+    _, questions_apres, _ = asyncio.run(visite(tmp_path, ["Ici c'est le séjour.", "Euh voilà.", "Ce mur donne dehors."], cerveau,
+                                               conversation="rapide"))
     assert cerveau.appels == [("reponse", "Euh voilà.")]  # compris : le serveur répond seul, tout de suite
     assert questions_apres == [["Décrivez le premier mur."], [], ["Ce mur est en quoi ?"]]  # « répétez » jamais dit
 

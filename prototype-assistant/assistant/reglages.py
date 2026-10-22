@@ -19,6 +19,9 @@ class Reglages:
     cerveau: str = field(default_factory=lambda: _env("DIAGAUTO_CERVEAU", "auto"))
     modele: str = field(default_factory=lambda: _env("DIAGAUTO_MODELE", "claude-haiku-5-5"))
     effort: str = field(default_factory=lambda: _env("DIAGAUTO_EFFORT", "low"))
+    # Conversation (étape 7) : « claude » (Claude cerveau de chaque phrase : il comprend tout, répond à tout, et les règles
+    # ne font que pré-remplir) ou « rapide » (règles et parcours seuls, Claude seulement pour une phrase non comprise).
+    conversation: str = field(default_factory=lambda: _env("DIAGAUTO_CONVERSATION", "claude"))
     # Images envoyées à Claude : « message » (dans le message, le plus rapide) ou « fichiers » (outil Read).
     images: str = field(default_factory=lambda: _env("DIAGAUTO_IMAGES", "message"))
     # Transcription : « auto » (faster-whisper s'il est installé), « whisper », « fastconformer » (option) ou « simulation ».

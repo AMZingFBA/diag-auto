@@ -52,6 +52,14 @@ def champ_rempli(cible: Cible, checklist: Checklist) -> bool:
     return False
 
 
+def nom_abstrait(texte: str) -> bool:
+    return bool(_NOM_ABSTRAIT.search(texte))
+
+
+def demande_de_repeter(texte: str) -> bool:
+    return bool(_REPETER.search(texte))
+
+
 class Questions:
     """Mémoire des questions posées. Celles du parcours ne sont posées qu'une fois (clé fournie par
     le parcours) ; celles de Claude, pas deux fois en 2 minutes (clé : champ visé, sinon texte)."""
@@ -91,7 +99,7 @@ class Questions:
             self._une_fois.add(cle)
 
     def filtrer(self, texte: str, code_cible: str, checklist: Checklist, maintenant: float,
-                cle: str | None = None, reposer: str = "") -> tuple[str, Cible | None, str, str]:
+                cle: str | None = None, reposer: str = "", a_blanc: bool = False) -> tuple[str, Cible | None, str, str]:
         """(question à dire ou "", champ visé, raison du refus, clé de la question). `reposer` : clé de la
         question restée sans réponse parce que le diagnostiqueur a parlé d'autre chose (une correction) ;
         elle peut être reposée une fois (« Noté : béton au lieu de brique. Un autre mur dans cette pièce ? »)."""
@@ -100,7 +108,7 @@ class Questions:
             return "", None, "", ""
         if _REPETER.search(texte):
             return "", None, "demande de répétition interdite", ""
-        if cle is None and _NOM_ABSTRAIT.search(texte):  # question de Claude : le parcours la reposera avec un nom parlant
+        if cle is None and nom_abstrait(texte):  # question de Claude : le parcours la reposera avec un nom parlant
             return "", None, "nom abstrait interdit (« le mur 3 »)", ""
         if "?" in texte:
             texte = texte[: texte.index("?") + 1]  # une seule question : ce qui suit le premier « ? » est coupé
@@ -109,7 +117,8 @@ class Questions:
         if cible and champ_rempli(cible, checklist):
             return "", cible, f"{cible.code} déjà renseigné", cle
         if reposer and cle == reposer and cle not in self._reposees:
-            self._reposees.add(cle)
+            if not a_blanc:  # à blanc : la question suivante proposée à Claude, pas encore posée
+                self._reposees.add(cle)
             return texte, cible, "", cle
         if cle in self._une_fois:
             return "", cible, "déjà demandé une fois", cle

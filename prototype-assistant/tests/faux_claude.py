@@ -16,6 +16,12 @@ REPONSE = json.dumps({
     "actions": [{"outil": "enregistrer_reponse", "element_id": "", "type": "mur", "description": "le mur avec la télé",
                  "champ": "materiau", "valeur": "brique", "citation": "ce mur-là, brique"}],
 }, ensure_ascii=False)
+# Message contenant « PONT » : une réponse de trois phrases, avec un temps d'arrêt après la première (étape 7).
+REPONSE_PONT = json.dumps({
+    "cible": "M1.isolation",
+    "dire": "Un pont thermique, c'est une fuite de chaleur. Souvent aux jonctions, \"entre\" mur et plancher. Il est isolé ?",
+    "actions": [],
+}, ensure_ascii=False)
 
 
 def ecrire(objet):
@@ -32,9 +38,12 @@ for ligne in sys.stdin:
         sys.exit(3)
     if "LENT" in textes:
         time.sleep(5)
-    reponse = '{"dire": "", "actions": []}' if "Début de la visite" in textes else REPONSE
+    reponse = '{"dire": "", "actions": []}' if "Début de la visite" in textes else REPONSE_PONT if "PONT" in textes else REPONSE
+    arret = reponse.find("Souvent") + 3 if "PONT" in textes else -1
     for i in range(0, len(reponse), 7):
         ecrire({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": reponse[i:i + 7]}}})
+        if i < arret <= i + 7:
+            time.sleep(0.4)  # Claude écrit encore la suite : la première phrase doit déjà être partie
     images = sum(1 for b in message["content"] if b.get("type") == "image")
     ecrire({"type": "result", "subtype": "success", "is_error": False, "num_turns": 1, "duration_api_ms": 10,
             "result": reponse, "total_cost_usd": 0.0001, "usage": {"input_tokens": 10 + images, "output_tokens": 5}})

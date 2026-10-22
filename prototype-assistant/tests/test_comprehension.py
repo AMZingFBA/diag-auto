@@ -148,7 +148,7 @@ def test_claude_probable_donne_une_confirmation_et_pas_une_valeur(tmp_path):
     async def scenario():
         cerveau = CerveauProbable()
         reglages = Reglages(cerveau="simulation", transcription="simulation", dossier_sessions=tmp_path, veille_s=1000,
-                            questions_par_minute=60)
+                            questions_par_minute=60, conversation="rapide")  # mode rapide : Claude seulement si pas compris
         session = Session("essai", tmp_path, cerveau, cerveau, TranscripteurSimulation(), reglages)
         dits = []
 

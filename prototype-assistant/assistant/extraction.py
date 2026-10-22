@@ -356,7 +356,8 @@ _SANS_OBJET = re.compile(r"\bsans objet\b|\bpas concerne\b|\bnon concerne\b")
 _ABSENCE = re.compile(r"\b(?:pas de|pas d|aucune?|il n y a pas de|il y a pas de|y a pas de)\s+(fenetres?|radiateurs?|chauffage|emetteurs?|convecteurs?|vmc|ventilation)\b")
 _OUI = re.compile(r"^(?:oui|ouais|si|exact|exactement|il y en a|bien sur|tout a fait|absolument|ok|d accord|affirmatif"
                   r"|c est (?:bien )?ca|pareil|meme chose|identique)\b")
-_NON = re.compile(r"^(?:non|nan|aucune?|pas du tout|il n y en a pas|y en a pas|c est tout|c est fini|fini|termine|rien)\b")
+_NON = re.compile(r"^(?:non|nan|aucune?|pas du tout|il n y en a pas|y en a pas|c est tout|c est fini|fini|termine|rien"
+                  r"|pas d autres?|plus d autres?|il n y (?:en )?a pas d autres?|y (?:en )?a pas d autres?)\b")  # « Pas d'autre mur. »
 # « En tout trois fenêtres, toutes pareilles » : le nombre total d'un élément déjà décrit.
 _TOTAL = re.compile(r"\ben tout\b|\bau total\b|\btoutes? (?:pareilles?|identiques?|les memes)\b|\btous (?:pareils|identiques|les memes)\b")
 _PIECES = {
@@ -370,7 +371,8 @@ _NOMS_PIECES = "|".join(sorted(_PIECES, key=len, reverse=True))
 # « Ici c'est la cuisine », « on passe au salon ». Pas « c'est les combles » ni « donne dans le garage »,
 # qui décrivent un plafond ou un mur.
 _PIECE = re.compile(
-    r"\b(?:ici c est|ici|on est dans|on entre dans|on passe (?:dans|a|au)|on va (?:dans|a|au)|on arrive dans|nous sommes dans|maintenant)\s+"
+    r"\b(?:ici c est|ici|on est dans|on entre dans|on passe (?:dans|a|au)|on va (?:dans|a|au)|on arrive dans|nous sommes dans|maintenant"
+    r"|(?:on )?(?:revient|reviens|revenons|revenir|retourne|retournons|retourner|repasse|repassons)\s+(?:dans|a|au|en))\s+"
     r"(?:la |le |l |les |a la |au )?(" + _NOMS_PIECES + r")(?:\s+(\d+))?\b"
 )
 _NOM_PIECE = re.compile(r"\b(" + _NOMS_PIECES + r")(?:\s+(\d+))?\b")  # réponse à « Quelle est la pièce suivante ? »
@@ -437,6 +439,27 @@ _DEMANDE_MANQUES = re.compile(r"\bil (?:te|vous) faut quoi\b|\bqu est ce qu il (
                               r"|\btu as besoin de quoi\b|\btu veux savoir quoi\b")
 _DEMANDE_LEQUEL = re.compile(r"^\s*(?:c est |mais )?(?:quel|lequel|laquelle|quelle|de quel|c est lequel)(?:\s+(?:mur|fenetre|radiateur|porte))?"
                              r"\s*,?\s*$|\bc est quel (?:mur|fenetre|radiateur)\b|\bde quel (?:mur|radiateur)\b")
+# Le diagnostiqueur pose une question à l'assistant ou lui parle (étape 7) : « c'est quoi un pont thermique ? », « ça sert
+# à quoi une VMC ? », « tu as noté quoi pour la cuisine ? ». Rien n'y décrit le logement : les règles n'y notent rien (le
+# mot « VMC » d'une question ne dit pas qu'il y en a une) ; Claude y répond.
+_INTERROGATIF = (r"c est quoi|qu est ce|pourquoi|comment|combien|est ce que|ca sert a quoi|a quoi (?:ca )?sert|quel(?:le)?s? est"
+                 r"|quelle (?:est la )?difference|tu (?:as|peux|sais|m entends|es|me|vois|connais|penses|crois)|t as|as tu|peux tu"
+                 r"|sais tu|ou (?:on|en est|sont)|quand|qui (?:es|est|a|t)|rappelle moi|redis moi|resume moi|explique moi")
+_QUESTION = re.compile(r"^\s*(?:(?:et|mais|alors|bon|dis|dis moi|au fait|attends|eh|euh)\s+)*(?:" + _INTERROGATIF + r")\b")
+# Ailleurs dans une phrase finie par « ? » (« un DPE, c'est valable combien de temps ? ») ; pas « ou » : « bois… ou alu ? »
+# est une réponse hésitante.
+_MOT_INTERROGATIF = re.compile(r"\b(?:quoi|pourquoi|comment|combien|quel(?:le)?s?|est ce)\b")
+
+
+def question_posee(phrase: str) -> bool:
+    """Une question (ou une demande de récapitulatif) adressée à l'assistant, et non une description."""
+    texte = normaliser(phrase)
+    return bool(_QUESTION.match(texte)) or (phrase.rstrip().endswith("?") and bool(_MOT_INTERROGATIF.search(texte)))
+
+
+# « Le premier mur du séjour », « le mur de la chambre » : la pièce où est le mur (pas celle sur laquelle il donne).
+_DE_LA_PIECE = re.compile(r"^\s*(?:de|du|d)\s+(?:la |le |l )?(" + _NOMS_PIECES + r")(?:\s+(\d+))?\b")
+
 # --- Orientation dite (étape 6) ---
 # « est » n'est l'orientation que si rien ne le suit qui en ferait le verbe : « le mur est donne dehors », mais pas
 # « le mur est en brique ».
@@ -618,6 +641,8 @@ def valeur_normalisee(type_element: str, champ: str, valeur: str) -> str:
     liste = VOCABULAIRE.get((type_element, champ))
     if not liste or cle_texte(valeur) in {cle_texte(v) for _, v in liste}:
         return valeur
+    if len(_valeurs_dites(type_element, champ, normaliser(valeur))) > 1:
+        return valeur  # « pierre et brique » : un mur mixte, la valeur de Claude reste telle quelle (jamais « brique »)
     return _premiere_valeur(type_element, champ, normaliser(valeur)) or valeur
 
 
@@ -824,6 +849,13 @@ def _element_vise(checklist: Checklist, segment: _Segment, valeurs: dict[str, st
         return _par_rang(checklist, segment, existants)
     if not existants:
         return None
+    if TYPES[segment.type].niveau != "piece" and not segment.nouveau:
+        # « La chaudière date de 2012 » : la chaudière déjà décrite. Une autre année est une correction (signalée) ;
+        # seul un appareil d'une autre nature (« la pompe à chaleur ») est un autre élément.
+        nature = {c: n for c, n in valeurs.items() if c in ("type", "systeme")}
+        for element in reversed(existants):
+            if all((v := element.valeur(c)) is None or _meme_nature(v.valeur, n) for c, n in nature.items()):
+                return element
 
     def conflit(element: Element) -> bool:
         # Seule une valeur dite pour cet élément compte : une valeur reprise d'une règle ou d'un groupe admet des exceptions.
@@ -870,6 +902,9 @@ def extraire(phrase: str, checklist: Checklist, cible: Cible | None = None) -> E
     texte = normaliser(phrase)
     if not texte.strip(" ,"):
         return resultat
+    if question_posee(phrase):
+        resultat.demande = _demande(texte)  # « il te faut quoi d'autre ? » : le serveur sait y répondre
+        return resultat
 
     def action(outil: str, **donnees) -> None:
         resultat.actions.append({"outil": outil, "citation": phrase, **donnees})
@@ -878,6 +913,9 @@ def extraire(phrase: str, checklist: Checklist, cible: Cible | None = None) -> E
     if piece:
         action("piece_courante", nom=_PIECES[piece.group(1)] + (f" {piece.group(2)}" if piece.group(2) else ""))
         texte = texte[: piece.start()] + texte[piece.end():]
+    courante = _PIECES[piece.group(1)] if piece else checklist.nom_piece(checklist.piece_courante) if checklist.piece_courante else ""
+    if courante and not re.search(r"\b(?:sauf|excepte|a part|hormis)\b", texte):  # « sauf celle de la chambre » : une exception
+        texte = _sans_la_piece(texte, courante)
 
     # « Je ne sais pas » / « sans objet » : réponse à la dernière question, on passe à la suite. Mais « je sais
     # pas trop, je crois que c'est du parpaing » donne une valeur : elle l'emporte.
@@ -981,11 +1019,13 @@ def _decrire_segment(checklist: Checklist, cible: Cible | None, segment: _Segmen
     `mur_de_la_phrase` : le dernier mur cité dans la phrase ; une fenêtre citée ensuite est sur ce mur (« ce mur donne
     dehors, il y a 3 fenêtres dessus »)."""
     repere, point, apres_mot = "", "", segment.texte[segment.fin_mot:]
+    apres_mot, lieu = _situer_dans_la_piece(checklist, segment, apres_mot, lieu)
     if segment.type in ORIENTABLES:
         if o := _ORIENTATION_APRES_MOT.match(apres_mot):  # « le mur nord », « la baie plein sud »
             point, apres_mot = o.group(1), apres_mot[o.end():]
         elif o := _EST_ORIENTE.search(apres_mot):  # « ce mur est au nord »
             point = o.group(1)
+        apres_mot, lieu = _situer_dans_la_piece(checklist, segment, apres_mot, lieu)  # « le mur nord de la chambre »
     if segment.type == "mur":
         segment.nombre = None  # « il y a 4 murs » : chaque mur a ses caractéristiques, jamais de groupe
         if r := _REPERE.match(apres_mot):  # « le mur avec la télé », « le mur (nord) du fond »
@@ -1094,6 +1134,9 @@ def _decrire_segment(checklist: Checklist, cible: Cible | None, segment: _Segmen
     if segment.type == "mur":
         mur_de_la_phrase["ref"] = reference["element_id"] or reference["description"]
     for champ, valeur in valeurs.items():
+        if vise is not None and champ in ("type", "systeme") and (v := vise.valeur(champ)) is not None and cle_texte(v.valeur) != cle_texte(
+                valeur) and cle_texte(v.valeur).startswith(cle_texte(valeur)):
+            continue  # « la chaudière », pour une chaudière à condensation : rien de nouveau
         action("enregistrer_reponse", type=segment.type, champ=champ, valeur=valeur, **reference)
     if point and par_orientation is None:  # « le mur sud donne dehors » : un mur dont l'orientation est dite
         action("orienter", type=segment.type, orientation=point, **reference)
@@ -1105,6 +1148,32 @@ def _decrire_segment(checklist: Checklist, cible: Cible | None, segment: _Segmen
             for champ, valeur in valeurs.items():
                 if autre is not vise and not autre.est_rempli(champ):
                     action("enregistrer_reponse", element_id=autre.id, type=segment.type, champ=champ, valeur=valeur)
+
+
+def _situer_dans_la_piece(checklist: Checklist, segment: _Segment, apres_mot: str, lieu: str | None) -> tuple[str, str | None]:
+    """« Le premier mur du séjour », « ce mur de la chambre » : la pièce, déjà visitée, où se trouve la paroi ; ce n'est
+    pas sur elle que la paroi donne. Le nom de la pièce est retiré du texte du segment (il n'y est pas une valeur), et
+    la paroi est cherchée dans cette pièce si ce n'est pas la pièce courante. Renvoie (suite du texte, lieu)."""
+    m = _DE_LA_PIECE.match(apres_mot) if segment.type in PAROIS else None
+    if m is None or (cle := checklist.trouver_piece(_nom_de_piece(m, checklist))) is None:
+        return apres_mot, lieu
+    debut = len(segment.texte) - len(apres_mot)
+    segment.texte = segment.texte[: debut + m.start()] + " " * (m.end() - m.start()) + segment.texte[debut + m.end():]
+    return apres_mot[m.end():], (lieu if cle == checklist.piece_courante else checklist.nom_piece(cle))
+
+
+def _sans_la_piece(texte: str, nom: str) -> str:
+    """« Il fait chaud dans cette cuisine », dans la cuisine : la pièce où l'on est n'est jamais une valeur (« donne sur
+    la cuisine ») ; ces mots sont effacés."""
+    base = " ".join(m for m in cle_texte(nom).split() if not m.isdigit())
+    motif = rf"\b(?:dans|de|du|en)\s+(?:la |le |l |cette |ce |cet )?{re.escape(base)}(?:\s+\d+)?\b"
+    return re.sub(motif, lambda m: " " * len(m.group(0)), texte)
+
+
+def _meme_nature(ancienne: str, nouvelle: str) -> bool:
+    """« Chaudière » et « chaudière à condensation » : le même appareil, dit plus ou moins précisément."""
+    a, n = cle_texte(ancienne), cle_texte(nouvelle)
+    return a == n or a.startswith(n) or n.startswith(a)
 
 
 # --- Groupes et exceptions ------------------------------------------------------------------------------
@@ -1473,6 +1542,10 @@ def _reponse_a_la_cible(checklist: Checklist, cible: Cible, texte: str, segments
                         phrase: str) -> None:
     reponse = texte.strip(" ,")
     if cible.genre in ("presence", "suite"):
+        if (cible.genre == "suite" and _NON.match(reponse) and any(s.type == cible.type for s in segments)
+                and not any(_valeurs(s.type, s.texte) for s in segments if s.type == cible.type)):
+            action("cloturer", type=cible.type)  # « Pas d'autre mur. » (le mot « mur » n'y décrit rien)
+            return
         # « Oui, trois fenêtres en PVC » : c'est la suite de la phrase qui décrit l'élément.
         if any(s.type == cible.type for s in segments):
             return

@@ -77,9 +77,9 @@ function debloquerVoix() {
   speechSynthesis.speak(u);
 }
 
-function parler(texte, id) {
+function parler(texte, id, suite = false) {
   if (!("speechSynthesis" in window)) return;
-  speechSynthesis.cancel();
+  if (!suite) speechSynthesis.cancel(); // la suite d'une réponse (phrase par phrase) se met en file, sans couper
   const u = new SpeechSynthesisUtterance(texte);
   u.lang = "fr-FR";
   if (etat.voix) u.voice = etat.voix;
@@ -174,14 +174,15 @@ function recevoir(m) {
       $("vous").textContent = `Vous (${horodatage(m.t)}) : « ${m.texte} »`;
       break;
     case "dire":
-      $("question").textContent = m.texte;
+      // Réponse de Claude lue phrase par phrase (étape 7) : les phrases « suite » s'ajoutent à la précédente.
+      $("question").textContent = m.suite ? `${$("question").textContent} ${m.texte}` : m.texte;
       // Vignette de l'élément concerné (« le mur affiché ») : l'image filmée quand il a été décrit.
-      $("vignette").hidden = !m.image;
+      if (!m.suite || m.image) $("vignette").hidden = !m.image;
       if (m.image) $("vignette").src = m.image + (etat.code ? `?code=${encodeURIComponent(etat.code)}` : "");
       $("question").classList.toggle("muet", m.muet || etat.muet);
       $("question").hidden = false;
-      $("latence").textContent = m.latence_s != null ? `Réponse ${secondes(m.latence_s)} après la fin de votre phrase` : "";
-      if (!m.muet && !etat.muet) parler(m.texte, m.id);
+      if (!m.suite) $("latence").textContent = m.latence_s != null ? `Réponse ${secondes(m.latence_s)} après la fin de votre phrase` : "";
+      if (!m.muet && !etat.muet) parler(m.texte, m.id, m.suite);
       break;
     case "bip":
       bip();

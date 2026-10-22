@@ -47,6 +47,10 @@ def appliquer_action(checklist: Checklist, action: dict, t: float, phrases: list
     outil = _texte(action, "outil")
     resultat = {"action": action, "statut": "accepte", "raison": ""}
     try:
+        if _texte(action, "element_id") and not _texte(action, "type"):
+            # Claude omet souvent le type d'un élément qu'il désigne par son identifiant : c'est celui de l'élément.
+            action = {**action, "type": checklist.trouver_element(_texte(action, "element_id")).type}
+            resultat["action"] = action
         citation = _texte(action, "citation")
         if outil in _AVEC_CITATION and not citation_trouvee(citation, phrases):
             raise ErreurChecklist("citation introuvable dans ce qui a été dit")
