@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import math
+import os
 import re
 import statistics
 import time
@@ -307,7 +308,7 @@ class Session:
         for c in self._cerveaux():
             await c.fermer()
         bilan = self.bilan()
-        (self.dossier / "etat.json").write_text(json.dumps(self.checklist.vers_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+        self._sauver_etat(self.checklist.vers_dict())
         (self.dossier / "bilan.json").write_text(json.dumps(bilan, ensure_ascii=False, indent=2), encoding="utf-8")
         self.journaliser("fin", bilan=bilan)
         self._wav.close()
@@ -343,15 +344,24 @@ class Session:
         for k, message in enumerate(recents):
             await self._envoyer({**message, "suite": k > 0, "rattrapage": True})
 
+    def _sauver_etat(self, etat: dict) -> None:
+        # À chaque changement, pas seulement à la fin : une visite jamais terminée (page fermée, serveur redémarré :
+        # visite de Noah du 22/10 après-midi) garde son état, pour la carte des pièces et pour LICIEL.
+        provisoire = self.dossier / "etat.json.tmp"
+        provisoire.write_text(json.dumps(etat, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(provisoire, self.dossier / "etat.json")
+
     async def envoyer_etat(self) -> None:
         manques = self.checklist.manques_piece()
+        etat = self.checklist.vers_dict()
+        self._sauver_etat(etat)
         await self._envoyer({
             "type": "etat",
             "piece": self.checklist.nom_piece(self.checklist.piece_courante) if self.checklist.piece_courante else None,
             "taux": self.checklist.taux_remplissage(),
             "manques": [m.libelle for m in manques[:8]],
             "nb_manques_visite": len(self.checklist.manques_visite()),
-            "checklist": self.checklist.vers_dict(),
+            "checklist": etat,
         })
 
     def _ecrire_wav(self, t: float, pcm: bytes) -> None:

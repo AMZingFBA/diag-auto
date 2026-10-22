@@ -60,6 +60,9 @@ def test_visite_par_texte_puis_video_et_bilan(client, tmp_path):
         assert question["texte"] == "Ce mur est isolé ?" and question["latence_s"] >= 0
         etat = attendre(ws, "etat")
         assert etat["piece"] == "Cuisine" and etat["manques"][0] == "le mur 1 : isolation"
+        # Écrit à chaque changement : une visite jamais terminée (page fermée, serveur redémarré) garde son état.
+        en_cours = json.loads((tmp_path / statut["session"] / "etat.json").read_text(encoding="utf-8"))
+        assert en_cours["pieces"][0]["nom"] == "Cuisine" and "brique" in json.dumps(en_cours, ensure_ascii=False)
         ws.send_json({"type": "fin"})
         rappel = attendre(ws, "dire")
         assert rappel["texte"].startswith("Avant d'arrêter, il manque")
