@@ -37,6 +37,7 @@ class TypeElement:
     niveau: str  # « piece » ou « logement »
     champs: tuple[Champ, ...]
     question_presence: str  # posée quand aucun élément de ce type n'est encore signalé
+    designation: str  # avec article, pour les descriptions par défaut : « la fenêtre »
 
 
 TYPES: dict[str, TypeElement] = {
@@ -50,7 +51,7 @@ TYPES: dict[str, TypeElement] = {
                 Champ("isolation", "isolation", "il est isolé ? Par l'intérieur ou l'extérieur ?"),
                 Champ("donne_sur", "donne sur", "il donne sur l'extérieur, un local non chauffé ou un local chauffé ?"),
             ),
-            "Décrivez un premier mur : matériau, épaisseur, isolation, et sur quoi il donne.",
+            "Décrivez un premier mur : matériau, épaisseur, isolation, et sur quoi il donne.", "le mur",
         ),
         TypeElement(
             "fenetre", "fenêtre", "F", "piece",
@@ -59,7 +60,7 @@ TYPES: dict[str, TypeElement] = {
                 Champ("vitrage", "vitrage", "simple, double ou triple vitrage ?"),
                 Champ("volets", "volets", "quels volets, ou pas de volet ?"),
             ),
-            "Y a-t-il une fenêtre dans cette pièce ?",
+            "Y a-t-il une fenêtre dans cette pièce ?", "la fenêtre",
         ),
         TypeElement(
             "emetteur", "émetteur de chauffage", "E", "piece",
@@ -68,7 +69,7 @@ TYPES: dict[str, TypeElement] = {
                 Champ("temperature", "température", "basse ou haute température ?"),
                 Champ("annee", "année", "quelle année d'installation, à peu près ?"),
             ),
-            "Y a-t-il un radiateur ou un autre émetteur de chauffage dans cette pièce ?",
+            "Y a-t-il un radiateur ou un autre émetteur de chauffage dans cette pièce ?", "l'émetteur",
         ),
         TypeElement(
             "chauffage", "générateur de chauffage", "CH", "logement",
@@ -77,7 +78,7 @@ TYPES: dict[str, TypeElement] = {
                 Champ("type", "type", "quel type de générateur ?"),
                 Champ("annee", "année", "quelle année ? Sinon, filmez la plaque de près."),
             ),
-            "Où est le chauffage principal du logement ?",
+            "Où est le chauffage principal du logement ?", "le chauffage",
         ),
         TypeElement(
             "ecs", "eau chaude sanitaire", "ECS", "logement",
@@ -86,12 +87,12 @@ TYPES: dict[str, TypeElement] = {
                 Champ("energie", "énergie", "quelle énergie ?"),
                 Champ("annee", "année", "quelle année ? Sinon, filmez la plaque de près."),
             ),
-            "Comment est produite l'eau chaude ?",
+            "Comment est produite l'eau chaude ?", "l'eau chaude",
         ),
         TypeElement(
             "ventilation", "ventilation", "V", "logement",
             (Champ("type", "type", "quel type : naturelle, VMC simple flux, hygro, double flux ?"),),
-            "Quelle est la ventilation du logement ?",
+            "Quelle est la ventilation du logement ?", "la ventilation",
         ),
     )
 }
@@ -239,7 +240,7 @@ class Checklist:
         """Ajoute un élément à décrire (ex. « le mur avec la télé »). Une description déjà connue
         dans la même pièce renvoie l'élément existant."""
         te = self._type(type_element)
-        description = " ".join(description.split()) or f"le {te.nom}"
+        description = " ".join(description.split()) or te.designation
         piece = self._piece_pour_element() if te.niveau == "piece" else None
         for element in self.elements_de(piece):
             if element.type == te.cle and cle_texte(element.description) == cle_texte(description):
