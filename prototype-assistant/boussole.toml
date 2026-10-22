@@ -1,0 +1,40 @@
+# Seuils de la boussole (étapes 6 et 7) : hypothèses de départ, à ajuster sur le terrain avec Noah.
+# Lus par le serveur (assistant/boussole.py) et envoyés au téléphone (pastille de fiabilité).
+# Tous les angles sont en degrés.
+
+[precision]
+# Précision annoncée par l'iPhone (webkitCompassAccuracy) : en dessous de « bonne », la boussole est bonne ;
+# au-dessus de « faible », elle est faible.
+bonne = 15.0
+faible = 30.0
+
+[dispersion]
+# Dispersion de « cap de la boussole − lacet du gyroscope » sur la visite (Android, ou iPhone sans précision).
+bonne = 12.0
+faible = 25.0
+
+[visee]
+# Pendant la phrase, la caméra a bougé de plus que « stabilite » : elle ne visait pas un seul mur.
+stabilite = 25.0
+# Inclinaison du téléphone (90 = tenu droit) : en dehors, on filme le sol ou le plafond, pas un mur.
+inclinaison_min = 45.0
+inclinaison_max = 135.0
+
+[correction]
+# Mesures nécessaires pour estimer la correction « cap = lacet + correction ».
+mesures_minimum = 5
+# Une orientation dite qui contredit la boussole de plus que ça : on ne se fie plus à la boussole.
+dementi = 45.0
+# Écart entre la boussole d'un mur et l'orientation retenue au-delà duquel on note « boussole perturbée ici ».
+perturbation = 30.0
+
+[coherence]
+# Deux murs dont les lacets diffèrent d'au moins « face_a_face » sont face à face (orientations opposées) ;
+# d'au plus « meme_cote », ils sont du même côté (même orientation).
+face_a_face = 150.0
+meme_cote = 30.0
+
+[iphone]
+# iPhone : le cap de la boussole (webkitCompassHeading) suit le haut de l'appareil. Il ne sert à recaler le nord
+# que lorsque le haut du téléphone est à moins de « inclinaison_calibrage » de l'horizontale.
+inclinaison_calibrage = 60.0

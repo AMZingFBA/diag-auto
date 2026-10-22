@@ -22,6 +22,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from .boussole import REGLAGES as REGLAGES_BOUSSOLE
 from .cerveau import CerveauClaudeCode, trouver_claude
 from .reglages import DOSSIER_PROTOTYPE, Reglages
 from .session import Session
@@ -110,7 +111,7 @@ def creer_app(reglages: Reglages | None = None) -> FastAPI:
         cerveau = (f"Claude Code (abonnement), modèle {reglages.modele}" if gestionnaire.mode_cerveau == "claude"
                    else "simulation (règles simples, sans Claude)")
         return {"cerveau": cerveau, "mode_cerveau": gestionnaire.mode_cerveau, "transcription": gestionnaire.transcripteur.nom,
-                "code_requis": bool(reglages.code)}
+                "code_requis": bool(reglages.code), "boussole": REGLAGES_BOUSSOLE}
 
     @app.post("/api/sessions/{ident}/video")
     async def recevoir_video(ident: str, request: Request) -> dict:

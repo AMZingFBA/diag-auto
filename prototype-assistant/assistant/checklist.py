@@ -34,7 +34,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 
-from .boussole import CAP_DU_POINT, POINTS, Visee, ecart, oppose, point_cardinal
+from .boussole import CAP_DU_POINT, DEMENTI, FACE_A_FACE, MEME_COTE, PERTURBATION, POINTS, Visee, ecart, oppose, point_cardinal
 
 
 class ErreurChecklist(ValueError):
@@ -688,7 +688,7 @@ class Checklist:
         avant = element.orientation if element.orientation_source not in ("", "dit") else ""
         if element.orientation_source == "dit" and element.orientation != point:  # deux orientations dites : la dernière compte
             self.signalements.append(Signalement(element.id, "orientation", element.orientation, point, citation, t))
-        if element.cap is not None and abs(ecart(element.cap, CAP_DU_POINT[point])) > 45:
+        if element.cap is not None and abs(ecart(element.cap, CAP_DU_POINT[point])) > DEMENTI:
             self.boussole_dementie, self.boussole_fiabilite = True, "faible"  # la boussole se trompe : on ne s'y fie plus
         element.orientation, element.orientation_source = point, "dit"
         element.orientation_note = f"dit : « {citation} »" + (f" (la boussole donnait {avant})" if avant and avant != point else "")
@@ -712,7 +712,7 @@ class Checklist:
                 reference = next((e for e in self.elements if f"({e.id})" in self.correction_source), None)
                 nom = self.nom(reference, demonstratif=False) if reference is not None else "un autre mur"
                 source, note = "déduit", f"cap {cap:.0f}°, déduit de l'orientation dite pour {nom}"
-            if element.cap is not None and abs(ecart(element.cap, cap)) > 30:
+            if element.cap is not None and abs(ecart(element.cap, cap)) > PERTURBATION:
                 note += f" ; boussole perturbée ici ({point_cardinal(element.cap)} mesuré)"
             return point_cardinal(cap), source, note
         if element.cap is not None and self.boussole_fiabilite in ("bonne", "moyenne"):
@@ -734,9 +734,9 @@ class Checklist:
             if autre is element or autre.type != "mur" or autre.lacet is None or not autre.orientation:
                 continue
             angle = abs(ecart(element.lacet, autre.lacet))
-            attendu = oppose(autre.orientation) if angle >= 150 else autre.orientation if angle <= 30 else None
+            attendu = oppose(autre.orientation) if angle >= FACE_A_FACE else autre.orientation if angle <= MEME_COTE else None
             if attendu is not None and element.orientation != attendu:
-                relation = "face à face" if angle >= 150 else "du même côté"
+                relation = "face à face" if angle >= FACE_A_FACE else "du même côté"
                 message = (f"Attention : {self.nom(element, demonstratif=False)} et {self.nom(autre, demonstratif=False)} sont "
                            f"{relation}, l'orientation de l'un des deux est fausse.")
                 if not any(s.message == message for s in self.signalements):

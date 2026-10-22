@@ -29,6 +29,8 @@ const etat = {
   voix: null,
   verrouEcran: null,
   bilan: null,
+  // Seuils de la boussole (boussole.toml) ; remplacés par ceux du serveur au chargement.
+  reglagesBoussole: { precision: { bonne: 15, faible: 30 }, dispersion: { bonne: 12, faible: 25 }, iphone: { inclinaison_calibrage: 60 } },
 };
 
 function maintenant() {
@@ -52,6 +54,7 @@ async function chargerStatut() {
     const s = await r.json();
     $("statut-serveur").textContent = `Serveur prêt. Cerveau : ${s.cerveau}. Transcription : ${s.transcription}.`;
     $("ligne-code").hidden = !s.code_requis;
+    if (s.boussole) etat.reglagesBoussole = s.boussole;
   } catch {
     $("statut-serveur").textContent = "Serveur injoignable : vérifiez l'adresse et le Wi-Fi.";
   }
@@ -295,24 +298,13 @@ function envoyerImage() {
 
 // --- Boussole : direction filmée, pour nommer les murs (« le mur nord ») ---------------------------
 
-function capCamera(alpha, beta, gamma) {
-  // Cap (0 = nord) de la direction visée par la caméra arrière, d'après l'orientation absolue du téléphone
-  // (formule de la spécification W3C « DeviceOrientation Event », calcul du cap de la boussole).
-  const rad = Math.PI / 180;
-  const [x, y, z] = [beta * rad, gamma * rad, alpha * rad];
-  const vx = -Math.cos(z) * Math.sin(y) - Math.sin(z) * Math.sin(x) * Math.cos(y);
-  const vy = -Math.sin(z) * Math.sin(y) + Math.cos(z) * Math.sin(x) * Math.cos(y);
-  let cap = Math.atan(vx / vy);
-  if (vy < 0) cap += Math.PI;
-  else if (vx < 0) cap += 2 * Math.PI;
-  return cap / rad;
-}
-
-// Deux mesures (voir assistant/boussole.py) : le CAP de la boussole (absolu, faussé près du métal) et le LACET du
-// gyroscope (sans nord, mais juste pour les angles entre murs). iPhone : cap = webkitCompassHeading, lacet = alpha
-// relatif. Android récent : cap = « deviceorientationabsolute », lacet = « deviceorientation ». Android ancien :
-// « deviceorientation » est déjà absolu, il donne le cap seul.
-const capteurs = { cap: null, lacet: null, precision: null, inclinaison: null, dernierAbsolu: 0, ecarts: [] };
+// Deux mesures (voir assistant/boussole.py) : le CAP de la caméra (absolu, faussé près du métal) et le LACET du
+// gyroscope (cap de la caméra sans nord, mais juste pour les angles entre murs). Tous deux sont calculés par la matrice
+// de rotation complète (web/boussole.js) : justes quand le téléphone est tenu droit. iPhone : le nord vient de
+// webkitCompassHeading (cap du haut de l'appareil), recalé sur l'alpha relatif. Android récent : cap =
+// « deviceorientationabsolute », lacet = « deviceorientation ». Android ancien : « deviceorientation » est absolu, il
+// donne le cap seul.
+const capteurs = { cap: null, lacet: null, precision: null, inclinaison: null, dernierAbsolu: 0, ecarts: [], iphone: null };
 
 function autoriserBoussole() {
   // iPhone : l'accès se demande pendant l'appui sur « Démarrer ». Refusé : l'assistant demandera l'orientation à l'oral.
@@ -321,19 +313,21 @@ function autoriserBoussole() {
   }
   window.addEventListener("deviceorientationabsolute", (e) => {
     if (e.alpha == null) return;
-    capteurs.cap = capCamera(e.alpha, e.beta, e.gamma);
+    capteurs.cap = Boussole.capCamera(e.alpha, e.beta, e.gamma);
     capteurs.dernierAbsolu = performance.now();
     capteurs.inclinaison = e.beta;
   });
   window.addEventListener("deviceorientation", (e) => {
     if (e.alpha == null) return;
     if (typeof e.webkitCompassHeading === "number" && !Number.isNaN(e.webkitCompassHeading)) {
-      capteurs.cap = e.webkitCompassHeading; // iPhone
+      // iPhone : webkitCompassHeading suit le haut de l'appareil ; le cap de la caméra vient de la matrice complète.
+      capteurs.iphone = capteurs.iphone || new Boussole.CapIphone(etat.reglagesBoussole.iphone.inclinaison_calibrage);
+      capteurs.cap = capteurs.iphone.mesurer(e.alpha, e.beta, e.gamma, e.webkitCompassHeading);
       capteurs.precision = typeof e.webkitCompassAccuracy === "number" ? e.webkitCompassAccuracy : null;
     } else if (e.absolute !== false && performance.now() - capteurs.dernierAbsolu > 2000) {
-      capteurs.cap = capCamera(e.alpha, e.beta, e.gamma); // Android ancien : orientation absolue
+      capteurs.cap = Boussole.capCamera(e.alpha, e.beta, e.gamma); // Android ancien : orientation absolue
     }
-    if (e.absolute === false) capteurs.lacet = capCamera(e.alpha, e.beta, e.gamma); // gyroscope
+    if (e.absolute === false) capteurs.lacet = Boussole.capCamera(e.alpha, e.beta, e.gamma); // gyroscope (sans nord)
     capteurs.inclinaison = e.beta;
   });
   etat.minuteries.push(setInterval(afficherBoussole, 250));
@@ -342,11 +336,14 @@ function autoriserBoussole() {
 function fiabiliteBoussole() {
   // Même règle que le serveur : précision annoncée (iPhone), sinon stabilité de « cap − lacet » sur les dernières secondes.
   if (capteurs.cap == null) return "absente";
-  if (capteurs.precision != null) return capteurs.precision < 0 || capteurs.precision > 30 ? "faible" : capteurs.precision > 15 ? "moyenne" : "bonne";
+  const r = etat.reglagesBoussole; // seuils de boussole.toml, envoyés par le serveur
+  if (capteurs.precision != null) {
+    return capteurs.precision < 0 || capteurs.precision > r.precision.faible ? "faible" : capteurs.precision > r.precision.bonne ? "moyenne" : "bonne";
+  }
   if (capteurs.ecarts.length < 5) return "moyenne";
   const centre = capteurs.ecarts[capteurs.ecarts.length - 1];
   const dispersion = capteurs.ecarts.map((x) => Math.abs(((x - centre + 540) % 360) - 180)).sort((a, b) => a - b)[Math.floor(capteurs.ecarts.length / 2)];
-  return dispersion > 25 ? "faible" : dispersion > 12 ? "moyenne" : "bonne";
+  return dispersion > r.dispersion.faible ? "faible" : dispersion > r.dispersion.bonne ? "moyenne" : "bonne";
 }
 
 function afficherBoussole() {
