@@ -1,0 +1,57 @@
+:root {
+  --fond: #0b132b;
+  --carte: #ffffff;
+  --texte: #14213d;
+  --doux: #5c677d;
+  --accent: #1d70b8;
+  --danger: #c0392b;
+  --vert: #2e8540;
+  --orange: #e67e22;
+  --voile: rgba(11, 19, 43, 0.72);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--fond); color: var(--texte); font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+[hidden] { display: none !important; }
+.ecran { min-height: 100%; }
+#accueil, #fin { display: flex; align-items: center; justify-content: center; padding: 16px; }
+.carte { background: var(--carte); border-radius: 14px; padding: 20px; width: 100%; max-width: 460px; }
+h1 { font-size: 1.4rem; margin: 0 0 8px; }
+h2 { font-size: 1.05rem; margin: 18px 0 6px; }
+label { display: block; margin: 12px 0; font-weight: 600; }
+label.case { font-weight: 400; display: flex; gap: 8px; align-items: center; }
+input[type=text], input[type=password], select { display: block; width: 100%; margin-top: 4px; padding: 10px; font-size: 1rem; border: 1px solid #b8c0cc; border-radius: 8px; }
+button, .bouton { display: block; width: 100%; padding: 14px; margin-top: 12px; font-size: 1.05rem; font-weight: 600; border: 0; border-radius: 10px; background: #e3e8ef; color: var(--texte); text-align: center; text-decoration: none; cursor: pointer; }
+button.principal { background: var(--accent); color: #fff; }
+button.danger { background: var(--danger); color: #fff; }
+button:disabled { opacity: 0.5; }
+.aide { color: var(--doux); }
+.petit { font-size: 0.85rem; }
+progress { width: 100%; margin-top: 10px; }
+
+/* Pendant la visite : la caméra en fond, les informations par-dessus. */
+#visite { position: fixed; inset: 0; overflow: hidden; }
+#camera { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
+.bandeau { position: absolute; top: 0; left: 0; right: 0; display: flex; gap: 12px; align-items: center; padding: calc(10px + env(safe-area-inset-top)) 16px 10px; background: var(--voile); color: #fff; font-weight: 600; }
+#piece-courante { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pastille { width: 12px; height: 12px; border-radius: 50%; background: var(--orange); flex: none; }
+.pastille.ok { background: #3ddc84; }
+.pastille.ko { background: var(--danger); }
+.jauge { position: absolute; top: calc(44px + env(safe-area-inset-top)); left: 0; right: 0; height: 6px; background: rgba(255,255,255,0.25); }
+#taux { height: 100%; width: 0; background: #3ddc84; transition: width 0.4s; }
+.alerte { position: absolute; top: calc(58px + env(safe-area-inset-top)); left: 16px; right: 16px; padding: 10px; border-radius: 8px; background: var(--danger); color: #fff; }
+.bas { position: absolute; left: 0; right: 0; bottom: 0; padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 8px; max-height: 70%; overflow-y: auto; }
+.question { background: var(--carte); border-radius: 12px; padding: 14px; font-size: 1.25rem; font-weight: 700; box-shadow: 0 4px 16px rgba(0,0,0,0.3); }
+.question.muet { opacity: 0.85; border-left: 6px solid var(--orange); }
+.vous { color: #fff; text-shadow: 0 1px 3px #000; font-style: italic; min-height: 1.4em; }
+.manques, .outils { background: var(--voile); color: #fff; border-radius: 10px; padding: 8px 12px; }
+.manques summary, .outils summary { cursor: pointer; font-weight: 600; }
+.manques ul { margin: 6px 0 0; padding-left: 20px; }
+.actions { list-style: none; margin: 0; padding: 0; font-size: 0.85rem; }
+.actions li { color: #fff; text-shadow: 0 1px 2px #000; }
+.actions li.refuse { color: #ffb3a7; }
+.outils form { display: flex; gap: 8px; margin-top: 8px; }
+.outils form input { margin: 0; }
+.outils form button { width: auto; margin: 0; padding: 10px 14px; }
+.boutons { display: flex; gap: 10px; }
+.boutons button { margin: 0; }
+#fin ul { padding-left: 20px; }

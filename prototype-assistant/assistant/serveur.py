@@ -1,0 +1,197 @@
+"""Serveur du prototype : page web (PWA), liaison temps réel avec le téléphone (WebSocket),
+réception de la vidéo enregistrée, bilans de visite.
+
+Messages binaires du téléphone : 1 octet de type + instant dans la vidéo (float64, petit-boutiste)
++ données. Type 1 = son PCM 16 bits mono 16 kHz ; type 2 = image JPEG.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import mimetypes
+import re
+import secrets
+import struct
+from contextlib import asynccontextmanager
+from datetime import datetime
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+from .cerveau import CerveauClaudeCode, trouver_claude
+from .reglages import DOSSIER_PROTOTYPE, Reglages
+from .session import Session
+from .simulation import CerveauSimulation
+from .transcription import creer_transcripteur
+
+log = logging.getLogger(__name__)
+mimetypes.add_type("application/manifest+json", ".webmanifest")
+IDENTIFIANT = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{6}$")
+TAILLE_MAX_VIDEO = 4 * 1024**3
+
+
+class Gestionnaire:
+    """Garde les visites en cours : un téléphone qui se reconnecte reprend la même visite."""
+
+    def __init__(self, reglages: Reglages) -> None:
+        self.reglages = reglages
+        self.sessions: dict[str, Session] = {}
+        self.transcripteur = creer_transcripteur(reglages.transcription, reglages.whisper_modele, reglages.whisper_appareil, reglages.whisper_faisceau)
+        self.binaire_claude = trouver_claude() if reglages.cerveau in ("auto", "claude") else None
+        if reglages.cerveau == "claude" and not self.binaire_claude:
+            raise FileNotFoundError("Claude Code introuvable : indiquez son chemin dans DIAGAUTO_CLAUDE")
+
+    @property
+    def mode_cerveau(self) -> str:
+        return "claude" if self.binaire_claude else "simulation"
+
+    def _cerveaux(self, dossier: Path):
+        if self.mode_cerveau == "simulation":
+            cerveau = CerveauSimulation()
+            return cerveau, cerveau
+        r = self.reglages
+
+        def nouveau(nom: str) -> CerveauClaudeCode:
+            return CerveauClaudeCode(dossier / nom, modele=r.modele, effort=r.effort, images=r.images, binaire=self.binaire_claude)
+
+        # Deux processus : la veille ne fait jamais attendre la réponse à une phrase.
+        return nouveau("claude-reponses"), nouveau("claude-veille")
+
+    async def ouvrir(self, ident: str | None, piece: str) -> tuple[Session, bool]:
+        if ident and ident in self.sessions and not self.sessions[ident].termine:
+            return self.sessions[ident], True
+        ident = f"{datetime.now():%Y%m%d-%H%M%S}-{secrets.token_hex(3)}"
+        dossier = self.reglages.dossier_sessions / ident
+        dossier.mkdir(parents=True, exist_ok=True)
+        cerveau, veille = self._cerveaux(dossier)
+        session = Session(ident, dossier, cerveau, veille, self.transcripteur, self.reglages)
+        self.sessions[ident] = session
+        await session.demarrer(piece)
+        return session, False
+
+    async def fermer(self) -> None:
+        for session in self.sessions.values():
+            await session.terminer()
+
+
+def creer_app(reglages: Reglages | None = None) -> FastAPI:
+    reglages = reglages or Reglages()
+    gestionnaire = Gestionnaire(reglages)
+
+    @asynccontextmanager
+    async def cycle_de_vie(_app: FastAPI):
+        # Le modèle de transcription est chargé en tâche de fond (téléchargé au premier lancement).
+        asyncio.get_running_loop().run_in_executor(None, gestionnaire.transcripteur.prechauffer)
+        yield
+        await gestionnaire.fermer()
+
+    app = FastAPI(title="DiagAuto — assistant vocal (prototype V1bis)", lifespan=cycle_de_vie)
+    app.state.gestionnaire = gestionnaire
+
+    def verifier_code(code: str | None) -> None:
+        if reglages.code and code != reglages.code:
+            raise HTTPException(status_code=401, detail="code d'accès incorrect")
+
+    def dossier_session(ident: str) -> Path:
+        if not IDENTIFIANT.match(ident):
+            raise HTTPException(status_code=404, detail="visite inconnue")
+        dossier = reglages.dossier_sessions / ident
+        if not dossier.is_dir():
+            raise HTTPException(status_code=404, detail="visite inconnue")
+        return dossier
+
+    @app.get("/api/statut")
+    async def statut() -> dict:
+        cerveau = (f"Claude Code (abonnement), modèle {reglages.modele}" if gestionnaire.mode_cerveau == "claude"
+                   else "simulation (règles simples, sans Claude)")
+        return {"cerveau": cerveau, "mode_cerveau": gestionnaire.mode_cerveau, "transcription": gestionnaire.transcripteur.nom,
+                "code_requis": bool(reglages.code)}
+
+    @app.post("/api/sessions/{ident}/video")
+    async def recevoir_video(ident: str, request: Request) -> dict:
+        verifier_code(request.headers.get("x-code"))
+        dossier = dossier_session(ident)
+        extension = ".mp4" if "mp4" in request.headers.get("content-type", "") else ".webm"
+        chemin, taille = dossier / f"video{extension}", 0
+        with open(chemin, "wb") as fichier:
+            async for morceau in request.stream():
+                taille += len(morceau)
+                if taille > TAILLE_MAX_VIDEO:
+                    raise HTTPException(status_code=413, detail="vidéo trop grosse")
+                fichier.write(morceau)
+        session = gestionnaire.sessions.get(ident)
+        if session:
+            session.journaliser("video_recue", fichier=chemin.name, octets=taille)
+        return {"fichier": chemin.name, "octets": taille}
+
+    @app.get("/api/sessions/{ident}/bilan")
+    async def bilan(ident: str, code: str = "") -> JSONResponse:
+        verifier_code(code)
+        dossier = dossier_session(ident)
+        session = gestionnaire.sessions.get(ident)
+        if session and not session.termine:
+            return JSONResponse(session.bilan())
+        fichier = dossier / "bilan.json"
+        if not fichier.exists():
+            raise HTTPException(status_code=404, detail="bilan pas encore disponible")
+        return JSONResponse(json.loads(fichier.read_text(encoding="utf-8")))
+
+    @app.websocket("/ws")
+    async def liaison(websocket: WebSocket, code: str = "") -> None:
+        await websocket.accept()
+        if reglages.code and code != reglages.code:
+            await websocket.close(code=4401)  # la page affiche « code incorrect » et ne se reconnecte pas
+            return
+        session: Session | None = None
+        verrou = asyncio.Lock()
+
+        async def envoyer(message: dict) -> None:
+            async with verrou:  # plusieurs tâches écrivent : un message à la fois
+                await websocket.send_text(json.dumps(message, ensure_ascii=False))
+
+        try:
+            while True:
+                message = await websocket.receive()
+                if message["type"] == "websocket.disconnect":
+                    break
+                if message.get("bytes"):
+                    donnees = message["bytes"]
+                    if session is None or len(donnees) < 9:
+                        continue
+                    t = struct.unpack("<d", donnees[1:9])[0]
+                    if donnees[0] == 1:
+                        await session.recevoir_audio(t, donnees[9:])
+                    elif donnees[0] == 2:
+                        await session.recevoir_image(t, donnees[9:])
+                elif message.get("text"):
+                    controle = json.loads(message["text"])
+                    if controle.get("type") == "debut":
+                        session, reprise = await gestionnaire.ouvrir(controle.get("session"), str(controle.get("piece") or ""))
+                        session.envoyer = envoyer
+                        session.journaliser("connexion", reprise=reprise, appareil=str(controle.get("appareil", ""))[:300])
+                        await envoyer({"type": "statut", "session": session.id, "reprise": reprise, **(await statut())})
+                        await session.envoyer_etat()
+                    elif session is not None:
+                        await session.recevoir_controle(controle)
+        except WebSocketDisconnect:
+            pass
+        finally:
+            if session is not None and session.envoyer is envoyer:
+                session.envoyer = None
+                session.journaliser("deconnexion")
+
+    @app.post("/api/sessions/{ident}/terminer")
+    async def terminer(ident: str, request: Request) -> JSONResponse:
+        verifier_code(request.headers.get("x-code"))
+        dossier_session(ident)
+        session = gestionnaire.sessions.get(ident)
+        if session is None:
+            raise HTTPException(status_code=404, detail="visite inconnue")
+        return JSONResponse(await session.terminer())
+
+    app.mount("/", StaticFiles(directory=DOSSIER_PROTOTYPE / "web", html=True), name="web")
+    return app

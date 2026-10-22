@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#14213d">
+  <title>DiagAuto Assistant</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Écran d'accueil -->
+  <section id="accueil" class="ecran">
+    <div class="carte">
+      <h1>Assistant de visite</h1>
+      <p class="aide">Filmez tout le logement en une seule vidéo, en parlant normalement. L'assistant vous pose dans l'oreillette les questions qui manquent pour le DPE. Il ne devine rien : il demande.</p>
+      <p id="statut-serveur" class="aide">Connexion au serveur…</p>
+      <label>Pièce de départ (facultatif)
+        <input id="piece" type="text" placeholder="ex. Séjour" autocomplete="off">
+      </label>
+      <label>Qualité de la vidéo
+        <select id="qualite">
+          <option value="1080">1080p (recommandé)</option>
+          <option value="720">720p (téléphone ancien)</option>
+        </select>
+      </label>
+      <label class="case"><input id="enregistrer" type="checkbox" checked> Enregistrer la vidéo complète sur le téléphone</label>
+      <label id="ligne-code" hidden>Code d'accès
+        <input id="code" type="password" autocomplete="off">
+      </label>
+      <button id="demarrer" class="principal">Démarrer la visite</button>
+      <p class="aide petit">Conseil : oreillette branchée ou Bluetooth, lumières allumées, mouvements lents.</p>
+    </div>
+  </section>
+
+  <!-- Pendant la visite -->
+  <section id="visite" class="ecran" hidden>
+    <video id="camera" playsinline muted></video>
+    <header class="bandeau">
+      <span id="connexion" class="pastille" title="Connexion"></span>
+      <span id="piece-courante">Pièce : —</span>
+      <span id="chrono">0:00</span>
+    </header>
+    <div class="jauge"><div id="taux"></div></div>
+    <div id="alerte" class="alerte" hidden></div>
+    <div class="bas">
+      <div id="question" class="question" hidden></div>
+      <div id="vous" class="vous"></div>
+      <details id="manques-bloc" class="manques">
+        <summary id="manques-titre">Manques de la pièce</summary>
+        <ul id="manques"></ul>
+      </details>
+      <ul id="actions" class="actions"></ul>
+      <details class="outils">
+        <summary>Outils de test</summary>
+        <form id="formulaire-texte">
+          <input id="texte" type="text" placeholder="Écrire une phrase au lieu de la dire" autocomplete="off">
+          <button type="submit">Envoyer</button>
+        </form>
+        <p id="infos" class="petit"></p>
+      </details>
+      <div class="boutons">
+        <button id="silence">🔈 Assistant actif</button>
+        <button id="terminer" class="danger">Terminer</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Fin de visite -->
+  <section id="fin" class="ecran" hidden>
+    <div class="carte">
+      <h1>Visite terminée</h1>
+      <div id="resume"></div>
+      <h2>Ce qui manque encore</h2>
+      <ul id="manques-fin"></ul>
+      <div id="bloc-video" hidden>
+        <h2>Vidéo enregistrée</h2>
+        <p id="taille-video" class="aide"></p>
+        <button id="envoyer-video" class="principal">Envoyer la vidéo au serveur</button>
+        <progress id="progression" max="1" value="0" hidden></progress>
+        <a id="telecharger" class="bouton">Garder la vidéo sur le téléphone</a>
+      </div>
+      <button id="nouvelle" class="bouton">Nouvelle visite</button>
+    </div>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>

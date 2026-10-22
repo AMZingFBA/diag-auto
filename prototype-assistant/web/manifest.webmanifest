@@ -1,0 +1,12 @@
+{
+  "name": "DiagAuto Assistant de visite",
+  "short_name": "DiagAuto",
+  "description": "Prototype : filmer le logement avec un assistant vocal qui pose les questions manquantes du DPE.",
+  "start_url": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b132b",
+  "theme_color": "#14213d",
+  "lang": "fr",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

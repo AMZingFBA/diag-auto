@@ -8,6 +8,7 @@ Hugging Face : environ 1,6 Go pour « large-v3-turbo »).
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 
@@ -30,8 +31,14 @@ class TranscripteurSimulation:
         return ""
 
 
+# Mesuré le 22/10/2026 sur ce PC (12 cœurs, sans carte graphique), phrase de 5,7 s :
+# small ≈ 2 s, large-v3-turbo ≈ 8 à 10 s, medium ≈ 7 s avec des boucles à plus de 40 s.
+# D'où « auto » : turbo sur carte graphique, small sur processeur.
+MODELE_GPU, MODELE_CPU = "large-v3-turbo", "small"
+
+
 class TranscripteurWhisper:
-    def __init__(self, modele: str = "large-v3-turbo", appareil: str = "auto", faisceau: int = 1) -> None:
+    def __init__(self, modele: str = "auto", appareil: str = "auto", faisceau: int = 1) -> None:
         self.modele = modele
         self.appareil = appareil
         self.faisceau = faisceau
@@ -49,9 +56,12 @@ class TranscripteurWhisper:
 
             if self.appareil == "auto":
                 self.appareil = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
+            if self.modele == "auto":
+                self.modele = MODELE_GPU if self.appareil == "cuda" else MODELE_CPU
             calcul = "float16" if self.appareil == "cuda" else "int8"
+            fils = min(8, os.cpu_count() or 4)
             debut = time.perf_counter()
-            self._whisper = WhisperModel(self.modele, device=self.appareil, compute_type=calcul)
+            self._whisper = WhisperModel(self.modele, device=self.appareil, compute_type=calcul, cpu_threads=fils)
             log.info("Modèle %s chargé en %.1f s (%s, %s)", self.modele, time.perf_counter() - debut, self.appareil, calcul)
         return self._whisper
 

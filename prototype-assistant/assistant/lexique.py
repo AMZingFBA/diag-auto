@@ -17,7 +17,8 @@ CONTEXTE_WHISPER = (
 
 # (motif, remplacement) appliqués dans l'ordre, sans tenir compte des majuscules.
 CORRECTIONS: list[tuple[str, str]] = [
-    (r"\bça se meurt(?:t)?(?: là| la)?\b", "ce mur-là"),
+    (r"\bça se (?:meur(?:t|e)?|mur)(?:-| )?(?:là|la)\b", "ce mur-là"),
+    (r"\bça se (?:meur(?:t|e)?|mur)\b", "ce mur"),
     (r"\bce meurt(?:t)?(?:-| )?là\b", "ce mur-là"),
     (r"\bce meurt?\b", "ce mur"),
     (r"\bparpins?\b", "parpaing"),

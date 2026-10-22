@@ -127,5 +127,7 @@ def test_citation_retrouvee_ou_pas():
 def test_lexique_corrige_les_confusions_du_premier_test():
     brut = "ça se meurt là, brique, 30 cm, celui-ci c'est un mur avec VMCE, c'est du parpin de 40 cm"
     assert corriger(brut) == "ce mur-là, brique, 30 cm, celui-ci c'est un mur avec VMC, c'est du parpaing de 40 cm"
+    assert corriger("Ça se mur-là, brique de 30 cm.") == "ce mur-là, brique de 30 cm."
+    assert corriger("ça se meure là, brique") == "ce mur-là, brique"
     assert est_hallucination("Sous-titres réalisés par la communauté d'Amara.org")
     assert not est_hallucination("double vitrage")
