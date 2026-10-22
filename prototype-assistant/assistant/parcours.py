@@ -2,7 +2,8 @@
 attendre Claude (retour de Noah, étape 2 du 22/10/2026).
 
 Dans chaque pièce :
-1. les murs un par un (« donne sur » d'abord), puis « Un autre mur dans cette pièce ? » jusqu'au non ;
+1. les murs un par un (« donne sur » d'abord), puis « Un autre mur dans cette pièce ? » jusqu'au non ; si la
+   boussole est absente ou perturbée, l'orientation d'un mur extérieur est demandée une fois (étape 6) ;
 2. le plafond, puis le plancher (« pareil que la pièce précédente ? » s'ils y sont connus) ;
 3. les fenêtres et portes restantes, puis « D'autres fenêtres, ou une porte vers l'extérieur ? » ;
 4. les émetteurs de chauffage (type seulement : leur date et leur température ne sont jamais demandées,
@@ -62,13 +63,14 @@ def texte_champ(element: Element, champ: str, meme_element: bool, nom: str = "")
     ne le renomme pas (« Il est isolé ? »). Sinon, il est désigné par son nom parlant (`nom` :
     « ce mur », « le mur côté voisin »), jamais par un numéro (étape 5 de Noah)."""
     d = _capitale(nom or element.description)
+    sujet = f"{d}," if "," in d else d  # « Le mur nord, celui avec la télé, est en quoi ? »
     t = element.type
     if t == "mur":
         return {
-            "donne_sur": f"{d} donne sur quoi ?",
-            "materiau": "Il est en quoi ?" if meme_element else f"{d} est en quoi ?",
+            "donne_sur": f"{sujet} donne sur quoi ?",
+            "materiau": "Il est en quoi ?" if meme_element else f"{sujet} est en quoi ?",
             "epaisseur": "Quelle épaisseur ?" if meme_element else f"{d}, quelle épaisseur ?",
-            "isolation": "Il est isolé ?" if meme_element else f"{d} est isolé ?",
+            "isolation": "Il est isolé ?" if meme_element else f"{sujet} est isolé ?",
         }[champ]
     if t == "plafond":
         return {"donne_sur": "Au-dessus du plafond : combles, terrasse ou logement ?",
@@ -171,6 +173,12 @@ def questions(checklist: Checklist, dernier_id: str | None = None) -> Iterator[Q
     if not murs:
         yield QuestionPlan("presence:mur", QUESTIONS_PRESENCE["mur"], f"presence:mur@{piece_cle}")
     yield from _champs(checklist, list(reversed(murs)), dernier_id, separes)
+    if (mur := checklist.orientation_a_demander()) is not None:
+        # Boussole absente ou perturbée : l'orientation d'un mur extérieur, demandée une seule fois ; avec le gyroscope,
+        # les autres murs s'en déduisent (sinon, une fois par pièce).
+        cle = "orientation@visite" if checklist.boussole_gyroscope else f"orientation@{piece_cle}"
+        nom = _capitale(checklist.nom(mur))
+        yield QuestionPlan(f"orientation:{mur.id}", f"{nom}{',' if ',' in nom else ''} est orienté nord, sud, est ou ouest ?", cle)
     if murs and not checklist.murs_complets() and not any(m.champs_manquants() for m in murs):
         # « Cette pièce fait 4 murs » : on sait combien il en reste.
         reste = int(piece.nombre_murs.valeur) - sum(m.nombre for m in murs) if piece.nombre_murs else 0

@@ -23,7 +23,7 @@ from assistant.checklist import Checklist
 from assistant.extraction import Cible, extraire, valeur_normalisee
 from assistant.garde import Questions
 from assistant.lexique import corriger
-from assistant.noms import orientation
+from assistant.boussole import point_cardinal
 from assistant.plausibilite import filtrer, verifier
 from assistant.reglages import Reglages
 from assistant.serveur import creer_app
@@ -68,10 +68,10 @@ def test_repere_dit_et_boussole():
     dire(c, "Le mur avec la télé donne dehors, en brique.")
     assert c.nom(c.trouver_element("M1"), demonstratif=False) == "le mur avec la télé"
     mur = c.signaler_element("mur", "le mur 2", 5, source="voix")
-    mur.orientation = orientation(355)
+    mur.orientation, mur.orientation_source = point_cardinal(355), "boussole"
     c.signaler_element("mur", "le mur 3", 6, source="voix")
     assert c.nom(mur) == "le mur nord"
-    assert [orientation(cap) for cap in (0, 44, 90, 180, 200, 275, 330)] == ["nord", "nord-est", "est", "sud", "sud", "ouest", "nord-ouest"]
+    assert [point_cardinal(cap) for cap in (0, 44, 90, 180, 200, 275, 330)] == ["nord", "nord", "est", "sud", "sud", "ouest", "nord"]
 
 
 def test_sans_indice_la_vignette_jamais_un_numero():

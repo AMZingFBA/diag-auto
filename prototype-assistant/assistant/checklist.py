@@ -34,6 +34,8 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 
+from .boussole import CAP_DU_POINT, POINTS, Visee, ecart, oppose, point_cardinal
+
 
 class ErreurChecklist(ValueError):
     """Demande invalide (type ou champ inconnu, élément introuvable…)."""
@@ -114,6 +116,7 @@ TYPES: dict[str, TypeElement] = {
 }
 
 PAROIS = ("mur", "plafond", "plancher")
+ORIENTABLES = ("mur", "fenetre", "porte")  # éléments décrits par leur orientation dans LICIEL (apports solaires)
 # Présent dans toute pièce, créé automatiquement : on ne demande pas s'il existe.
 TOUJOURS_PRESENTS = ("plafond", "plancher")
 # Présences à confirmer dans une pièce (le mur est forcément là), puis dans le logement.
@@ -230,8 +233,13 @@ class Element:
     # Pour le nommer à l'oral (étape 5) : jamais « le mur 3 », mais ce qui a été dit ou vu de lui.
     repere: str = ""  # repère dit : « avec la télé », « du fond », « de gauche »
     support: str = ""  # fenêtre ou porte : le mur qui la porte (« il y a 3 fenêtres dessus »)
-    orientation: str = ""  # d'après la boussole du téléphone quand il a été filmé : « nord »… (à confirmer)
     image: str = ""  # vignette montrée à l'écran avec les questions sur cet élément
+    # Orientation (étape 6, voir boussole.py) : utile au DPE (apports solaires), et pour nommer le mur.
+    cap: float | None = None  # cap brut de la caméra quand il a été filmé (boussole), en degrés
+    lacet: float | None = None  # lacet du gyroscope au même moment (angles entre murs)
+    orientation: str = ""  # « nord », « est », « sud » ou « ouest »
+    orientation_source: str = ""  # « boussole », « déduit », « dit » ou « mur » (fenêtre : celle de son mur)
+    orientation_note: str = ""  # preuve montrée à la validation : « cap 352° », « dit : non, c'est le mur ouest »
 
     @property
     def type_element(self) -> TypeElement:
@@ -327,15 +335,16 @@ class Signalement:
     Dite au diagnostiqueur tout de suite (« Noté : parpaing au lieu de brique. ») et montrée à la validation."""
 
     element_id: str
-    champ: str  # ou « nombre »
+    champ: str  # ou « nombre », « orientation »
     ancienne: str
     nouvelle: str
     citation: str
     t: float
+    message: str = ""  # texte à dire, s'il n'est pas « Noté : … au lieu de … »
 
     @property
     def texte(self) -> str:
-        return f"Noté : {self.nouvelle} au lieu de {self.ancienne}."
+        return self.message or f"Noté : {self.nouvelle} au lieu de {self.ancienne}."
 
 
 @dataclass
@@ -371,6 +380,12 @@ class Checklist:
         self.regles: list[Regle] = []
         self.signalements: list[Signalement] = []
         self.dernier: dict[str, str] = {}  # type -> dernier élément dont le diagnostiqueur a parlé (« ce mur »)
+        # Boussole (étape 6) : « cap vrai = lacet du gyroscope + correction », pour toute la visite.
+        self.correction_cap: float | None = None
+        self.correction_source = ""  # « boussole », ou « dit (M1) » : orientation d'un mur dite à l'oral
+        self.boussole_fiabilite = "inconnue"  # « bonne », « moyenne », « faible », « absente » ou « inconnue » (rien reçu)
+        self.boussole_gyroscope = False  # le téléphone donne les angles entre murs
+        self.boussole_dementie = False  # une orientation dite contredit la boussole : elle est faussée ici
         self._compteurs: dict[str, int] = {}
 
     # --- Pièces ---------------------------------------------------------------------------
@@ -639,6 +654,105 @@ class Checklist:
                                  note="exception à la règle du logement")
         return regle
 
+    # --- Orientation des murs et des fenêtres (boussole, étape 6) ---------------------------------
+
+    def mesurer(self, element_id: str, visee: Visee) -> Element:
+        """La caméra visait cet élément quand il a été décrit (boussole et gyroscope du téléphone)."""
+        element = self.trouver_element(element_id)
+        if element.type in ORIENTABLES and visee.stable:
+            element.cap, element.lacet = visee.cap, visee.lacet
+            self._deduire_orientations()
+            self._verifier_coherence(element)
+        return element
+
+    def regler_boussole(self, correction: float | None, fiabilite: str, gyroscope: bool) -> None:
+        """État de la boussole estimé sur la visite. Une orientation dite à l'oral l'emporte sur la boussole."""
+        self.boussole_fiabilite = "faible" if self.boussole_dementie and fiabilite != "absente" else fiabilite
+        self.boussole_gyroscope = gyroscope
+        if correction is None or self.correction_source.startswith("dit"):
+            return
+        if self.correction_cap is None or abs(ecart(correction, self.correction_cap)) > 10:
+            self.correction_cap, self.correction_source = correction % 360, "boussole"
+            self._deduire_orientations()
+
+    def orienter(self, element_id: str, point: str, citation: str, t: float) -> Element:
+        """« Non, c'est le mur ouest » : orientation dite (elle l'emporte sur la boussole). Si le gyroscope a donné
+        le lacet de ce mur, elle fixe la correction de toute la visite : les autres murs s'en déduisent."""
+        element = self.trouver_element(element_id)
+        point = cle_texte(point)
+        if point not in POINTS or element.type not in ORIENTABLES:
+            raise ErreurChecklist(f"orientation invalide : {point!r} pour {element.id}")
+        citation = " ".join(citation.split())
+        if not citation:
+            raise ErreurChecklist("orientation refusée : aucune citation du diagnostiqueur")
+        avant = element.orientation if element.orientation_source not in ("", "dit") else ""
+        if element.orientation_source == "dit" and element.orientation != point:  # deux orientations dites : la dernière compte
+            self.signalements.append(Signalement(element.id, "orientation", element.orientation, point, citation, t))
+        if element.cap is not None and abs(ecart(element.cap, CAP_DU_POINT[point])) > 45:
+            self.boussole_dementie, self.boussole_fiabilite = True, "faible"  # la boussole se trompe : on ne s'y fie plus
+        element.orientation, element.orientation_source = point, "dit"
+        element.orientation_note = f"dit : « {citation} »" + (f" (la boussole donnait {avant})" if avant and avant != point else "")
+        if element.lacet is not None:
+            self.correction_cap, self.correction_source = ecart(CAP_DU_POINT[point], element.lacet) % 360, f"dit ({element.id})"
+        self._deduire_orientations()
+        self._verifier_coherence(element)
+        return element
+
+    def _orientation_auto(self, element: Element) -> tuple[str, str, str]:
+        """(point, source, note) d'un élément dont l'orientation n'a pas été dite."""
+        if element.type in ("fenetre", "porte") and element.support:
+            mur = next((e for e in self.elements if e.id == element.support), None)
+            if mur is not None and mur.orientation:
+                return mur.orientation, "mur", f"comme {self.nom(mur, demonstratif=False)}"
+        if element.lacet is not None and self.correction_cap is not None:
+            cap = (element.lacet + self.correction_cap) % 360
+            if self.correction_source == "boussole":
+                source, note = "boussole", f"cap {cap:.0f}°"
+            else:
+                reference = next((e for e in self.elements if f"({e.id})" in self.correction_source), None)
+                nom = self.nom(reference, demonstratif=False) if reference is not None else "un autre mur"
+                source, note = "déduit", f"cap {cap:.0f}°, déduit de l'orientation dite pour {nom}"
+            if element.cap is not None and abs(ecart(element.cap, cap)) > 30:
+                note += f" ; boussole perturbée ici ({point_cardinal(element.cap)} mesuré)"
+            return point_cardinal(cap), source, note
+        if element.cap is not None and self.boussole_fiabilite in ("bonne", "moyenne"):
+            return point_cardinal(element.cap), "boussole", f"cap {element.cap:.0f}° (boussole {self.boussole_fiabilite})"
+        return "", "", ""
+
+    def _deduire_orientations(self) -> None:
+        # Les murs d'abord : une fenêtre prend l'orientation du mur qui la porte.
+        for element in sorted((e for e in self.elements if e.type in ORIENTABLES), key=lambda e: e.type != "mur"):
+            if element.orientation_source != "dit":
+                element.orientation, element.orientation_source, element.orientation_note = self._orientation_auto(element)
+
+    def _verifier_coherence(self, element: Element) -> None:
+        """Deux murs face à face (lacets à ~180°) sont opposés (nord ↔ sud) ; deux murs visés dans la même direction
+        ont la même orientation. Sinon (orientations dites ou boussole perturbée), c'est signalé."""
+        if element.type != "mur" or element.lacet is None or not element.orientation:
+            return
+        for autre in self.elements_de(element.piece):
+            if autre is element or autre.type != "mur" or autre.lacet is None or not autre.orientation:
+                continue
+            angle = abs(ecart(element.lacet, autre.lacet))
+            attendu = oppose(autre.orientation) if angle >= 150 else autre.orientation if angle <= 30 else None
+            if attendu is not None and element.orientation != attendu:
+                relation = "face à face" if angle >= 150 else "du même côté"
+                message = (f"Attention : {self.nom(element, demonstratif=False)} et {self.nom(autre, demonstratif=False)} sont "
+                           f"{relation}, l'orientation de l'un des deux est fausse.")
+                if not any(s.message == message for s in self.signalements):
+                    self.signalements.append(Signalement(element.id, "orientation", autre.orientation, element.orientation,
+                                                         element.orientation_note, 0.0, message))
+
+    def orientation_a_demander(self, piece: str | None = None) -> Element | None:
+        """Boussole absente ou peu fiable, et aucune orientation dite : le mur extérieur filmé dont il faut demander
+        l'orientation, une seule fois (avec le gyroscope, les autres murs s'en déduisent)."""
+        if self.correction_cap is not None or self.boussole_fiabilite in ("bonne", "moyenne", "inconnue"):
+            return None
+        murs = [e for e in self.elements_de(piece or self.piece_courante) if e.type == "mur" and not e.orientation
+                and (v := e.valeur("donne_sur")) is not None and cle_texte(v.valeur) == "exterieur"]
+        dernier = self.dernier.get("mur")
+        return next((m for m in murs if m.id == dernier), murs[-1] if murs else None)
+
     def _appliquer_regle(self, regle: Regle, element: Element) -> None:
         valeurs, note = regle.valeurs_pour(element)
         for champ, valeur in valeurs.items():
@@ -807,6 +921,8 @@ class Checklist:
             origine += f", séparé de {element.parent}"
         if element.support:
             origine += f", sur {element.support}"
+        if element.orientation:
+            origine += f", orienté {element.orientation} ({element.orientation_source})"
         nombre = f" ×{element.nombre}" if element.nombre > 1 else ""
         return f"- {element.id} {element.type_element.nom}{nombre} « {self.nom(element, demonstratif=False)} » ({origine}) : " + ", ".join(champs)
 
@@ -868,7 +984,9 @@ class Checklist:
                 "nom": self.nom(e, demonstratif=False),
                 "repere": e.repere or None,
                 "support": e.support or None,
-                "orientation": e.orientation or None,
+                "orientation": {"point": e.orientation, "source": e.orientation_source, "note": e.orientation_note,
+                                "cap_brut": None if e.cap is None else round(e.cap, 1),
+                                "lacet": None if e.lacet is None else round(e.lacet, 1)} if e.type in ORIENTABLES else None,
                 "image": e.image or None,
                 "champs": {
                     c.cle: {
@@ -908,6 +1026,9 @@ class Checklist:
                 "manques": [manque(m) for m in self.manques_logement()],
             },
             "regles": [{"texte": self._texte_regle(r), "citation": r.citation, "t": round(r.t, 2)} for r in self.regles],
+            "boussole": {"fiabilite": self.boussole_fiabilite, "gyroscope": self.boussole_gyroscope,
+                         "correction": None if self.correction_cap is None else round(self.correction_cap, 1),
+                         "source": self.correction_source},
             "signalements": [{"element": s.element_id, "champ": s.champ, "ancienne": s.ancienne, "nouvelle": s.nouvelle,
                               "citation": s.citation, "t": round(s.t, 2)} for s in self.signalements],
         }

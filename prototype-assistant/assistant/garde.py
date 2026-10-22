@@ -37,6 +37,12 @@ def champ_rempli(cible: Cible, checklist: Checklist) -> bool:
         return element is not None and element.est_rempli("donne_sur")
     if cible.genre == "secondaire":
         return (cible.type, cible.champ) not in checklist.manques_secondaires()
+    if cible.genre == "orientation":  # orientation dite, ou déduite de la boussole ou d'un autre mur
+        try:
+            element = checklist.trouver_element(cible.element_id or "")
+        except ErreurChecklist:
+            return False
+        return bool(element.orientation) and (element.orientation_source == "dit" or checklist.correction_cap is not None)
     if cible.genre in ("champ", "confirmation"):
         try:
             element = checklist.trouver_element(cible.element_id or "")

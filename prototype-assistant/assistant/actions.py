@@ -39,7 +39,8 @@ def _piece(checklist: Checklist, action: dict, t: float) -> str | None:
     return checklist.piece_pour(nom, t) if nom else None
 
 
-_AVEC_CITATION = ("enregistrer_reponse", "marquer_sans_objet", "cloturer", "copier", "scinder", "compter", "regle", "exception", "murs")
+_AVEC_CITATION = ("enregistrer_reponse", "marquer_sans_objet", "cloturer", "copier", "scinder", "compter", "regle", "exception", "murs",
+                  "orienter")
 
 
 def appliquer_action(checklist: Checklist, action: dict, t: float, phrases: list[str]) -> dict:
@@ -63,6 +64,17 @@ def appliquer_action(checklist: Checklist, action: dict, t: float, phrases: list
                                                      nombre=_nombre(action), piece=_piece(checklist, action, t),
                                                      repere=_texte(action, "repere"), support=_texte(action, "support"))
             resultat["element"] = element.id
+        elif outil == "orienter":  # « non, c'est le mur ouest » (étape 6)
+            ident = _texte(action, "element_id")
+            if not ident:  # élément créé par la même phrase : retrouvé par son nom dans la pièce
+                piece = _piece(checklist, action, t) or checklist.piece_courante
+                nom = cle_texte(_texte(action, "description"))
+                element = next((e for e in reversed(checklist.elements_de(piece)) if e.type == _texte(action, "type")
+                                and cle_texte(e.description) == nom), None)
+                if element is None:
+                    raise ErreurChecklist("élément à orienter introuvable")
+                ident = element.id
+            resultat["element"] = checklist.orienter(ident, _texte(action, "orientation"), citation, t).id
         elif outil == "murs":  # « cette pièce fait 4 murs »
             checklist.compter_murs(_nombre(action) or 0, citation, t)
         elif outil in ("enregistrer_reponse", "marquer_sans_objet"):

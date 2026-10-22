@@ -3,10 +3,12 @@
 Au test réel du 22/10/2026, « Le mur 3 est en quoi ? » ou « le quatrième mur » : le diagnostiqueur
 ne savait pas de quel mur il s'agissait. Un élément est donc nommé par ce qui a été dit ou vu de
 lui, jamais par un numéro. Indices, du plus parlant au moins parlant :
+0. son orientation d'abord, quand elle est connue (étape 6 : c'est ainsi que LICIEL décrit les parois), avec
+   son repère visuel : « le mur nord », « le mur nord, celui avec la télé » ;
 1. le repère dit (« le mur avec la télé », « le mur du fond », « le mur de gauche ») ;
 2. ses fenêtres (« le mur des 3 fenêtres ») ;
 3. ce sur quoi il donne (« le mur côté voisin », « le mur côté garage », « le mur extérieur ») ;
-4. son orientation, d'après la boussole du téléphone quand il a été filmé (« le mur nord ») ;
+4. son orientation, pour une fenêtre (« la fenêtre sud ») ;
 5. son matériau (« le mur en brique »).
 Le premier indice qui le distingue des autres éléments de la pièce est retenu (deux au besoin).
 L'élément dont on vient de parler est « ce mur ». Sans indice : « le mur affiché » (sa vignette
@@ -20,13 +22,6 @@ import re
 from .checklist import TOUJOURS_PRESENTS, Element, cle_texte, description_auto, nom_de
 
 _ORDINAUX = ["premier", "deuxième", "troisième", "quatrième", "cinquième", "sixième", "septième", "huitième"]
-POINTS_CARDINAUX = ["nord", "nord-est", "est", "sud-est", "sud", "sud-ouest", "ouest", "nord-ouest"]
-
-
-def orientation(cap: float) -> str:
-    """Cap de la caméra en degrés (0 = nord) → « nord », « nord-est »… Un mur filmé de l'intérieur en
-    regardant vers le nord est le mur nord de la pièce."""
-    return POINTS_CARDINAUX[int(((cap % 360) + 22.5) // 45) % 8]
 
 
 def _demonstratif(element: Element) -> str:
@@ -82,6 +77,23 @@ def indices(element: Element, fenetres: list[Element]) -> list[str]:
     return resultat
 
 
+def _nom_oriente(element: Element, voisins: list[Element], fenetres: list[Element], numerote: bool) -> str:
+    """« le mur nord », « le mur nord, celui avec la télé » : l'orientation d'abord (c'est ainsi que LICIEL décrit les
+    parois), puis le repère visuel. Deux murs nord (pièce en L) : ce qui les distingue en plus. Vide si rien ne les
+    distingue (le nom habituel est alors utilisé)."""
+    nom = f"le mur {element.orientation}"
+    # Le repère : dit (« avec la télé ») ou dans le nom donné à l'image (« le mur avec le miroir »).
+    repere = element.repere or ("" if numerote or not element.description.startswith("le mur ") else element.description[7:])
+    memes = [v for v in voisins if v is not element and v.type == "mur" and v.orientation == element.orientation]
+    if not memes:
+        return f"{nom}, celui {repere}" if repere else nom
+    autres = [set(indices(v, fenetres)) | {v.repere} for v in memes]
+    for indice in [repere, *indices(element, fenetres)]:
+        if indice and indice != element.orientation and not any(indice in a for a in autres):
+            return f"{nom}, celui {indice}" if indice == repere else f"{nom} {indice}"
+    return ""
+
+
 def nom_parlant(element: Element, voisins: list[Element], fenetres: list[Element], courant: bool) -> str:
     """Le nom à dire. `voisins` : les autres éléments du même type dans la pièce ; `courant` : on vient
     d'en parler (« ce mur »)."""
@@ -92,6 +104,8 @@ def nom_parlant(element: Element, voisins: list[Element], fenetres: list[Element
     numerote = description_auto(element.description) and element.nombre == 1 and not element.description.startswith("les ")
     if courant and (element.type == "mur" or numerote):
         return _demonstratif(element)
+    if element.type == "mur" and element.orientation and (nom := _nom_oriente(element, voisins, fenetres, numerote)):
+        return nom
     if not numerote:
         return element.description
     base = re.sub(r"(?: \d+)?(?: n°\d+)?$", "", element.description)

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import re
 import statistics
 import time
@@ -24,9 +25,9 @@ from typing import Awaitable, Callable
 from . import parcours, plausibilite
 from .actions import appliquer
 from .cerveau import Contexte, Decision, ImageInstant
-from .checklist import Checklist, Element, cle_texte, horodatage
+from .checklist import ORIENTABLES, Checklist, Element, cle_texte, horodatage
 from .extraction import VOCABULAIRE, Cible, extraire, valeur_normalisee
-from .noms import orientation
+from .boussole import Boussole, Mesure
 from .garde import Questions, champ_rempli
 from .simulation import CerveauSimulation
 from .reglages import Reglages
@@ -57,6 +58,8 @@ def valeurs_attendues(cible: Cible | None) -> list[str]:
         return []
     if cible.genre in ("presence", "suite", "pareil"):
         return ["oui", "non"]
+    if cible.genre == "orientation":
+        return ["nord", "sud", "est", "ouest"]
     valeurs = list(dict.fromkeys(v for _, v in VOCABULAIRE.get((cible.type, cible.champ), [])))
     return ["oui", "non", *valeurs] if cible.genre == "confirmation" else valeurs
 
@@ -139,7 +142,8 @@ class Session:
         self._dernier_element_id: str | None = None  # « Il est isolé ? » plutôt que « Le mur 2 est isolé ? »
         self._annonce = ""  # contradiction à dire avant la prochaine question : « Noté : parpaing au lieu de brique. »
         self._derniere_cle = ""  # clé de la dernière question du parcours (pour la reposer après une digression)
-        self.caps: deque[tuple[float, float]] = deque(maxlen=600)  # (instant, cap de la caméra en degrés) : boussole du téléphone
+        self.boussole = Boussole()  # boussole et gyroscope du téléphone (étape 6)
+        self._calibration_demandee = False  # « faites un 8 avec le téléphone » : dit une seule fois
         self._complements: set[asyncio.Task] = set()  # relectures de Claude en arrière-plan
         self._compteurs = {"acceptees": 0, "refusees": 0, "questions": 0, "retenues": 0, "veilles": 0, "bips": 0, "relectures_claude": 0}
         self._pret = asyncio.Event()
@@ -281,8 +285,16 @@ class Session:
         elif genre == "silence":
             self.muet = bool(message.get("actif"))
             self.journaliser("silence", actif=self.muet)
-        elif genre == "capteurs" and isinstance(message.get("cap"), (int, float)) and isinstance(message.get("t"), (int, float)):
-            self.caps.append((float(message["t"]), float(message["cap"]) % 360))
+        elif genre == "capteurs" and isinstance(message.get("t"), (int, float)):
+            # Boussole et gyroscope du téléphone, une mesure par seconde (étape 6) ; valeurs absentes si pas de capteur.
+            def nombre(cle: str) -> float | None:
+                v = message.get(cle)
+                return float(v) if isinstance(v, (int, float)) and math.isfinite(v) else None
+
+            cap, lacet = nombre("cap"), nombre("lacet")
+            self.boussole.ajouter(Mesure(float(message["t"]), None if cap is None else cap % 360, None if lacet is None else lacet % 360,
+                                         nombre("precision"), nombre("inclinaison")))
+            self.checklist.regler_boussole(self.boussole.correction(), self.boussole.fiabilite(), self.boussole.gyroscope)
         elif genre == "fin":
             await self.fin_visite()
 
@@ -568,7 +580,7 @@ class Session:
     def _situer(self, resultats: list[dict], t_debut: float, t_fin: float) -> None:
         """Éléments créés ou désignés par cette phrase : leur vignette (l'image filmée pendant la phrase, montrée avec
         les questions sur eux) et leur orientation d'après la boussole du téléphone (« le mur nord »)."""
-        caps = sorted(c for t, c in self.caps if t_debut - 0.5 <= t <= t_fin + 0.5)
+        visee = self.boussole.visee(t_debut, t_fin)
         image = min(self.images, key=lambda i: abs(i.t - t_fin), default=None)
         for r in resultats:
             if r["statut"] != "accepte" or not r.get("element"):
@@ -581,8 +593,12 @@ class Session:
                 continue
             if not element.image and image is not None and image.chemin is not None:
                 element.image = image.chemin.name
-            if not element.orientation and caps and element.type in ("mur", "fenetre", "porte"):
-                element.orientation = orientation(caps[len(caps) // 2])
+            if visee is not None and element.type in ORIENTABLES and element.cap is None and element.lacet is None:
+                # Filmé de face depuis l'intérieur : son orientation est le cap de la caméra (boussole.py).
+                self.checklist.mesurer(element.id, visee)
+                if self.checklist.boussole_fiabilite == "faible" and not self._calibration_demandee:
+                    self._calibration_demandee = True
+                    self._annonce = f"{self._annonce} Boussole perturbée : faites un 8 avec le téléphone.".strip()
 
     def _noter_contradictions(self, depuis: int) -> None:
         """Contradictions relevées par la dernière phrase : la dernière valeur est gardée, et c'est dit au

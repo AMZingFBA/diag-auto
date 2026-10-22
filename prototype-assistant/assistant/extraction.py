@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
-from .checklist import (PAROIS, TOUJOURS_PRESENTS, TYPES, VALEUR_INCONNUE, Checklist, Element, cle_texte, description_auto, nom_de,
+from .checklist import (ORIENTABLES, PAROIS, TOUJOURS_PRESENTS, TYPES, VALEUR_INCONNUE, Checklist, Element, cle_texte, description_auto, nom_de,
                         nom_groupe)
 from .groupes import Decoupage, Partie, decouper
 from .lexique import corriger
@@ -437,6 +437,19 @@ _DEMANDE_MANQUES = re.compile(r"\bil (?:te|vous) faut quoi\b|\bqu est ce qu il (
                               r"|\btu as besoin de quoi\b|\btu veux savoir quoi\b")
 _DEMANDE_LEQUEL = re.compile(r"^\s*(?:c est |mais )?(?:quel|lequel|laquelle|quelle|de quel|c est lequel)(?:\s+(?:mur|fenetre|radiateur|porte))?"
                              r"\s*,?\s*$|\bc est quel (?:mur|fenetre|radiateur)\b|\bde quel (?:mur|radiateur)\b")
+# --- Orientation dite (étape 6) ---
+# « est » n'est l'orientation que si rien ne le suit qui en ferait le verbe : « le mur est donne dehors », mais pas
+# « le mur est en brique ».
+_EST = r"est(?=\s*(?:,|$|donne(?:nt)?\b|qui\b|il\b|celui\b|celle\b|avec\b|c\b|est\b|et\b|aussi\b|lui\b))"
+# « le mur nord », « la baie plein sud », « le mur côté est » (juste après le nom de l'élément).
+_ORIENTATION_APRES_MOT = re.compile(r"^\s*(?:(?:cote|plein|au|a l|oriente|orientee|expose|exposee)\s+)?(nord|sud|ouest|" + _EST + r")")
+# « ce mur est au nord », « il donne plein sud », « elle est orientée à l'est ».
+_EST_ORIENTE = re.compile(r"\b(?:est|donne(?:nt)?|se trouve|regarde|fait face)\s+(?:(?:oriente|orientee|expose|exposee|plein|vers|face)\s+)*"
+                          r"(?:au |a l |le |l )?(nord|sud|ouest|est)\b")
+# Réponse à « Ce mur est orienté nord, sud, est ou ouest ? » : « Sud. », « plein sud », « à l'est », « Est. ».
+_POINT_REPONDU = re.compile(r"\b(nord|sud|ouest)\b|(?:^|\b(?:plein|a l|vers l|cote|l)\s+)(est)\b")
+# « C'est le mur ouest », « non, c'est le mur ouest » : l'orientation du mur dont on parle.
+_C_EST = re.compile(r"(?:^|\b)(?:non\s*,?\s*)?(?:en fait\s*,?\s*)?(?:c est|ca c est|ici c est|voila)\s+(?:le|la)?\s*$")
 # « En fait », « non », « pas » : le diagnostiqueur corrige l'élément dont on parle, il n'en décrit pas un autre.
 _SE_CORRIGE = re.compile(r"\ben fait\b|\bfinalement\b|\bplutot\b|\bpardon\b|\bje me suis trompe\b|\bje corrige\b|\bnon\b|\bpas\b")
 # Question ou longue phrase : on ne devine pas un mot mal entendu (« il te faut quoi d'être… » n'est pas « tuffeau »).
@@ -479,6 +492,12 @@ class Cible:
             if valeur and any(c.cle == champ for c in element.type_element.champs):
                 return cls("confirmation", element.type, champ, element.id, source=valeur)
             return None
+        if prefixe == "orientation":  # « Ce mur est orienté nord, sud, est ou ouest ? »
+            try:
+                element = checklist.trouver_element(reste)
+            except ValueError:
+                return None
+            return cls("orientation", element.type, "orientation", element.id)
         if prefixe == "secondaire":
             type_element, _, champ = reste.partition(".")
             if type_element in TYPES and any(c.cle == champ for c in TYPES[type_element].champs):
@@ -503,6 +522,7 @@ class Cible:
             "pareil": f"pareil:{self.type}:{self.source}",
             "piece": f"piece:{self.champ}",
             "confirmation": f"confirmer:{self.element_id}.{self.champ}={self.source}",
+            "orientation": f"orientation:{self.element_id}",
         }.get(self.genre, f"secondaire:{self.type}.{self.champ}")
 
 
@@ -910,6 +930,12 @@ def extraire(phrase: str, checklist: Checklist, cible: Cible | None = None) -> E
     for k, segment in enumerate(segments):
         _decrire_segment(checklist, cible, segment, lieux.get(k), texte, action, cites, nouveaux, pris, crees, mur_de_la_phrase)
     _distinguer(checklist, crees, resultat)
+    if (not any(a["outil"] == "orienter" for a in resultat.actions) and (m := _EST_ORIENTE.search(debut))
+            and "facade" not in debut and not (cible and cible.genre == "orientation")):
+        # « Il est orienté plein sud » : le mur (ou la fenêtre) de la question, sinon le dernier mur décrit.
+        sujet = cible.element_id if cible and cible.element_id and cible.type in ORIENTABLES else checklist.dernier.get("mur")
+        if sujet:
+            action("orienter", element_id=sujet, orientation=m.group(1))
     _energie_de_la_chaudiere(checklist, resultat, action)
     _chauffage_par_les_emetteurs(checklist, resultat, action)
     resultat.actions = _derniere_valeur_dite(resultat.actions)
@@ -954,10 +980,15 @@ def _decrire_segment(checklist: Checklist, cible: Cible | None, segment: _Segmen
     """Un élément cité dans la phrase : le créer, le compléter, le séparer en groupes, ou en tirer une règle.
     `mur_de_la_phrase` : le dernier mur cité dans la phrase ; une fenêtre citée ensuite est sur ce mur (« ce mur donne
     dehors, il y a 3 fenêtres dessus »)."""
-    repere = ""
+    repere, point, apres_mot = "", "", segment.texte[segment.fin_mot:]
+    if segment.type in ORIENTABLES:
+        if o := _ORIENTATION_APRES_MOT.match(apres_mot):  # « le mur nord », « la baie plein sud »
+            point, apres_mot = o.group(1), apres_mot[o.end():]
+        elif o := _EST_ORIENTE.search(apres_mot):  # « ce mur est au nord »
+            point = o.group(1)
     if segment.type == "mur":
         segment.nombre = None  # « il y a 4 murs » : chaque mur a ses caractéristiques, jamais de groupe
-        if r := _REPERE.match(segment.texte[segment.fin_mot:]):  # « le mur avec la télé », « le mur du fond »
+        if r := _REPERE.match(apres_mot):  # « le mur avec la télé », « le mur (nord) du fond »
             repere = _REPERES.get(r.group(1) or "") or _POSITIONS.get(r.group(2) or "", "")
     support = mur_de_la_phrase.get("ref", "") if segment.type in ("fenetre", "porte") else ""
     piece = checklist.trouver_piece(lieu) if lieu else None  # None si la pièce nommée n'est pas encore visitée
@@ -970,7 +1001,7 @@ def _decrire_segment(checklist: Checklist, cible: Cible | None, segment: _Segmen
     parties = _parties_valables(segment.type, decoupage, (segment.nombre or 0) > 1 or tous) if groupes_possibles else []
     exceptions_pieces = _exceptions_de_piece(segment.type, decoupage, checklist) if groupes_possibles else {}
     simple_mention = (not valeurs and not segment.nombre and not parties and not exceptions_pieces and not segment.partie_de
-                      and not repere)
+                      and not repere and not point)
     # « une fenêtre ici », « et un radiateur ici » : on montre un élément déjà annoncé ; « ce mur » seul :
     # Claude et l'image s'en chargent ; plafond et plancher existent toujours. On ne crée un élément sur une
     # simple mention que s'il n'y en a aucun.
@@ -981,6 +1012,18 @@ def _decrire_segment(checklist: Checklist, cible: Cible | None, segment: _Segmen
         return
     cites.add(segment.type)
     dans_lieu = {"piece": lieu} if lieu else {}
+
+    # « Non, c'est le mur ouest » : l'orientation du mur dont on parle (celui de la question, sinon le dernier décrit).
+    if point and not valeurs and not parties and _C_EST.search(texte[: segment.debut]):
+        courant = (cible.element_id if cible and cible.element_id and cible.type == segment.type
+                   else checklist.dernier.get(segment.type))
+        if courant:
+            action("orienter", element_id=courant, type=segment.type, orientation=point)
+            return
+    # « Le mur nord est en brique » : le mur déjà orienté nord (par la boussole ou dit), s'il y en a un dans la pièce.
+    par_orientation = None
+    if point and not segment.nouveau_fort:
+        par_orientation = next((e for e in _existants(checklist, segment.type, piece) if e.orientation == point), None)
 
     # 1. « Tous les radiateurs sont électriques », « toutes les fenêtres sont en bois, sauf celle de la chambre qui
     # est en PVC » : une règle, pour les éléments déjà décrits et ceux qui viendront (pour la pièce, ou pour tout le
@@ -1002,7 +1045,9 @@ def _decrire_segment(checklist: Checklist, cible: Cible | None, segment: _Segmen
             return
 
     # 3. L'élément décrit.
-    if (cible and cible.genre in ("champ", "confirmation") and segment.type == cible.type and not segment.nouveau_fort
+    if par_orientation is not None:
+        vise = par_orientation
+    elif (cible and cible.genre in ("champ", "confirmation") and segment.type == cible.type and not segment.nouveau_fort
             and not segment.rang and not lieu):
         # « Le mur 1 donne sur quoi ? » « C'est une cloison » : la réponse décrit l'élément de la question.
         vise = checklist.trouver_element(cible.element_id)
@@ -1050,6 +1095,8 @@ def _decrire_segment(checklist: Checklist, cible: Cible | None, segment: _Segmen
         mur_de_la_phrase["ref"] = reference["element_id"] or reference["description"]
     for champ, valeur in valeurs.items():
         action("enregistrer_reponse", type=segment.type, champ=champ, valeur=valeur, **reference)
+    if point and par_orientation is None:  # « le mur sud donne dehors » : un mur dont l'orientation est dite
+        action("orienter", type=segment.type, orientation=point, **reference)
     mot = segment.texte[: segment.fin_mot].split()
     if vise is not None and valeurs and not segment.nombre and mot and mot[-1].endswith(("s", "x")):
         # « Les fenêtres ont des volets roulants » (au pluriel) : vaut aussi pour les autres fenêtres de la pièce
@@ -1458,6 +1505,11 @@ def _reponse_a_la_cible(checklist: Checklist, cible: Cible, texte: str, segments
         if element is not None:
             for champ, valeur in _valeurs(cible.type, texte).items():
                 action("enregistrer_reponse", element_id=element.id, type=cible.type, champ=champ, valeur=valeur)
+        return
+    if cible.genre == "orientation":
+        # « Ce mur est orienté nord, sud, est ou ouest ? » « Plein sud. » / « À l'est. » / « La façade est au sud. »
+        if not any(s.type in ORIENTABLES for s in segments) and (m := _POINT_REPONDU.search(reponse)):
+            action("orienter", element_id=cible.element_id, type=cible.type, orientation=m.group(1) or m.group(2))
         return
     if cible.genre == "piece" or not reponse:
         return

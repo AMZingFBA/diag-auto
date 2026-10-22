@@ -29,7 +29,6 @@ const etat = {
   voix: null,
   verrouEcran: null,
   bilan: null,
-  cap: null, // cap de la caméra en degrés (boussole), si le téléphone le donne
 };
 
 function maintenant() {
@@ -291,7 +290,7 @@ function envoyerImage() {
   toile.getContext("2d").drawImage(video, 0, 0, toile.width, toile.height);
   const t = maintenant();
   toile.toBlob((blob) => blob && envoyerBinaire(TYPE_IMAGE, t, blob), "image/jpeg", 0.7);
-  if (etat.cap != null) envoyerJson({ type: "capteurs", t, cap: Math.round(etat.cap) });
+  envoyerCapteurs(t);
 }
 
 // --- Boussole : direction filmée, pour nommer les murs (« le mur nord ») ---------------------------
@@ -309,17 +308,69 @@ function capCamera(alpha, beta, gamma) {
   return cap / rad;
 }
 
+// Deux mesures (voir assistant/boussole.py) : le CAP de la boussole (absolu, faussé près du métal) et le LACET du
+// gyroscope (sans nord, mais juste pour les angles entre murs). iPhone : cap = webkitCompassHeading, lacet = alpha
+// relatif. Android récent : cap = « deviceorientationabsolute », lacet = « deviceorientation ». Android ancien :
+// « deviceorientation » est déjà absolu, il donne le cap seul.
+const capteurs = { cap: null, lacet: null, precision: null, inclinaison: null, dernierAbsolu: 0, ecarts: [] };
+
 function autoriserBoussole() {
-  // iPhone : l'accès à la boussole se demande pendant l'appui sur « Démarrer ». Refusée : les murs seront nommés autrement.
+  // iPhone : l'accès se demande pendant l'appui sur « Démarrer ». Refusé : l'assistant demandera l'orientation à l'oral.
   if (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === "function") {
     DeviceOrientationEvent.requestPermission().catch(() => {});
   }
-  const surOrientation = (e) => {
-    if (typeof e.webkitCompassHeading === "number" && !Number.isNaN(e.webkitCompassHeading)) etat.cap = e.webkitCompassHeading;
-    else if ((e.absolute || e.type === "deviceorientationabsolute") && e.alpha != null) etat.cap = capCamera(e.alpha, e.beta, e.gamma);
-  };
-  window.addEventListener("deviceorientationabsolute", surOrientation);
-  window.addEventListener("deviceorientation", surOrientation);
+  window.addEventListener("deviceorientationabsolute", (e) => {
+    if (e.alpha == null) return;
+    capteurs.cap = capCamera(e.alpha, e.beta, e.gamma);
+    capteurs.dernierAbsolu = performance.now();
+    capteurs.inclinaison = e.beta;
+  });
+  window.addEventListener("deviceorientation", (e) => {
+    if (e.alpha == null) return;
+    if (typeof e.webkitCompassHeading === "number" && !Number.isNaN(e.webkitCompassHeading)) {
+      capteurs.cap = e.webkitCompassHeading; // iPhone
+      capteurs.precision = typeof e.webkitCompassAccuracy === "number" ? e.webkitCompassAccuracy : null;
+    } else if (e.absolute !== false && performance.now() - capteurs.dernierAbsolu > 2000) {
+      capteurs.cap = capCamera(e.alpha, e.beta, e.gamma); // Android ancien : orientation absolue
+    }
+    if (e.absolute === false) capteurs.lacet = capCamera(e.alpha, e.beta, e.gamma); // gyroscope
+    capteurs.inclinaison = e.beta;
+  });
+  etat.minuteries.push(setInterval(afficherBoussole, 250));
+}
+
+function fiabiliteBoussole() {
+  // Même règle que le serveur : précision annoncée (iPhone), sinon stabilité de « cap − lacet » sur les dernières secondes.
+  if (capteurs.cap == null) return "absente";
+  if (capteurs.precision != null) return capteurs.precision < 0 || capteurs.precision > 30 ? "faible" : capteurs.precision > 15 ? "moyenne" : "bonne";
+  if (capteurs.ecarts.length < 5) return "moyenne";
+  const centre = capteurs.ecarts[capteurs.ecarts.length - 1];
+  const dispersion = capteurs.ecarts.map((x) => Math.abs(((x - centre + 540) % 360) - 180)).sort((a, b) => a - b)[Math.floor(capteurs.ecarts.length / 2)];
+  return dispersion > 25 ? "faible" : dispersion > 12 ? "moyenne" : "bonne";
+}
+
+function afficherBoussole() {
+  const bloc = $("boussole");
+  const fiabilite = fiabiliteBoussole();
+  bloc.className = `boussole ${fiabilite}`;
+  if (capteurs.cap == null) {
+    $("cap").textContent = "pas de boussole";
+    $("calibrer").hidden = true;
+    return;
+  }
+  const cap = Math.round(capteurs.cap) % 360;
+  const points = ["N", "NE", "E", "SE", "S", "SO", "O", "NO"];
+  $("rose").style.transform = `rotate(${-cap}deg)`; // le N de la rose montre le nord
+  $("cap").textContent = `${points[Math.round(cap / 45) % 8]} ${cap}°`;
+  $("calibrer").hidden = fiabilite !== "faible";
+}
+
+function envoyerCapteurs(t) {
+  // Une mesure par seconde, même vide : le serveur sait alors que le téléphone n'a pas de boussole.
+  if (capteurs.cap != null && capteurs.lacet != null) capteurs.ecarts = [...capteurs.ecarts, capteurs.cap - capteurs.lacet].slice(-10);
+  const arrondi = (x) => (x == null ? null : Math.round(x * 10) / 10);
+  envoyerJson({ type: "capteurs", t, cap: arrondi(capteurs.cap), lacet: arrondi(capteurs.lacet), precision: arrondi(capteurs.precision),
+                inclinaison: arrondi(capteurs.inclinaison) });
 }
 
 // --- Enregistrement local de la vidéo complète ------------------------------------------------
