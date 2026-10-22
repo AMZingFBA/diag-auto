@@ -205,7 +205,7 @@ La commande `diagauto inspect` affiche ces contrôles.
 
 **① App terrain.**
 
-> **Mis à jour le 22/10/2026** : décision de Noah. L'app reste une **PWA qui marche sur n'importe quel téléphone**, même ancien et sans LiDAR, et **sans dépendance à Apple RoomPlan**. Elle sert surtout à **filmer chaque pièce** en enregistrant la voix et les capteurs (boussole, gyroscope). **Tout le calcul est fait sur notre serveur** : reconstruction 3D, surfaces, orientation, équipements, transcription. Voir [02-capture-video.md](02-capture-video.md). Les mesures laser du Carrez sont **dictées**, ce qui évite la dépendance au Bluetooth.
+> **Mis à jour le 22/10/2026** : décision de Noah. L'app reste une **PWA qui marche sur n'importe quel téléphone**, même ancien et sans LiDAR, et **sans dépendance à Apple RoomPlan**. Elle sert surtout à **filmer le logement en une seule vidéo continue** en enregistrant la voix et les capteurs (boussole, gyroscope). **Tout le calcul est fait sur notre serveur** : carte 3D, pièces, surfaces, orientation, équipements, transcription rattachée aux murs. Voir [02-capture-video.md](02-capture-video.md). Pour le Carrez, la mesure laser est **filmée** (écran du télémètre lu automatiquement) **ou dictée**, ce qui évite la dépendance au Bluetooth.
 
 - Application web installable (PWA) qui fonctionne sur iPhone, Android et tablette Windows, **hors ligne** (stockage local, synchronisation au retour du réseau).
 - Saisie rapide pensée pour une main : pièces par boutons (Séjour, Chambre n…), mesures, hauteur sous plafond, cases « < 1,80 m », « annexe », photos rattachées à la pièce.
@@ -291,11 +291,18 @@ Chaque étape a un livrable vérifiable. On ne passe à la suivante que si le cr
 > | Volet | Contenu | Étapes |
 > |---|---|---|
 > | **A. Sortie LICIEL** | Lire et générer les tables du dossier : pièces, puis Carrez, puis DPE. | E1 ✅, E2 → E4 (tableau ci-dessous, inchangées) |
-> | **B. Capture vidéo** | PWA sur tout téléphone (vidéo + voix + boussole) → **calcul serveur open source** (reconstruction 3D COLMAP/GLOMAP, mise à l'échelle par mesure laser dictée ou mire A4, murs / ouvertures / surfaces / orientation / ponts thermiques, IA vision, transcription) → JSON « Dossier terrain v1 » → écran de validation. Précision visée 3–5 % : bonne pour le DPE ; **Carrez = mesure laser dictée**. | V1 Preuve : vidéo d'une pièce → plan coté + surfaces → V2 Capture complète d'un logement → V3 De bout en bout (02-capture-video.md § 6) |
+> | **B. Capture vidéo** | **Une vidéo continue de tout le logement** sur tout téléphone, déplacement libre avec retours dans les pièces. **Calcul serveur open source** : carte 3D unique (SLAM / reconstruction avec fermeture de boucle et reconnaissance de lieu), découpage en pièces sur la carte (une revisite n'est jamais une nouvelle pièce), échelle sans mesure obligatoire, chaque phrase rattachée au mur visé à l'instant où elle est dite. Ensuite : JSON « Dossier terrain v1 » → écran de validation. Précision visée 3–5 % : bonne pour le DPE ; **Carrez = mesure laser** (télémètre filmé ou dicté). | V1 Preuve : vidéo continue de 2 pièces avec aller-retour → 2 pièces reconnues + phrases rattachées aux bons murs + surfaces → V2 Logement complet → V3 De bout en bout (02-capture-video.md § 6) |
 > | **C. Données administratives** | Reprise du devis + enrichissement depuis l'adresse (RNB, altitude IGN, BDNB, ancien DPE ADEME). Le diagnostiqueur confirme seulement. | Intégré à V3 ; le service peut démarrer dès qu'on connaît le format du devis (Q2 de 02-capture-video.md) |
 >
 > - Tout se développe sur le PC actuel, sans Mac ni iPhone particulier. La reconstruction 3D demande un GPU : ce PC n'en a pas, donc CPU (lent) ou GPU loué à l'heure.
-> - **Prochaine étape recommandée : V1** (vidéos de 5 à 10 pièces réelles + mesures laser de référence), en parallèle de E2 (test d'injection des pièces par Hermes).
+> - **Prochaine étape recommandée : V1.** 3 à 5 vidéos tournées selon [protocole-tournage.md](protocole-tournage.md), en fichier original et non par WhatsApp, avec mesures laser et croquis relevés à part comme vérité terrain. En parallèle : E2 (test d'injection des pièces par Hermes).
+> - Leçons du 1er test (`samples/video-001`, 22/10) :
+>   - vidéo recompressée par WhatsApp et sans capteurs ;
+>   - mouvement trop rapide ;
+>   - erreurs de transcription sur les mots métier ;
+>   - mesures orales confuses.
+>
+>   D'où : capture par notre application ou fichier original, lexique métier imposé à la transcription, aucune mesure dictée obligatoire.
 > - L'étape E5 (saisie web manuelle) est **remplacée par V2** ; le pilote E6 devient V3.
 > - Pour le DPE, tant que l'injection des tables n'est pas prouvée, la sortie est une **fiche de saisie pré-remplie**.
 > - Coût serveur estimé : **≈ 0,50 à 2,50 € par dossier** (ordre de grandeur, à mesurer en V1).

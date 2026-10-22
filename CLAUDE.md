@@ -7,16 +7,20 @@
 
 ## Objectif produit (décision de Noah, corrigée le 22/10/2026) — détail dans docs/02-capture-video.md
 1. **Données administratives sans saisie** : reprises du devis / dossier client (adresse, propriétaire, maison/appartement, année, surface déclarée) et enrichies automatiquement depuis l'adresse (API RNB, altitude IGN, BDNB, ancien DPE ADEME). Sur place, le diagnostiqueur ne fait que confirmer.
-2. **Capture terrain par vidéo sur N'IMPORTE QUEL téléphone**, même ancien (Android ou iPhone, sans LiDAR).
+2. **Capture terrain par UNE vidéo continue de tout le logement, sur N'IMPORTE QUEL téléphone**, même ancien (Android ou iPhone, sans LiDAR).
    - **C'est nous qui construisons le système : pas de dépendance à Apple RoomPlan ni au LiDAR.**
-   - Une application web (PWA) filme chaque pièce et enregistre la voix et les capteurs (boussole/orientation, gyroscope).
+   - Application web (PWA) : vidéo + voix + capteurs (boussole/orientation, gyroscope).
+   - Le diagnostiqueur se déplace librement, sort d'une pièce et **y revient** : le système reconnaît la même pièce et fusionne, **jamais deux pièces pour le même espace**.
+   - Rapide, sans procédure lourde : on entre, on balaie, « tel mur c'est ça », on repasse si oubli. **Pas de mesure dictée obligatoire.**
+   - Ne jamais passer par WhatsApp : la vidéo est recompressée et les capteurs sont perdus.
 3. **Tout le calcul côté serveur, open source de préférence** :
-   - reconstruction 3D depuis la vidéo (COLMAP/GLOMAP, profondeur monoculaire) ;
-   - mise à l'échelle par une référence (mesure laser dictée, mire A4, hauteur de porte) ;
+   - carte 3D unique par SLAM / reconstruction avec reconnaissance de lieu et fermeture de boucle (COLMAP/GLOMAP, DROID-SLAM ; ORB-SLAM3 et MASt3R-SLAM seulement comme références, à cause de leurs licences) ;
+   - découpage en pièces **sur la carte**, pas dans le temps ;
+   - échelle sans mesure obligatoire : profondeur métrique, objets de taille connue, capteurs ; laser si fourni ;
    - murs, fenêtres et portes, surfaces, orientation, longueurs de ponts thermiques ;
-   - IA vision pour les équipements et la lecture des plaques signalétiques ;
-   - transcription de la voix vers les champs invisibles (matériaux, isolation, vitrage, mitoyennetés).
-4. **Précision visée ~3–5 %** : suffisante pour le DPE. **Pour le Carrez/Boutin, la mesure laser dictée fait foi** ; la vidéo sert de contrôle et de plan.
+   - **chaque phrase dite est rattachée à l'élément visé à cet instant** (transcription horodatée ↔ position de la caméra ↔ mur au centre de l'image ; gérer « ce mur », « le deuxième mur », « celui-là ») ;
+   - IA vision pour les équipements et la lecture des plaques signalétiques.
+4. **Précision visée ~3–5 %** : suffisante pour le DPE. **Pour le Carrez/Boutin, la mesure laser fait foi** (télémètre filmé ou dicté) ; la vidéo sert de contrôle et de plan.
 5. **Écran de validation** par le diagnostiqueur : chaque valeur proposée montre sa preuve ; une donnée invisible non dite reste vide, l'IA ne la devine jamais.
 6. **Sortie vers LICIEL** par génération des tables XML du dossier (paquet `diagauto.liciel_xml`) : pièces + Carrez d'abord, DPE ensuite.
 
@@ -24,6 +28,8 @@
 - docs/01-cadrage.md : stockage LICIEL, options d'injection, plan de MVP, questions ouvertes.
 - docs/02-capture-video.md : parcours terrain, automatique / à confirmer / à dicter, briques techniques, coût serveur, plan de prototype en 3 étapes.
 - docs/checklist-dpe.md : données à relever pour un DPE 3CL-2021.
+- docs/protocole-tournage.md : fiche d'une page pour tourner les vidéos de test (V1).
+- samples/ (non versionné) : vidéos de test, ex. samples/video-001 (séjour, 38 s, recompressée par WhatsApp).
 
 ## Environnement
 - Windows 11, LICIEL installé en local : C:\LICIEL_Programmes\LICIEL Diagnostics (version d'essai : la démo n'enregistre pas les modules Carrez/DPE/Élec). Données : C:\LICIEL_Diagnostics (base LICIEL_Dossiers.mdb + Dossiers_AAAA\<n°>\XML\Table_*.xml).
