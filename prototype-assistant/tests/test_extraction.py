@@ -50,10 +50,10 @@ def test_1_description_libre_complete_en_une_fois():
     assert (fenetres.nombre, valeurs(c, "F1")) == (3, {"menuiserie": "bois", "vitrage": "double"})
     assert (radiateurs.nombre, valeurs(c, "E1")) == (2, {"type": "radiateur à eau"})
     # Rien de ce qui a été dit n'est redemandé : il ne reste que ce qui n'a pas été dit (le plafond et le
-    # plancher de la pièce existent toujours ; date et température des radiateurs sont secondaires).
+    # plancher de la pièce existent toujours ; date et température des radiateurs ne se demandent pas).
     assert [m.code for m in c.manques_piece()] == [
         "M1.donne_sur", "PL1.donne_sur", "PL1.isolation", "PB1.donne_sur", "PB1.isolation", "F1.volets"]
-    assert set(c.manques_secondaires()) == {("emetteur", "temperature"), ("emetteur", "annee")}
+    assert not c.manques_secondaires()
 
 
 def test_2_mur_mal_transcrit_parpin_et_isolation_exterieure():

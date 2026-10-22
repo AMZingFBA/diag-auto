@@ -111,6 +111,8 @@ class Session:
         self._cible: Cible | None = None  # champ visé par la dernière question (pour comprendre « bas ! »)
         self._derniere_question_texte = ""
         self._dernier_element_id: str | None = None  # « Il est isolé ? » plutôt que « Le mur 2 est isolé ? »
+        self._annonce = ""  # contradiction à dire avant la prochaine question : « Noté : parpaing au lieu de brique. »
+        self._derniere_cle = ""  # clé de la dernière question du parcours (pour la reposer après une digression)
         self._complements: set[asyncio.Task] = set()  # relectures de Claude en arrière-plan
         self._compteurs = {"acceptees": 0, "refusees": 0, "questions": 0, "retenues": 0, "veilles": 0, "bips": 0, "relectures_claude": 0}
         self._pret = asyncio.Event()
@@ -356,19 +358,25 @@ class Session:
 
         # 1. Extraction immédiate, sans IA : tout ce qui est reconnu est noté tout de suite.
         debut = time.perf_counter()
+        signales = len(self.checklist.signalements)
         extraction = extraire(texte, self.checklist, self._cible)
         resultats = appliquer(self.checklist, extraction.actions, contexte.t, self._phrases_recentes(contexte))
         mesure["extraction_ms"] = round((time.perf_counter() - debut) * 1000, 1)
         notes = self._compter(resultats)
         compris = [r for r in resultats if r["statut"] == "accepte"]
         mesure["valeurs_extraites"] = len(notes)
-        self.journaliser("extraction", resultats=resultats, devines=extraction.devines, mesures={"extraction_ms": mesure["extraction_ms"]})
+        self._noter_contradictions(signales)
+        self.journaliser("extraction", resultats=resultats, devines=extraction.devines, contradictions=self._annonce,
+                         mesures={"extraction_ms": mesure["extraction_ms"]})
         if resultats:
             await self._envoyer_actions(resultats, "extraction")
         contexte.deja_note = [f"{r.get('element') or r['action'].get('type')}.{r['action'].get('champ')} = {r['action'].get('valeur') or 'sans objet'}"
                               for r in notes]
         if self._cible and champ_rempli(self._cible, self.checklist):
             self._cible = None  # la dernière question a eu sa réponse
+        # Question restée sans réponse alors que la phrase a été comprise (une correction, un autre élément) : elle
+        # pourra être reposée une fois, après la prise en compte de ce qui vient d'être dit.
+        en_attente = self._derniere_cle if self._cible is not None and self._cible.genre != "confirmation" else ""
         # Après l'extraction : la phrase a pu changer de pièce (« ici c'est la cuisine »).
         contexte.questions_recentes = self.questions.recentes(time.monotonic(), self.checklist.piece_courante)
 
@@ -376,7 +384,8 @@ class Session:
             # 2. Compris : la question suivante du parcours part tout de suite, sans attendre Claude. Compris avec
             # un doute : on propose l'interprétation la plus probable (« J'ai compris…, c'est bien ça ? »).
             question = extraction.proposition is not None and await self._confirmer(extraction.proposition, reference, mesure)
-            if not question and not await self._question_du_parcours(reference, mesure) and notes:
+            if (not question and not await self._question_du_parcours(reference, mesure, reposer=en_attente)
+                    and not await self._annoncer(reference, mesure) and notes):
                 await self._bip(round(time.monotonic() - reference, 3))
                 mesure["bip_s"] = round(time.monotonic() - reference, 3)
             await self.envoyer_etat()
@@ -408,12 +417,13 @@ class Session:
         await self.dire(question, reference, mesure, cible=cible, cle=cle, une_fois=True)
         return True
 
-    async def _question_du_parcours(self, reference: float, mesure: dict | None) -> bool:
+    async def _question_du_parcours(self, reference: float, mesure: dict | None, reposer: str = "") -> bool:
         """Pose la première question du parcours que les garde-fous acceptent. Vrai si une question part."""
         maintenant = time.monotonic()
         dernier_id = self._dernier_element_id
         for plan in parcours.questions(self.checklist, dernier_id):
-            question, cible, raison, cle = self.questions.filtrer(plan.texte, plan.code, self.checklist, maintenant, cle=plan.cle)
+            question, cible, raison, cle = self.questions.filtrer(plan.texte, plan.code, self.checklist, maintenant, cle=plan.cle,
+                                                                  reposer=reposer)
             if not raison:
                 if mesure is not None:
                     mesure["question_s"] = round(maintenant - reference, 3)
@@ -441,6 +451,20 @@ class Session:
             log.exception("Complément de Claude")
             self.journaliser("erreur", etape="complement", message=str(e))
 
+    def _noter_contradictions(self, depuis: int) -> None:
+        """Contradictions relevées par la dernière phrase : la dernière valeur est gardée, et c'est dit au
+        diagnostiqueur avant la question suivante (« Noté : parpaing au lieu de brique. »)."""
+        textes = list(dict.fromkeys(s.texte for s in self.checklist.signalements[depuis:]))
+        if textes:
+            self._annonce = " ".join([self._annonce, *textes[:2]]).strip()
+
+    async def _annoncer(self, reference: float, mesure: dict | None) -> bool:
+        """Contradiction à dire alors qu'aucune question ne part : dite seule. Vrai si quelque chose est dit."""
+        if not self._annonce:
+            return False
+        await self.dire(self._annonce, reference, mesure, forcer=True)
+        return True
+
     def _compter(self, resultats: list[dict]) -> list[dict]:
         """Met à jour les compteurs ; renvoie les valeurs acceptées (enregistrées ou « sans objet »)."""
         notes = [r for r in resultats if r["action"].get("outil") in ("enregistrer_reponse", "marquer_sans_objet", "copier")]
@@ -453,7 +477,8 @@ class Session:
     async def _envoyer_actions(self, resultats: list[dict], source: str) -> None:
         await self._envoyer({"type": "actions", "source": source, "resultats": [
             {"outil": r["action"].get("outil"), "statut": r["statut"], "raison": r["raison"], "champ": r["action"].get("champ"),
-             "valeur": r["action"].get("valeur"), "nombre": r["action"].get("nombre"), "element": r.get("element")}
+             "valeur": r["action"].get("valeur"), "nombre": r["action"].get("nombre"), "element": r.get("element"),
+             "type": r["action"].get("type"), "description": r["action"].get("description")}
             for r in resultats
         ]})
 
@@ -503,14 +528,16 @@ class Session:
         # Interprétation seulement probable : pas notée, proposée au diagnostiqueur (« J'ai compris…, c'est bien ça ? »).
         probables = [a for a in decision.actions if a.get("certitude") == "probable" and a.get("outil") == "enregistrer_reponse"]
         actions = [a for a in decision.actions if a not in probables]
+        signales = len(self.checklist.signalements)
         resultats = appliquer(self.checklist, actions, contexte.t, self._phrases_recentes(contexte))
         notes = self._compter(resultats)
+        self._noter_contradictions(signales)
         if resultats:
             await self._envoyer_actions(resultats, "cerveau")
         if probables and not mesure.get("question_dite"):
             await self._confirmer({**probables[0], "note": "interprété par Claude"}, reference, mesure)
         if any(r["statut"] == "accepte" for r in resultats) and not mesure.get("question_dite"):
-            if not await self._question_du_parcours(reference, mesure) and notes:
+            if not await self._question_du_parcours(reference, mesure) and not await self._annoncer(reference, mesure) and notes:
                 await self._bip()
         self.journaliser("decision", mode=contexte.mode, dire=decision.dire, cible=decision.cible, filtrees=filtrees,
                          resultats=resultats, erreur=decision.erreur, brut=decision.brut[:2000], mesures=mesure)
@@ -529,6 +556,9 @@ class Session:
             self._compteurs["retenues"] += 1
             self.journaliser("question_retenue", texte=texte, raison="plafond de questions par minute")
             return
+        if self._annonce:
+            texte = texte if texte == self._annonce else f"{self._annonce} {texte}"
+            self._annonce = ""
         self._compteur_dire += 1
         self._questions.append(maintenant)
         self._derniere_question = maintenant
@@ -537,6 +567,7 @@ class Session:
             self.questions.noter(cle, maintenant, une_fois)
         if not forcer:
             self._cible = cible
+            self._derniere_cle = cle
             self._dernier_element_id = cible.element_id if cible and cible.element_id else None
             self._derniere_question_texte = f"{cible.code} : « {texte} »" if cible else f"« {texte} »"
         self.dialogue.append(f"[{horodatage(self.t_video)}] Assistant : « {texte} »")
@@ -619,6 +650,8 @@ class Session:
             **self._compteurs,
             "pieces": [{"nom": p.nom, "taux_remplissage": self.checklist.taux_remplissage(cle)} for cle, p in self.checklist.pieces.items()],
             "manques_visite": len(self.checklist.manques_visite()),
+            "regles_dites": len(self.checklist.regles),
+            "contradictions_signalees": [s.texte for s in self.checklist.signalements],
             "latences_s": {
                 "fin_de_phrase (silence attendu)": self.reglages.fin_silence_s,
                 "attente_dans_la_file": stats([m.get("attente_s") for m in audio]),

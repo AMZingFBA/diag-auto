@@ -208,10 +208,16 @@ function majEtat(m) {
 function majActions(resultats) {
   const liste = $("actions");
   for (const r of resultats) {
-    if (!["enregistrer_reponse", "marquer_sans_objet", "piece_courante"].includes(r.outil)) continue;
+    if (!["enregistrer_reponse", "marquer_sans_objet", "piece_courante", "scinder", "compter", "regle", "exception"].includes(r.outil)) continue;
     const li = document.createElement("li");
     const nombre = r.nombre > 1 ? ` ×${r.nombre}` : "";
-    const quoi = r.outil === "piece_courante" ? "pièce" : `${r.element || ""}${nombre} ${r.champ || ""} = ${r.valeur || "sans objet"}`;
+    let quoi = `${r.element || ""}${nombre} ${r.champ || ""} = ${r.valeur || "sans objet"}`;
+    if (r.outil === "piece_courante") quoi = "pièce";
+    // Groupes et exceptions (étape 4) : « séparé : F2 « la fenêtre en bois » », « règle : fenetre ».
+    const nom = r.description ? ` « ${r.description} »` : "";
+    if (r.outil === "scinder") quoi = `séparé : ${r.element || ""}${nombre}${nom}`;
+    if (r.outil === "compter") quoi = `${r.element || ""}${nombre}${nom}`;
+    if (r.outil === "regle" || r.outil === "exception") quoi = `${r.outil === "regle" ? "règle" : "exception"} : ${r.type || ""}`;
     li.textContent = r.statut === "accepte" ? `✓ ${quoi}` : `✗ refusé (${r.raison}) : ${quoi}`;
     li.className = r.statut === "accepte" ? "" : "refuse";
     liste.prepend(li);

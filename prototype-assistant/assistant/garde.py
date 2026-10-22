@@ -50,6 +50,7 @@ class Questions:
     def __init__(self) -> None:
         self._posees: dict[str, float] = {}
         self._une_fois: set[str] = set()
+        self._reposees: set[str] = set()
 
     @staticmethod
     def _cle(texte: str, cible: Cible | None, piece: str | None) -> str:
@@ -77,8 +78,10 @@ class Questions:
             self._une_fois.add(cle)
 
     def filtrer(self, texte: str, code_cible: str, checklist: Checklist, maintenant: float,
-                cle: str | None = None) -> tuple[str, Cible | None, str, str]:
-        """(question à dire ou "", champ visé, raison du refus, clé de la question)."""
+                cle: str | None = None, reposer: str = "") -> tuple[str, Cible | None, str, str]:
+        """(question à dire ou "", champ visé, raison du refus, clé de la question). `reposer` : clé de la
+        question restée sans réponse parce que le diagnostiqueur a parlé d'autre chose (une correction) ;
+        elle peut être reposée une fois (« Noté : béton au lieu de brique. Un autre mur dans cette pièce ? »)."""
         texte = " ".join((texte or "").split())
         if not texte:
             return "", None, "", ""
@@ -90,6 +93,9 @@ class Questions:
         cle = cle or self._cle(texte, cible, checklist.piece_courante)
         if cible and champ_rempli(cible, checklist):
             return "", cible, f"{cible.code} déjà renseigné", cle
+        if reposer and cle == reposer and cle not in self._reposees:
+            self._reposees.add(cle)
+            return texte, cible, "", cle
         if cle in self._une_fois:
             return "", cible, "déjà demandé une fois", cle
         if maintenant - self._posees.get(cle, -1e9) < DELAI_REDEMANDE_S:

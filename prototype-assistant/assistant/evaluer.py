@@ -46,9 +46,8 @@ PIECE_A_4_MURS = [
     ("Oui, deux, à eau.", "Quel est le chauffage principal ?"),
     ("Une chaudière gaz à condensation de 2015.", "Et l'eau chaude, comment est-elle produite ?"),
     ("Par la chaudière.", "Ventilation : VMC ou naturelle ?"),
-    ("VMC hygro B.", "Vos radiateurs à eau sont basse ou haute température ?"),
-    ("Je ne sais pas.", "Les radiateurs datent de quand, à peu près ?"),
-    ("Aucune idée.", "Pièce terminée. Quelle est la pièce suivante ?"),
+    # Date et température des radiateurs : plus jamais demandées (étape 4), mais notées si elles sont dites.
+    ("VMC hygro B.", "Pièce terminée. Quelle est la pièce suivante ?"),
     ("La cuisine.", "Décrivez le premier mur."),
 ]
 

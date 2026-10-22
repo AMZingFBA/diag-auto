@@ -5,10 +5,16 @@ Dans chaque pièce :
 1. les murs un par un (« donne sur » d'abord), puis « Un autre mur dans cette pièce ? » jusqu'au non ;
 2. le plafond, puis le plancher (« pareil que la pièce précédente ? » s'ils y sont connus) ;
 3. les fenêtres et portes restantes, puis « D'autres fenêtres, ou une porte vers l'extérieur ? » ;
-4. les émetteurs de chauffage (type seulement) ;
-5. une seule fois pour le logement : chauffage, eau chaude, ventilation, puis les détails secondaires
-   (date et température des radiateurs…), une seule fois chacun ;
+4. les émetteurs de chauffage (type seulement : leur date et leur température ne sont jamais demandées,
+   mais notées si elles sont dites) ;
+5. une seule fois pour le logement : chauffage, eau chaude, ventilation, puis la date du ballon ;
 6. « Pièce terminée. Quelle est la pièce suivante ? ».
+
+Les questions ne sont pas une liste figée (étape 4 de Noah) : elles suivent le logement réel et ce qui
+a été dit. Un groupe séparé (« dont une en bois ») a ses propres questions, sous un nom parlant (« La
+fenêtre en bois : des volets ? ») ; ce qui est déjà connu par une règle (« toutes les fenêtres sont en
+PVC ») ou se déduit (chauffage électrique et radiateurs électriques) n'est pas demandé ; les réponses
+proposées dépendent de ce qui est dit (gaz : « condensation, basse température ou standard ? »).
 
 Les questions sont proposées dans l'ordre ; le serveur pose la première que les garde-fous
 acceptent. Chaque question n'est posée qu'une fois (sa clé est retenue) : une question restée sans
@@ -77,9 +83,24 @@ def texte_champ(element: Element, champ: str, meme_element: bool) -> str:
     if t == "emetteur":
         return {"type": f"{d} : à eau ou électrique ?"}[champ]
     if t == "chauffage":
-        return {"energie": "Le chauffage principal, quelle énergie ?",
-                "type": "Chaudière, pompe à chaleur ou convecteurs ?",
-                "annee": "La chaudière date de quand ? Sinon, filmez sa plaque."}[champ]
+        # La question dépend de ce qui est déjà dit : on ne propose que les réponses possibles (étape 4 de Noah).
+        energie = cle_texte(element.valeur("energie").valeur) if element.valeur("energie") else ""
+        type_dit = cle_texte(element.valeur("type").valeur) if element.valeur("type") else ""
+        if champ == "type":
+            if energie.startswith(("gaz", "fioul")):
+                return "Chaudière à condensation, basse température ou standard ?"
+            if energie.startswith("bois"):
+                return "Poêle, insert ou chaudière ?"
+            if "pac" in energie:
+                return "Pompe à chaleur air/eau ou air/air ?"
+            if energie.startswith("electricite"):
+                return "Radiateurs électriques ou pompe à chaleur ?"
+            return "Chaudière, pompe à chaleur ou convecteurs ?"
+        if champ == "annee":
+            appareil = ("La pompe à chaleur" if "pac" in type_dit or "pompe" in type_dit or "pac" in energie
+                        else "Le poêle" if "poele" in type_dit else "L'insert" if "insert" in type_dit else "La chaudière")
+            return f"{appareil} date de quand ? Sinon, filmez sa plaque."
+        return "Le chauffage principal, quelle énergie ?"
     if t == "ecs":
         systeme = element.valeur("systeme")
         ballon = systeme is not None and "ballon" in cle_texte(systeme.valeur)
@@ -102,20 +123,21 @@ QUESTIONS_SUITE = {
     "mur": "Un autre mur dans cette pièce ?",
     "fenetre": "D'autres fenêtres, ou une porte vers l'extérieur ?",
 }
+# Date et température des radiateurs : jamais demandées (Noah, étape 4), mais notées dès qu'elles sont dites.
 QUESTIONS_SECONDAIRES = {
-    ("emetteur", "temperature"): "Vos radiateurs à eau sont basse ou haute température ?",
-    ("emetteur", "annee"): "Les radiateurs datent de quand, à peu près ?",
     ("ecs", "annee"): "Le ballon d'eau chaude date de quand ?",
 }
 QUESTION_PIECE_SUIVANTE = "Pièce terminée. Quelle est la pièce suivante ?"
 QUESTION_PIECE = "Dans quelle pièce êtes-vous ?"
 
 
-def _champs(elements: list[Element], dernier_id: str | None) -> Iterator[QuestionPlan]:
+def _champs(elements: list[Element], dernier_id: str | None, separes: set[str] = frozenset()) -> Iterator[QuestionPlan]:
     for element in elements:
         for champ in element.champs_manquants():
             code = f"{element.id}.{champ.cle}"
-            yield QuestionPlan(code, texte_champ(element, champ.cle, element.id == dernier_id), code)
+            # Un groupe qui vient d'être séparé (« deux en PVC et une en bois ») est nommé : « Des volets ? » serait ambigu.
+            meme = element.id == dernier_id and element.id not in separes
+            yield QuestionPlan(code, texte_champ(element, champ.cle, meme), code)
 
 
 def _source_pareil(checklist: Checklist, type_element: str) -> str | None:
@@ -135,6 +157,7 @@ def questions(checklist: Checklist, dernier_id: str | None = None) -> Iterator[Q
         return
     piece = checklist.pieces[piece_cle]
     elements = checklist.elements_de(piece_cle)
+    separes = {e.parent for e in checklist.elements if e.parent}
 
     def du_type(type_element: str) -> list[Element]:
         return [e for e in elements if e.type == type_element]
@@ -143,7 +166,7 @@ def questions(checklist: Checklist, dernier_id: str | None = None) -> Iterator[Q
     murs = du_type("mur")
     if not murs:
         yield QuestionPlan("presence:mur", QUESTIONS_PRESENCE["mur"], f"presence:mur@{piece_cle}")
-    yield from _champs(list(reversed(murs)), dernier_id)
+    yield from _champs(list(reversed(murs)), dernier_id, separes)
     if murs and "mur" not in piece.clos and not any(m.champs_manquants() for m in murs):
         yield QuestionPlan("suite:mur", QUESTIONS_SUITE["mur"], f"suite:mur@{piece_cle}#{len(murs)}")
 
@@ -156,13 +179,13 @@ def questions(checklist: Checklist, dernier_id: str | None = None) -> Iterator[Q
         if source and not element.valeurs and not element.sans_objet:
             texte = f"{_capitale(TYPES[type_element].nom)} pareil que dans {avec_article(checklist.pieces[source].nom)} ?"
             yield QuestionPlan(f"pareil:{type_element}:{source}", texte, f"pareil:{type_element}@{piece_cle}")
-        yield from _champs([element], dernier_id)
+        yield from _champs([element], dernier_id, separes)
 
     # 4. Fenêtres et portes restantes.
     fenetres, portes = du_type("fenetre"), du_type("porte")
     if not fenetres and "fenetre" not in piece.absences and "fenetre" not in piece.clos:
         yield QuestionPlan("presence:fenetre", QUESTIONS_PRESENCE["fenetre"], f"presence:fenetre@{piece_cle}")
-    yield from _champs(fenetres + portes, dernier_id)
+    yield from _champs(fenetres + portes, dernier_id, separes)
     if fenetres and "fenetre" not in piece.clos and not any(e.champs_manquants() for e in fenetres + portes):
         yield QuestionPlan("suite:fenetre", QUESTIONS_SUITE["fenetre"], f"suite:fenetre@{piece_cle}#{len(fenetres) + len(portes)}")
 
@@ -170,14 +193,14 @@ def questions(checklist: Checklist, dernier_id: str | None = None) -> Iterator[Q
     emetteurs = du_type("emetteur")
     if not emetteurs and "emetteur" not in piece.absences:
         yield QuestionPlan("presence:emetteur", QUESTIONS_PRESENCE["emetteur"], f"presence:emetteur@{piece_cle}")
-    yield from _champs(emetteurs, dernier_id)
+    yield from _champs(emetteurs, dernier_id, separes)
 
     # 6. Une seule fois pour le logement : chauffage, eau chaude, ventilation, puis les détails secondaires.
     for type_element in PRESENCES_LOGEMENT:
         existants = [e for e in checklist.elements_de(None) if e.type == type_element]
         if not existants and type_element not in checklist.absences_logement:
             yield QuestionPlan(f"presence:{type_element}", QUESTIONS_PRESENCE[type_element], f"presence:{type_element}")
-        yield from _champs(existants, dernier_id)
+        yield from _champs(existants, dernier_id, separes)
     for (type_element, champ) in checklist.manques_secondaires():
         if (type_element, champ) in QUESTIONS_SECONDAIRES:
             code = f"secondaire:{type_element}.{champ}"

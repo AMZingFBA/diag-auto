@@ -26,42 +26,76 @@ def _nombre(action: dict) -> int | None:
         raise ErreurChecklist(f"nombre d'éléments invalide : {valeur!r}") from None
 
 
+def _valeurs(action: dict, cle: str = "valeurs") -> dict[str, str]:
+    valeurs = action.get(cle) or {}
+    if not isinstance(valeurs, dict) or not all(isinstance(c, str) and isinstance(v, str) and v.strip() for c, v in valeurs.items()):
+        raise ErreurChecklist(f"{cle} invalides : {valeurs!r}")
+    return {c.strip(): v.strip() for c, v in valeurs.items()}
+
+
+def _piece(checklist: Checklist, action: dict, t: float) -> str | None:
+    """« Le radiateur de la cuisine » : la pièce nommée (créée si besoin, sans y entrer), sinon la pièce courante."""
+    nom = _texte(action, "piece")
+    return checklist.piece_pour(nom, t) if nom else None
+
+
+_AVEC_CITATION = ("enregistrer_reponse", "marquer_sans_objet", "cloturer", "copier", "scinder", "compter", "regle", "exception")
+
+
 def appliquer_action(checklist: Checklist, action: dict, t: float, phrases: list[str]) -> dict:
     outil = _texte(action, "outil")
     resultat = {"action": action, "statut": "accepte", "raison": ""}
     try:
+        citation = _texte(action, "citation")
+        if outil in _AVEC_CITATION and not citation_trouvee(citation, phrases):
+            raise ErreurChecklist("citation introuvable dans ce qui a été dit")
         if outil == "piece_courante":
-            citation = _texte(action, "citation")
             confirme = bool(citation) and citation_trouvee(citation, phrases)
             checklist.definir_piece(_texte(action, "nom"), t, citation if confirme else "")
             if not confirme:
                 resultat["raison"] = "pièce déduite de l'image, à confirmer"
         elif outil == "signaler_element":
             source = "voix" if _texte(action, "source") == "voix" else "image"
-            element = checklist.signaler_element(_texte(action, "type"), _texte(action, "description"), t, source=source, nombre=_nombre(action))
+            element = checklist.signaler_element(_texte(action, "type"), _texte(action, "description"), t, source=source,
+                                                 nombre=_nombre(action), piece=_piece(checklist, action, t))
             resultat["element"] = element.id
         elif outil in ("enregistrer_reponse", "marquer_sans_objet"):
-            citation = _texte(action, "citation")
-            if not citation_trouvee(citation, phrases):
-                raise ErreurChecklist("citation introuvable dans ce qui a été dit")
             commun = dict(
                 type_element=_texte(action, "type"), champ=_texte(action, "champ"), citation=citation, t=t,
                 element_id=_texte(action, "element_id") or None, description=_texte(action, "description"),
             )
             if outil == "enregistrer_reponse":
-                element = checklist.enregistrer(valeur=_texte(action, "valeur"), nombre=_nombre(action), note=_texte(action, "note"), **commun)
+                element = checklist.enregistrer(valeur=_texte(action, "valeur"), nombre=_nombre(action), note=_texte(action, "note"),
+                                                piece=_piece(checklist, action, t), **commun)
                 resultat["element"] = element.id
             else:
                 checklist.marquer_sans_objet(**commun)
-        elif outil in ("cloturer", "copier"):
-            citation = _texte(action, "citation")
-            if not citation_trouvee(citation, phrases):
-                raise ErreurChecklist("citation introuvable dans ce qui a été dit")
-            if outil == "cloturer":  # « pas d'autre mur » : la liste de la pièce est complète
-                checklist.cloturer(_texte(action, "type"), citation, t)
-            else:  # « plafond pareil que le séjour »
-                source = cle_texte(_texte(action, "piece_source"))
-                resultat["element"] = checklist.copier(_texte(action, "type"), source, citation, t).id
+        elif outil == "cloturer":  # « pas d'autre mur » : la liste de la pièce est complète
+            checklist.cloturer(_texte(action, "type"), citation, t)
+        elif outil == "copier":  # « plafond pareil que le séjour »
+            source = cle_texte(_texte(action, "piece_source"))
+            resultat["element"] = checklist.copier(_texte(action, "type"), source, citation, t).id
+        elif outil == "scinder":  # « dont une en bois », « tous sauf un »
+            element = checklist.scinder(_texte(action, "element_id"), _nombre(action) or 1, _texte(action, "description"), t, citation,
+                                        _valeurs(action))
+            resultat["element"] = element.id
+        elif outil == "compter":  # nouveau nombre d'un groupe
+            if not _nombre(action):
+                raise ErreurChecklist("nombre manquant")
+            element = checklist.changer_nombre(_texte(action, "element_id"), _nombre(action), citation, t, _texte(action, "description"),
+                                               correction=action.get("correction") is True)
+            resultat["element"] = element.id
+        elif outil == "regle":  # « toutes les fenêtres sont en bois, sauf celle de la chambre »
+            exceptions = action.get("exceptions") or {}
+            if not isinstance(exceptions, dict):
+                raise ErreurChecklist(f"exceptions invalides : {exceptions!r}")
+            piece = _texte(action, "piece")
+            checklist.ajouter_regle(_texte(action, "type"), _valeurs(action), citation, t,
+                                    piece=checklist.piece_pour(piece, t) if piece else None,
+                                    exceptions={p: _valeurs(exceptions, p) for p in exceptions})
+        elif outil == "exception":  # « sauf celle de la chambre, qui est en PVC », dit après la règle
+            if checklist.ajouter_exception(_texte(action, "type"), _texte(action, "piece"), _valeurs(action), citation, t) is None:
+                raise ErreurChecklist("aucune règle du logement à laquelle rattacher cette exception")
         else:
             raise ErreurChecklist(f"outil inconnu : {outil!r}")
     except ErreurChecklist as e:

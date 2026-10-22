@@ -78,9 +78,9 @@ def test_sans_objet_et_absences():
     e = c.signaler_element("emetteur", "le sèche-serviettes", 4)
     c.enregistrer(type_element="emetteur", champ="type", valeur="sèche-serviettes électrique", citation="sèche-serviettes électrique", t=5, element_id=e.id)
     c.marquer_sans_objet(type_element="emetteur", champ="temperature", citation="électrique, sans objet", t=5, element_id=e.id)
-    # Électrique : la température n'a pas de sens ; l'année est un détail secondaire (demandé pour le logement).
+    # Date et température des radiateurs : jamais demandées (étape 4), même pour le logement.
     assert codes(c.manques_piece()) == ["presence:mur", "PL1.donne_sur", "PL1.isolation", "PB1.donne_sur", "PB1.isolation"]
-    assert list(c.manques_secondaires()) == [("emetteur", "annee")]
+    assert list(c.manques_secondaires()) == []
     with pytest.raises(ErreurChecklist):
         c.marquer_sans_objet(type_element="mur", champ="presence", citation="pas de mur", t=6)
 
@@ -149,7 +149,7 @@ def test_paroi_sur_local_chauffe_rien_d_autre_a_demander():
     assert plafond.champs_manquants() == [] and not plafond.est_utile("isolation")
 
 
-def test_temperature_seulement_pour_les_radiateurs_a_eau():
+def test_date_et_temperature_des_radiateurs_jamais_demandees_mais_notees():
     c = Checklist()
     c.definir_piece("séjour", 0)
     eau = c.signaler_element("emetteur", "les radiateurs", 1, nombre=2)
@@ -157,8 +157,10 @@ def test_temperature_seulement_pour_les_radiateurs_a_eau():
     assert not eau.est_utile("temperature")  # type pas encore dit
     c.enregistrer(type_element="emetteur", champ="type", valeur="radiateur à eau", citation="à eau", t=2, element_id=eau.id)
     c.enregistrer(type_element="emetteur", champ="type", valeur="convecteur électrique", citation="convecteur", t=2, element_id=elec.id)
-    assert c.manques_secondaires()[("emetteur", "temperature")] == [eau]
-    assert c.manques_secondaires()[("emetteur", "annee")] == [eau, elec]
+    assert eau.est_utile("temperature") and not elec.est_utile("temperature")
+    assert not c.manques_secondaires() and not [m for m in c.manques_piece() if m.type == "emetteur"]  # rien à demander
+    c.enregistrer(type_element="emetteur", champ="annee", valeur="1985", citation="ils datent de 85", t=3, element_id=elec.id)
+    assert elec.valeur("annee").valeur == "1985"  # dit : toujours noté
 
 
 def test_liste_close_et_plafond_pareil():

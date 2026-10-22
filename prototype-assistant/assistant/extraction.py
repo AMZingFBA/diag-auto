@@ -22,7 +22,9 @@ import re
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
-from .checklist import PAROIS, TOUJOURS_PRESENTS, TYPES, VALEUR_INCONNUE, Checklist, Element, cle_texte
+from .checklist import (NOMS, PAROIS, TOUJOURS_PRESENTS, TYPES, VALEUR_INCONNUE, Checklist, Element, cle_texte, description_auto,
+                        nom_groupe)
+from .groupes import Decoupage, Partie, decouper
 from .lexique import corriger
 
 # --- Nombres écrits en lettres ------------------------------------------------------------------
@@ -75,8 +77,10 @@ def chiffres(texte: str) -> str:
 
 # Mots d'hésitation, sans contenu (« euh… le… le mur »).
 _HESITATIONS = {"euh", "euuh", "euhh", "heu", "heuu", "hum", "humm", "hmm", "mmh", "mh", "bah", "ben", "beh", "hein", "bref"}
-# Mots qui ne doivent jamais disparaître comme un faux départ (« pas parpaing » n'est pas un bégaiement).
-_JAMAIS_FAUX_DEPART = {"pas", "non", "sans", "ne", "ni"}
+# Mots qui ne doivent jamais disparaître comme un faux départ : « pas parpaing » n'est pas un bégaiement, ni
+# « il y a aussi » (« a » n'est pas le début raté de « aussi »).
+_JAMAIS_FAUX_DEPART = {"pas", "non", "sans", "ne", "ni", "a", "y", "l", "d", "de", "du", "des", "la", "le", "les", "un", "une",
+                       "en", "il", "on", "ce", "ces", "se", "sa", "son", "et", "est", "sur", "par", "au", "aux", "ou", "dans"}
 
 
 def nettoyer_oral(mots: list[str]) -> list[str]:
@@ -256,13 +260,18 @@ VOCABULAIRE: dict[tuple[str, str], list[tuple[tuple[str, ...], str]]] = {
     ],
     ("chauffage", "type"): [
         (("condensation",), "chaudière à condensation"),
-        (("chaudiere basse temperature",), "chaudière basse température"),
-        (("pompe a chaleur air eau", "pac air eau"), "PAC air/eau"),
-        (("pompe a chaleur air air", "pac air air", "climatisation reversible"), "PAC air/air"),
+        (("chaudiere basse temperature", "basse temperature"), "chaudière basse température"),
+        (("chaudiere standard", "standard", "classique"), "chaudière standard"),
+        (("pompe a chaleur air eau", "pac air eau", "air eau"), "PAC air/eau"),
+        (("pompe a chaleur air air", "pac air air", "air air", "climatisation reversible"), "PAC air/air"),
         (("pompe a chaleur", "pac"), "pompe à chaleur"),
+        (("insert", "foyer ferme"), "insert"),
         (("poele",), "poêle"),
         (("chaudiere",), "chaudière"),
         (("convecteur", "convecteurs"), "convecteurs électriques"),
+        (("panneau rayonnant", "panneaux rayonnants"), "panneaux rayonnants électriques"),
+        (("radiateur electrique", "radiateurs electriques", "effet joule", "joule", "electrique direct"),
+         "radiateurs électriques (effet Joule)"),
     ],
     ("ecs", "systeme"): [
         (("thermodynamique", "thermo"), "ballon thermodynamique"),
@@ -352,6 +361,33 @@ _PIECE = re.compile(
 _NOM_PIECE = re.compile(r"\b(" + _NOMS_PIECES + r")(?:\s+(\d+))?\b")  # réponse à « Quelle est la pièce suivante ? »
 _ANNEE = re.compile(r"\b(19[3-9]\d|20[0-3]\d)\b")
 
+# --- Groupes, exceptions, références (étape 4 de Noah) ---
+# « Le deuxième mur », « la fenêtre 2 » : un élément déjà décrit (s'il existe), sinon un nouveau.
+# (« le dernier mur » reste un nouveau mur : c'est le dernier qu'on décrit.)
+_ORDINAUX = {"premier": 1, "premiere": 1, "1er": 1, "1ere": 1, "deuxieme": 2, "second": 2, "seconde": 2, "troisieme": 3,
+             "quatrieme": 4, "cinquieme": 5, "sixieme": 6, "septieme": 7, "huitieme": 8}
+_NUMERO = re.compile(r"\s+(\d{1,2})\b(?!\s*(?:cm|mm|m\b|metres?|centimetres?|ans?\b|par\b|x\b|sur\b|\.\d))")
+# « Un des radiateurs est électrique », « 2 d'entre elles sont en bois » : une partie d'un groupe déjà décrit.
+_UN_DES = re.compile(r"\b(l un|l une|un|une|\d{1,2})\s+(?:des|d entre (?:eux|elles)|de ces|parmi (?:les|ces))\s*$")
+# « En fait il y a 3 radiateurs, pas 2 » : le nombre d'un groupe déjà décrit est corrigé (et signalé).
+_CORRECTION_NOMBRE = re.compile(r"\ben fait\b|\bfinalement\b|\bpas (\d{1,2})\b|\bplutot\b|\bje me suis trompe\b|\bje corrige\b")
+# « Le radiateur de la salle de bains », « dans la cuisine, il y a aussi un radiateur » : un élément d'une autre pièce.
+_LIEU = re.compile(r"\b(?:de|du|dans|des)\s+(?:la |le |l |les )?(" + _NOMS_PIECES + r")(?:\s+(\d+))?\b")
+_ENTRE_LIEU_ET_ELEMENT = re.compile(r"[\s,]*(?:(?:et|il y a|y a|aussi|on a|il y en a|encore|egalement|1|un|une|\d{1,2})[\s,]*)*")
+# « Toutes les fenêtres du logement… » : une règle pour tout le logement, et pas seulement pour la pièce.
+_LOGEMENT = re.compile(r"\b(?:du logement|de la maison|de l appartement|partout|dans tout(?:e)? (?:le logement|la maison|l appartement)"
+                       r"|(?:dans|de) toutes les pieces|de tout le logement)\b")
+# « Pareil », « comme les autres » : la même valeur que l'élément du même type décrit juste avant.
+_PAREIL = re.compile(r"^(?:(?:oui|c est|ce sont|elles? sont|ils? sont|elles? ont|ils? ont|il a|elle a)\s*,?\s*)?"
+                     r"(?:pareil(?:le)?s?|idem|(?:la )?meme chose|les memes|la meme|le meme|aussi"
+                     r"|comme (?:les |la |le |l )?(?:autres?|precedente?s?|d avant))\b")
+_TOUS = re.compile(r"\b(?:tous|toutes)\b")
+# « Toutes, des volets roulants » (et pas « tous les deux », qui ne parle que du groupe de la question).
+_TOUS_LES_AUTRES = re.compile(r"\b(?:tous|toutes)\b(?!\s+les\s+\d)")
+# « Le radiateur sous la fenêtre » : la fenêtre situe le radiateur, ce n'est pas un élément décrit.
+_SITUE = re.compile(r"\b(?:sous|pres d[eu]?|a cote d[eu]?|au dessus d[eu]?|en dessous d[eu]?|devant|derriere|entre|contre"
+                    r"|le long d[eu]?|face a|en face d[eu]?|a gauche d[eu]?|a droite d[eu]?)\s+(?:la |le |les |l |un |une |des |chaque )?$")
+
 
 @dataclass
 class Cible:
@@ -426,6 +462,13 @@ class _Segment:
     pluriel: str
     total: bool = False  # « en tout trois fenêtres » : nombre total d'un élément déjà décrit
     nouveau_fort: bool = False  # « un autre mur », « le deuxième », « celui-là » : forcément un autre élément
+    debut: int = 0  # position dans la phrase
+    fin_mot: int = 0  # fin du mot de l'élément, dans le texte du segment (« 9 radiateurs| électriques… »)
+    rang: tuple[str, int] | None = None  # (« ordinal », 2) pour « le deuxième mur », (« numero », 5) pour « le mur 5 »
+    partie_de: int | None = None  # « un des radiateurs » : 1
+    tous: bool = False  # « tous les radiateurs », « toutes les fenêtres »
+    correction: bool = False  # « en fait », « finalement », « pas 2 » : un nombre corrigé
+    ancien_nombre: int | None = None  # « …, pas 2 »
 
 
 @dataclass
@@ -594,7 +637,8 @@ def _valeurs(type_element: str, texte: str) -> dict[str, str]:
             if m := _ANNEE.search(texte):
                 valeurs[champ] = m.group(1)
         elif champ == "dimensions":
-            m = re.search(r"\b(\d+(?:\.\d+)?)\s*(m|cm)?\s*(?:par|sur|x|fois)\s*(\d+(?:\.\d+)?)\s*(m|cm)?\b", texte)
+            mesures = re.sub(r"\b(\d+)\s*m\s*(\d{1,2})\b(?!\s*(?:cm|m)\b)", r"\1.\2 m", texte)  # « 1 m 20 » → 1.20 m
+            m = re.search(r"\b(\d+(?:\.\d+)?)\s*(m|cm)?\s*(?:par|sur|x|fois)\s*(\d+(?:\.\d+)?)\s*(m|cm)?\b", mesures)
             if m:
                 unite = m.group(4) or m.group(2) or ("m" if "." in m.group(1) else "cm")
                 valeurs[champ] = f"{m.group(1).replace('.', ',')} × {m.group(3).replace('.', ',')} {unite}"
@@ -611,6 +655,8 @@ def _segments(texte: str, type_courant: str | None) -> tuple[str, list[_Segment]
     for m in _MOTS.finditer(texte):
         i = int(next(k for k, v in m.groupdict().items() if v)[1:])
         _motif, type_element, singulier, pluriel = MOTS_ELEMENTS[i]
+        if reperes and _SITUE.search(texte[: m.start()]):
+            continue  # « le radiateur sous la fenêtre est électrique » : la phrase parle encore du radiateur
         reperes.append((m.start(), m.end(), type_element, singulier, pluriel))
     for m in _DESIGNE.finditer(texte):
         if not any(a <= m.start() < b for a, b, *_ in reperes):
@@ -618,21 +664,41 @@ def _segments(texte: str, type_courant: str | None) -> tuple[str, list[_Segment]
     reperes.sort()
     segments: list[_Segment] = []
     debuts = []
+    fins = []
+    lu = list(texte)  # texte où les numéros de référence (« le mur 5 ») sont effacés avant de lire les valeurs
     for debut, fin, type_element, singulier, pluriel in reperes:
-        precedent = texte[:debut].split()[-3:]
+        avant = texte[:debut]
+        precedent = avant.split()[-3:]
         nombre = None
         debut_segment = debut
-        if precedent and precedent[-1].isdigit() and 1 <= int(precedent[-1]) <= 50:
+        partie_de = None
+        if m := _UN_DES.search(avant):  # « un des radiateurs » : une partie d'un groupe, pas un nouveau
+            partie_de = int(m.group(1)) if m.group(1).isdigit() else 1
+            debut_segment = m.start()
+        elif precedent and precedent[-1].isdigit() and 1 <= int(precedent[-1]) <= 50:
             nombre = int(precedent[-1])
             debut_segment = texte.rfind(precedent[-1], 0, debut)
-        nouveau = bool(set(precedent) & _NOUVEAU) or bool(_DESIGNE.match(texte, debut)) or (nombre or 0) > 1
-        total = bool(_TOTAL.search(" ".join(texte[:debut].split()[-5:])))
-        nouveau_fort = bool(set(precedent) & _NOUVEAU_FORT) or bool(_DESIGNE.match(texte, debut))
+        rang = None
+        if precedent and precedent[-1] in _ORDINAUX:
+            rang = ("ordinal", _ORDINAUX[precedent[-1]])
+        elif not texte[debut:fin].endswith(("s", "x")) and (m := _NUMERO.match(texte, fin)):
+            rang = ("numero", int(m.group(1)))
+            lu[m.start(1):m.end(1)] = " " * (m.end(1) - m.start(1))
+        nouveau = (bool(set(precedent) & _NOUVEAU) or bool(_DESIGNE.match(texte, debut)) or (nombre or 0) > 1) and not partie_de
+        total = bool(_TOTAL.search(" ".join(avant.split()[-5:])))
+        nouveau_fort = (bool(set(precedent) & _NOUVEAU_FORT) or bool(_DESIGNE.match(texte, debut))) and not partie_de
         debuts.append(debut_segment)
-        segments.append(_Segment(type_element, "", nombre, nouveau, singulier, pluriel, total, nouveau_fort))
+        fins.append(fin)
+        segments.append(_Segment(type_element, "", nombre, nouveau, singulier, pluriel, total, nouveau_fort, debut_segment,
+                                 rang=rang, partie_de=partie_de, tous=bool(_TOUS.search(" ".join(avant.split()[-3:])))))
+    lu = "".join(lu)
     for k, segment in enumerate(segments):
-        segment.texte = texte[debuts[k]: debuts[k + 1] if k + 1 < len(segments) else len(texte)]
+        segment.texte = lu[debuts[k]: debuts[k + 1] if k + 1 < len(segments) else len(texte)]
+        segment.fin_mot = fins[k] - debuts[k]
         segment.total = segment.total or bool(_TOTAL.search(segment.texte))
+        correction = _CORRECTION_NOMBRE.search(" ".join(texte[:debuts[k]].split()[-4:]) + " " + segment.texte)
+        segment.correction = correction is not None and segment.nombre is not None
+        segment.ancien_nombre = int(correction.group(1)) if segment.correction and correction.group(1) else None
         if segment.type == _DESIGNATION:
             # « Celui-là, béton 18 cm » : l'élément que décrivent les valeurs dites (un mur par défaut, ou le
             # type de la dernière question s'il s'agit d'un élément de la pièce).
@@ -643,22 +709,47 @@ def _segments(texte: str, type_courant: str | None) -> tuple[str, list[_Segment]
     return (texte[: debuts[0]] if debuts else texte), segments
 
 
-def _existants(checklist: Checklist, type_element: str) -> list[Element]:
-    piece = checklist.piece_courante if TYPES[type_element].niveau == "piece" else None
+def _existants(checklist: Checklist, type_element: str, piece: str | None = None) -> list[Element]:
+    if TYPES[type_element].niveau == "piece":
+        piece = piece or checklist.piece_courante
+    else:
+        piece = None
     return [e for e in checklist.elements_de(piece) if e.type == type_element]
 
 
-def _element_vise(checklist: Checklist, segment: _Segment, valeurs: dict[str, str]) -> Element | None:
+def _par_rang(checklist: Checklist, segment: _Segment, existants: list[Element]) -> Element | None:
+    """« Le deuxième mur », « le mur 5 » : l'élément déjà décrit qui porte ce rang ou ce nom, sinon None
+    (un nouveau : « le quatrième mur » quand il n'y en a que trois)."""
+    genre, k = segment.rang  # type: ignore[misc]
+    if genre == "numero":
+        noms = {cle_texte(f"{segment.singulier} {k}"), cle_texte(f"{TYPES[segment.type].designation} {k}")}
+        autres = [e for e in checklist.elements if e.type == segment.type and e not in existants]
+        for element in existants + autres:
+            if cle_texte(element.description) in noms:
+                return element
+    return existants[k - 1] if 1 <= k <= len(existants) else None
+
+
+def _element_vise(checklist: Checklist, segment: _Segment, valeurs: dict[str, str], piece: str | None = None) -> Element | None:
     """L'élément déjà connu que ce morceau de phrase décrit, ou None pour en créer un nouveau."""
     if segment.type in TOUJOURS_PRESENTS:
-        return checklist.element_de_piece(segment.type)
-    existants = _existants(checklist, segment.type)
+        return checklist.element_de_piece(segment.type, piece)
+    existants = _existants(checklist, segment.type, piece)
+    if segment.rang:
+        return _par_rang(checklist, segment, existants)
     if not existants:
         return None
 
     def conflit(element: Element) -> bool:
-        return any(element.valeur(c) is not None and cle_texte(element.valeur(c).valeur) != cle_texte(v) for c, v in valeurs.items())
+        # Seule une valeur dite pour cet élément compte : une valeur reprise d'une règle ou d'un groupe admet des exceptions.
+        return any((v := element.valeur(c)) is not None and v.origine == "dit" and cle_texte(v.valeur) != cle_texte(nouvelle)
+                   for c, nouvelle in valeurs.items())
 
+    if segment.correction:  # « en fait il y a 3 radiateurs, pas 2 » : le groupe déjà décrit
+        for element in reversed(existants):
+            if element.nombre == segment.ancien_nombre:
+                return element
+        return ([e for e in existants if e.nombre > 1] or existants)[-1]
     if segment.total and len(existants) == 1 and not conflit(existants[0]):
         return existants[0]  # « en tout trois fenêtres, toutes pareilles » : la fenêtre déjà décrite, ×3
     if segment.nombre:  # « les trois fenêtres » redit plus tard : le même groupe
@@ -669,13 +760,17 @@ def _element_vise(checklist: Checklist, segment: _Segment, valeurs: dict[str, st
     deja_decrit = any(dernier.valeurs.values())
     if segment.nouveau:
         return None if (deja_decrit or segment.nombre and dernier.nombre != segment.nombre) else dernier
-    if conflit(dernier) or (TYPES[segment.type].niveau == "piece" and not dernier.champs_manquants() and valeurs):
+    # Un élément complet qui reçoit de nouveau un champ déjà dit, c'est un autre élément (un autre mur) ; un champ
+    # jamais demandé (température d'un radiateur) le complète.
+    redit = any(dernier.est_rempli(c) for c in valeurs)
+    if conflit(dernier) or (TYPES[segment.type].niveau == "piece" and not dernier.champs_manquants() and redit):
         return None
     return dernier
 
 
-def _nouvelle_description(checklist: Checklist, type_element: str, nombre: int | None, singulier: str = "", pluriel: str = "") -> str:
-    numero = sum(e.type == type_element for e in checklist.elements) + 1
+def _nouvelle_description(checklist: Checklist, type_element: str, nombre: int | None, singulier: str = "", pluriel: str = "",
+                          deja: int = 0) -> str:
+    numero = sum(e.type == type_element for e in checklist.elements) + 1 + deja  # deja : créés par la même phrase
     singulier = singulier or TYPES[type_element].designation
     pluriel = pluriel or PLURIELS.get(type_element, TYPES[type_element].nom + "s")
     description = f"les {nombre} {pluriel}" if (nombre or 1) > 1 else f"{singulier} {numero}"
@@ -725,44 +820,391 @@ def extraire(phrase: str, checklist: Checklist, cible: Cible | None = None) -> E
         for segment in segments:
             if segment.type == "chauffage":
                 segment.type, segment.singulier, segment.pluriel = "ecs", TYPES["ecs"].designation, "eaux chaudes"
+    if type_courant == "chauffage" and len(segments) == 1 and segments[0].type == "emetteur" and not segments[0].nombre:
+        # « Quel est le chauffage principal ? » « Les radiateurs électriques » : c'est le chauffage qui est décrit.
+        segments[0].type, segments[0].singulier, segments[0].pluriel = "chauffage", TYPES["chauffage"].designation, "générateurs"
 
+    # « Sauf celle de la chambre, qui est en PVC », sans nommer l'élément : une exception de pièce, traitée à part.
+    debut = _exceptions_sans_element(checklist, cible, debut, action)
     # Réponse courte à la dernière question : le début de phrase (avant tout autre élément cité).
     if cible:
         _reponse_a_la_cible(checklist, cible, debut, segments, resultat, action, phrase)
 
     cites: set[str] = set()  # types déjà annoncés dans cette phrase
     nouveaux: dict[str, int] = {}  # éléments créés par cette phrase, par type (pour les numéroter)
-    for segment in segments:
-        if segment.type == "mur":
-            segment.nombre = None  # « il y a 4 murs » : chaque mur a ses caractéristiques, jamais de groupe
-        valeurs = _valeurs(segment.type, segment.texte)
-        simple_mention = not valeurs and not segment.nombre
-        # « une fenêtre ici », « et un radiateur ici » : on montre un élément déjà annoncé ; « ce mur » seul :
-        # Claude et l'image s'en chargent ; plafond et plancher existent toujours. On ne crée un élément sur une
-        # simple mention que s'il n'y en a aucun.
-        if simple_mention and (segment.type in ("mur", *TOUJOURS_PRESENTS) or segment.type in cites or _existants(checklist, segment.type)):
-            continue
-        cites.add(segment.type)
-        if cible and cible.genre in ("champ", "confirmation") and segment.type == cible.type and not segment.nouveau_fort:
-            # « Le mur 1 donne sur quoi ? » « C'est une cloison » : la réponse décrit l'élément de la question.
-            vise = checklist.trouver_element(cible.element_id)
-        else:
-            vise = _element_vise(checklist, segment, valeurs)
-        if vise is None:
-            description = _nouvelle_description(checklist, segment.type, segment.nombre, segment.singulier, segment.pluriel)
-            if nouveaux.get(segment.type):
-                description += f" n°{nouveaux[segment.type] + 1}"
-            nouveaux[segment.type] = nouveaux.get(segment.type, 0) + 1
-            action("signaler_element", type=segment.type, description=description, nombre=segment.nombre or 1, source="voix")
-            reference = {"element_id": "", "description": description}
-        else:
-            if segment.nombre and segment.nombre != vise.nombre:
-                action("signaler_element", type=segment.type, description=vise.description, nombre=segment.nombre, source="voix")
-            reference = {"element_id": vise.id, "description": ""}
-        for champ, valeur in valeurs.items():
-            action("enregistrer_reponse", type=segment.type, champ=champ, valeur=valeur, **reference)
+    pris: set[str] = set()  # noms donnés dans cette phrase
+    crees: list[dict] = []  # éléments créés un par un par cette phrase
+    lieux = _lieux(texte, segments, checklist)
+    for k, segment in enumerate(segments):
+        _decrire_segment(checklist, cible, segment, lieux.get(k), texte, action, cites, nouveaux, pris, crees)
+    _distinguer(checklist, crees, resultat)
     _energie_de_la_chaudiere(checklist, resultat, action)
+    _chauffage_par_les_emetteurs(checklist, resultat, action)
     return resultat
+
+
+def _distinguer(checklist: Checklist, crees: list[dict], resultat: Extraction) -> None:
+    """« Deux fenêtres PVC double vitrage et une fenêtre bois simple vitrage » : des éléments du même genre
+    décrits dans la même phrase reçoivent des noms qui les distinguent (« les 2 fenêtres en PVC », « la
+    fenêtre en bois ») plutôt que des numéros."""
+    familles: dict[tuple[str, str, str | None], list[dict]] = {}
+    for cree in crees:
+        familles.setdefault((cree["type"], cree["singulier"], cree["piece"]), []).append(cree)
+    for (type_element, _singulier, piece), liste in familles.items():
+        if len(liste) < 2 or type_element not in ("fenetre", "porte", "emetteur"):
+            continue
+        groupes = [_Groupe(c["nombre"], c["valeurs"], principal=(i == 0)) for i, c in enumerate(liste)]
+        noms = _noms(type_element, groupes, None, liste[0]["singulier"] or TYPES[type_element].designation,
+                     liste[0]["pluriel"] or PLURIELS.get(type_element, TYPES[type_element].nom + "s"))
+        if len(set(noms)) < len(noms):
+            continue  # rien ne les distingue : les numéros restent
+        pris: set[str] = set()
+        for cree, nom in zip(liste, noms):
+            nom = _unique(checklist, nom, piece, pris)
+            for a in resultat.actions:
+                if a.get("type") == type_element and a.get("description") == cree["description"]:
+                    a["description"] = nom
+
+
+def _decrire_segment(checklist: Checklist, cible: Cible | None, segment: _Segment, lieu: str | None, texte: str, action,
+                     cites: set[str], nouveaux: dict[str, int], pris: set[str], crees: list[dict]) -> None:
+    """Un élément cité dans la phrase : le créer, le compléter, le séparer en groupes, ou en tirer une règle."""
+    if segment.type == "mur":
+        segment.nombre = None  # « il y a 4 murs » : chaque mur a ses caractéristiques, jamais de groupe
+    piece = checklist.trouver_piece(lieu) if lieu else None  # None si la pièce nommée n'est pas encore visitée
+    groupes_possibles = segment.type not in PAROIS  # murs, plafonds, planchers : un par un (étape 5)
+    apres = segment.texte[segment.fin_mot:]
+    decoupage = decouper(apres) if groupes_possibles else Decoupage(apres)
+    decoupage.tete = segment.texte[: segment.fin_mot] + " " + decoupage.tete
+    valeurs = _valeurs(segment.type, decoupage.tete)
+    tous = segment.tous or decoupage.tous
+    parties = _parties_valables(segment.type, decoupage, (segment.nombre or 0) > 1 or tous) if groupes_possibles else []
+    exceptions_pieces = _exceptions_de_piece(segment.type, decoupage, checklist) if groupes_possibles else {}
+    simple_mention = not valeurs and not segment.nombre and not parties and not exceptions_pieces and not segment.partie_de
+    # « une fenêtre ici », « et un radiateur ici » : on montre un élément déjà annoncé ; « ce mur » seul :
+    # Claude et l'image s'en chargent ; plafond et plancher existent toujours. On ne crée un élément sur une
+    # simple mention que s'il n'y en a aucun.
+    if simple_mention and (segment.type in ("mur", *TOUJOURS_PRESENTS) or segment.type in cites or lieu
+                           or _existants(checklist, segment.type)):
+        return
+    cites.add(segment.type)
+    dans_lieu = {"piece": lieu} if lieu else {}
+
+    # 1. « Tous les radiateurs sont électriques », « toutes les fenêtres sont en bois, sauf celle de la chambre qui
+    # est en PVC » : une règle, pour les éléments déjà décrits et ceux qui viendront (pour la pièce, ou pour tout le
+    # logement si c'est dit ou si une autre pièce est exceptée).
+    if ((tous or exceptions_pieces) and not segment.nombre and not segment.partie_de and not parties and groupes_possibles
+            and TYPES[segment.type].niveau == "piece" and (valeurs or exceptions_pieces)):
+        logement = bool(exceptions_pieces) or bool(_LOGEMENT.search(texte)) or (checklist.piece_courante is None and not lieu)
+        action("regle", type=segment.type, valeurs=valeurs, exceptions=exceptions_pieces,
+               piece="" if logement else (lieu or checklist.nom_piece(checklist.piece_courante)))
+        return
+
+    # 2. « Un des radiateurs est électrique » : une partie d'un groupe déjà décrit, séparée du groupe.
+    if segment.partie_de:
+        groupe = _groupe_pour_partie(checklist, segment.type, segment.partie_de, cible, piece)
+        if groupe is not None:
+            k = segment.partie_de
+            _emettre(checklist, segment.type, groupe, [_Groupe(groupe.nombre - k, {}, principal=True),
+                                                        _Groupe(k, valeurs, herite=True, autre=not valeurs)], action, pris)
+            return
+
+    # 3. L'élément décrit.
+    if (cible and cible.genre in ("champ", "confirmation") and segment.type == cible.type and not segment.nouveau_fort
+            and not segment.rang and not lieu):
+        # « Le mur 1 donne sur quoi ? » « C'est une cloison » : la réponse décrit l'élément de la question.
+        vise = checklist.trouver_element(cible.element_id)
+    elif lieu and piece is None:
+        vise = None  # pièce pas encore visitée : un élément nouveau, qui y sera rangé
+    else:
+        vise = _element_vise(checklist, segment, valeurs, piece)
+
+    # 4. Plusieurs groupes ou des exceptions : « 9 radiateurs électriques basse température et 1 électrique haute
+    # température », « 3 fenêtres en PVC dont une en simple vitrage », « 2 en fonte et 1 en acier ».
+    if parties:
+        existant = vise is not None and not segment.nombre
+        total = segment.nombre or (vise.nombre if vise is not None else None)
+        if groupes := _repartir(segment.type, decoupage, parties, total, existant):
+            _emettre(checklist, segment.type, vise, groupes, action, pris, segment.singulier, segment.pluriel, lieu)
+            return
+
+    # 5. Un seul groupe : le cas courant.
+    if vise is None:
+        description = _nouvelle_description(checklist, segment.type, segment.nombre, segment.singulier, segment.pluriel,
+                                            deja=nouveaux.get(segment.type, 0))
+        nouveaux[segment.type] = nouveaux.get(segment.type, 0) + 1
+        description = _unique(checklist, description, piece if lieu else checklist.piece_courante, pris)
+        crees.append({"type": segment.type, "description": description, "nombre": segment.nombre or 1, "valeurs": valeurs,
+                      "singulier": segment.singulier, "pluriel": segment.pluriel, "piece": piece if lieu else checklist.piece_courante})
+        action("signaler_element", type=segment.type, description=description, nombre=segment.nombre or 1, source="voix", **dans_lieu)
+        reference = {"element_id": "", "description": description, **dans_lieu}
+    else:
+        if segment.nombre and segment.nombre != vise.nombre:
+            # « En tout trois fenêtres » ; « en fait il y en a 3, pas 2 » : un nombre déjà dit qui change est signalé.
+            action("compter", element_id=vise.id, nombre=segment.nombre, correction=vise.nombre > 1 or segment.correction)
+        reference = {"element_id": vise.id, "description": ""}
+    for champ, valeur in valeurs.items():
+        action("enregistrer_reponse", type=segment.type, champ=champ, valeur=valeur, **reference)
+    mot = segment.texte[: segment.fin_mot].split()
+    if vise is not None and valeurs and not segment.nombre and mot and mot[-1].endswith(("s", "x")):
+        # « Les fenêtres ont des volets roulants » (au pluriel) : vaut aussi pour les autres fenêtres de la pièce
+        # qui n'en ont rien dit.
+        for autre in _existants(checklist, segment.type, vise.piece):
+            for champ, valeur in valeurs.items():
+                if autre is not vise and not autre.est_rempli(champ):
+                    action("enregistrer_reponse", element_id=autre.id, type=segment.type, champ=champ, valeur=valeur)
+
+
+# --- Groupes et exceptions ------------------------------------------------------------------------------
+
+@dataclass
+class _Groupe:
+    nombre: int | None
+    valeurs: dict[str, str]  # dites pour ce groupe (avec ce qui est dit pour tout le groupe, s'il en fait partie)
+    herite: bool = False  # sous-groupe ou exception d'un groupe : reprend aussi les valeurs déjà dites du groupe
+    principal: bool = False  # reste dans l'élément d'origine
+    autre: bool = False  # « l'autre », « les autres » : rien qui le distingue n'a été dit
+
+
+def _nom_de_piece(m: re.Match, checklist: Checklist, sans_numero: bool = False) -> str:
+    nom = _PIECES[m.group(1)] + (f" {m.group(2)}" if m.group(2) and not sans_numero else "")
+    cle = checklist.trouver_piece(nom)
+    return checklist.nom_piece(cle) if cle else nom
+
+
+def _lieux(texte: str, segments: list[_Segment], checklist: Checklist) -> dict[int, str]:
+    """Pièce nommée pour un élément d'une autre pièce : « le radiateur de la salle de bains est électrique »,
+    « dans la cuisine, il y a aussi un radiateur ». Renvoie {indice du segment : nom de la pièce}."""
+    lieux: dict[int, str] = {}
+    for m in _LIEU.finditer(texte):
+        contenant = next((k for k in range(len(segments) - 1, -1, -1) if segments[k].debut <= m.start()), None)
+        suivant = next((k for k, s in enumerate(segments) if s.debut > m.start()), None)
+        numero_du_segment = m.group(2) is not None and suivant is not None and segments[suivant].debut == m.start(2)
+        fin = m.start(2) if numero_du_segment else m.end()  # « dans la chambre 2 convecteurs » : 2 est leur nombre
+        # Un lieu qui ouvre une proposition et précède un élément est le sien (« et dans la chambre, 2 convecteurs ») ;
+        # sinon il complète l'élément en cours (« un radiateur électrique dans la cuisine »).
+        vers_suivant = suivant is not None and _ENTRE_LIEU_ET_ELEMENT.fullmatch(texte[fin: segments[suivant].debut]) is not None
+        debut_de_proposition = re.search(r"(?:^|,|\bet|\bpuis|\bmais)\s*$", texte[: m.start()]) is not None
+        k = suivant if vers_suivant and (contenant is None or debut_de_proposition) else contenant
+        if k is None or k in lieux or segments[k].type in PAROIS or TYPES[segments[k].type].niveau != "piece":
+            continue
+        nom = _nom_de_piece(m, checklist, sans_numero=numero_du_segment)
+        if checklist.trouver_piece(nom) != checklist.piece_courante:
+            lieux[k] = nom
+    return lieux
+
+
+def _parties_valables(type_element: str, decoupage: Decoupage, groupe: bool) -> list[Partie]:
+    """Les parties qui décrivent vraiment un groupe (pas « et un isolant », pas « et 2 ici »). Les exceptions de
+    pièce (« sauf celle de la chambre ») sont traitées à part."""
+    valables = []
+    for p in decoupage.parties:
+        if _LIEU.search(p.texte) and (p.exception or p.designe):
+            continue
+        a_valeurs = bool(_valeurs(type_element, p.texte))
+        if p.exception and (p.nombre or a_valeurs or p.designe):
+            valables.append(p)
+        elif p.reste and (a_valeurs or groupe):
+            valables.append(p)
+        elif a_valeurs:
+            valables.append(p)
+    return valables
+
+
+def _exceptions_de_piece(type_element: str, decoupage: Decoupage, checklist: Checklist) -> dict[str, dict[str, str]]:
+    """« Sauf celle de la chambre, qui est en PVC » → {« Chambre » : {menuiserie : PVC}}."""
+    exceptions: dict[str, dict[str, str]] = {}
+    for p in decoupage.parties:
+        if (p.exception or p.designe) and (m := _LIEU.search(p.texte)):
+            exceptions[_nom_de_piece(m, checklist)] = _valeurs(type_element, p.texte[: m.start()] + " " + p.texte[m.end():])
+    return exceptions
+
+
+def _repartir(type_element: str, decoupage: Decoupage, parties: list[Partie], total: int | None, existant: bool) -> list[_Groupe]:
+    """Les groupes décrits, le principal en premier. `total` : nombre annoncé (« 9 radiateurs ») ou nombre du
+    groupe déjà décrit ; `existant` : la phrase redécoupe un groupe déjà décrit (« 2 en PVC et 1 en bois »)."""
+    groupes = _repartir_parties(type_element, decoupage, parties, total, existant)
+    commun = _valeurs(type_element, decoupage.commun)  # « …, toutes en double vitrage »
+    for g in groupes:
+        g.valeurs = {**commun, **g.valeurs}
+    return groupes
+
+
+def _repartir_parties(type_element: str, decoupage: Decoupage, parties: list[Partie], total: int | None, existant: bool) -> list[_Groupe]:
+    tete = _valeurs(type_element, decoupage.tete)
+    principal = {**tete, **_valeurs(type_element, decoupage.au_principal)}
+    exceptions = [p for p in parties if p.exception]
+    if exceptions:
+        # « Dont une en simple vitrage », « tous à eau sauf un électrique », « toutes sauf une ont des volets roulants ».
+        retires = sum(p.nombre or 1 for p in exceptions)
+        if total and total <= retires:
+            return []  # « sauf un » dans un groupe d'un seul : rien à séparer
+        groupes = [_Groupe(total - retires if total else None, principal, principal=True)]
+        for p in exceptions:
+            propres = _valeurs(type_element, p.texte)
+            # « Dont » : un sous-ensemble, qui partage ce qui est dit du groupe. « Sauf une » sans rien de plus : elle
+            # diffère sur ce qui vient d'être dit, on ne lui reprend rien de la phrase (on demandera).
+            commun = tete if (p.dont or propres) else {}
+            groupes.append(_Groupe(p.nombre or 1, {**commun, **propres}, herite=True, autre=not propres))
+        return groupes
+    explicites = sum(p.nombre or 0 for p in parties)
+    restes = [p for p in parties if p.reste and not p.nombre]
+    if existant or (total and (explicites == total or restes)):
+        # Sous-groupes d'un même groupe (2 + 1 = 3, ou « l'un… les autres… ») : chacun reprend ce qui est dit du groupe.
+        groupes = []
+        for p in parties:
+            n = p.nombre or (total - explicites if total and total > explicites else None)
+            propres = _valeurs(type_element, p.texte)
+            groupes.append(_Groupe(n, {**tete, **propres}, herite=True, autre=p.reste and not propres))
+        if total and explicites < total and not restes:
+            groupes.append(_Groupe(total - explicites, dict(tete), herite=True, autre=True))  # « 2 roulants » sur 3 : il en reste 1
+        principal_groupe = max(groupes, key=lambda g: g.nombre or 0)
+        principal_groupe.principal = True
+        groupes.remove(principal_groupe)
+        return [principal_groupe, *groupes]
+    # Groupes distincts (9 + 1 ≠ 9) : rien n'est repris de l'un à l'autre.
+    groupes = [_Groupe(total, principal, principal=True)] if (principal or total or existant) else []
+    groupes += [_Groupe(p.nombre, _valeurs(type_element, p.texte)) for p in parties]
+    groupes[0].principal = True
+    return groupes
+
+
+def _qualificatif(type_element: str, champ: str, valeur: str, nombre: int) -> str:
+    """Ce qui distingue un groupe dans son nom : « en bois », « haute température », « à volets roulants »."""
+    v, cle = valeur, cle_texte(valeur)
+    if champ in ("menuiserie", "materiau") or (type_element == "porte" and champ == "type"):
+        return f"en {v}"
+    if champ == "vitrage":
+        return f"en {v} vitrage" if v in ("simple", "double", "triple") else f"en {v}"
+    if champ == "volets":
+        return "sans volets" if v == "aucun" else f"à volets {v}"
+    if type_element == "emetteur" and champ == "type":
+        if "eau" in cle:
+            return "à eau"
+        return ("électriques" if nombre > 1 else "électrique") if "electrique" in cle else f"({v})"
+    if champ == "temperature":
+        return f"{v} température"
+    if champ == "annee":
+        return f"de {v}"
+    libelle = next(c.libelle for c in TYPES[type_element].champs if c.cle == champ)
+    return f"({libelle} : {v})"
+
+
+def _noms_de(element: Element, singulier: str = "", pluriel: str = "") -> tuple[str, str]:
+    """(singulier, pluriel) du nom d'un élément : « les 3 fenêtres » → (« la fenêtre », « fenêtres »)."""
+    for p, s in NOMS:
+        if p in element.description or s in element.description:
+            return s, p
+    return singulier or element.type_element.designation, pluriel or PLURIELS.get(element.type, element.type_element.nom + "s")
+
+
+def _noms(type_element: str, groupes: list[_Groupe], vise: Element | None, singulier: str, pluriel: str) -> list[str]:
+    """Un nom parlant par groupe, d'après le premier champ qui les distingue : « les 9 radiateurs basse
+    température » et « le radiateur haute température » ; « l'autre fenêtre » si rien ne la distingue."""
+    def valeur(g: _Groupe, champ: str) -> str:
+        if champ in g.valeurs:
+            return g.valeurs[champ]
+        dite = vise.valeur(champ) if vise is not None and (g.principal or g.herite) else None
+        return dite.valeur if dite is not None else ""
+
+    # Champs qui distinguent les groupes ; chacun est nommé par le premier de ces champs qu'on connaît pour lui.
+    distinctifs = [c.cle for c in TYPES[type_element].champs if len({cle_texte(valeur(g, c.cle)) for g in groupes}) > 1]
+    noms = []
+    for g in groupes:
+        champ = next((c for c in distinctifs if valeur(g, c) and valeur(g, c) != VALEUR_INCONNUE), None)
+        qualificatif = _qualificatif(type_element, champ, valeur(g, champ), g.nombre or 1) if champ else ""
+        autre = not qualificatif and not g.principal and (g.autre or bool(distinctifs))
+        noms.append(nom_groupe(singulier, pluriel, g.nombre or 1, qualificatif, autre))
+    return noms
+
+
+def _unique(checklist: Checklist, nom: str, piece: str | None, pris: set[str], sauf: Element | None = None) -> str:
+    """Deux éléments d'une même pièce ne portent jamais le même nom (il sert à les retrouver)."""
+    base, k = nom, 2
+    while cle_texte(nom) in pris or any(e is not sauf and cle_texte(e.description) == cle_texte(nom) for e in checklist.elements_de(piece)):
+        nom, k = f"{base} n°{k}", k + 1
+    pris.add(cle_texte(nom))
+    return nom
+
+
+def _emettre(checklist: Checklist, type_element: str, vise: Element | None, groupes: list[_Groupe], action, pris: set[str],
+             singulier: str = "", pluriel: str = "", lieu: str | None = None) -> None:
+    """Crée, sépare ou complète les éléments décrits par ces groupes (le principal en premier)."""
+    if vise is not None:
+        singulier, pluriel = _noms_de(vise, singulier, pluriel)
+        noms = _noms(type_element, groupes, vise, singulier, pluriel)
+        principal = groupes[0]
+        ailleurs = {"piece": checklist.nom_piece(vise.piece)} if vise.piece and vise.piece != checklist.piece_courante else {}
+        # 1. Les parties séparées d'abord : elles reprennent les valeurs du groupe telles qu'elles avaient été dites.
+        for g, nom in zip(groupes[1:], noms[1:]):
+            nom = _unique(checklist, nom, vise.piece, pris)
+            if g.herite:
+                action("scinder", element_id=vise.id, nombre=g.nombre or 1, description=nom, valeurs=g.valeurs)
+            else:
+                _nouvel_element(action, type_element, nom, g.nombre, g.valeurs, ailleurs)
+        # 2. Le groupe d'origine : son nouveau nombre et son nom parlant, puis ses valeurs.
+        nom = _unique(checklist, noms[0], vise.piece, pris, sauf=vise) if description_auto(vise.description) else ""
+        if (principal.nombre and principal.nombre != vise.nombre) or (nom and nom != vise.description):
+            action("compter", element_id=vise.id, nombre=principal.nombre or vise.nombre, description=nom)
+        for champ, valeur in principal.valeurs.items():
+            action("enregistrer_reponse", element_id=vise.id, type=type_element, champ=champ, valeur=valeur)
+        return
+    singulier = singulier or TYPES[type_element].designation
+    pluriel = pluriel or PLURIELS.get(type_element, TYPES[type_element].nom + "s")
+    piece = checklist.trouver_piece(lieu) if lieu else checklist.piece_courante
+    for g, nom in zip(groupes, _noms(type_element, groupes, None, singulier, pluriel)):
+        _nouvel_element(action, type_element, _unique(checklist, nom, piece, pris), g.nombre, g.valeurs, {"piece": lieu} if lieu else {})
+
+
+def _nouvel_element(action, type_element: str, description: str, nombre: int | None, valeurs: dict[str, str], ailleurs: dict) -> None:
+    action("signaler_element", type=type_element, description=description, nombre=nombre or 1, source="voix", **ailleurs)
+    for champ, valeur in valeurs.items():
+        action("enregistrer_reponse", element_id="", type=type_element, champ=champ, valeur=valeur, description=description, **ailleurs)
+
+
+def _groupe_pour_partie(checklist: Checklist, type_element: str, k: int, cible: Cible | None, piece: str | None) -> Element | None:
+    """« Un des radiateurs » : le groupe de la dernière question s'il en a plus de k, sinon le dernier de la pièce."""
+    if cible and cible.element_id and cible.type == type_element:
+        element = checklist.trouver_element(cible.element_id)
+        if element.nombre > k:
+            return element
+    groupes = [e for e in _existants(checklist, type_element, piece) if e.nombre > k]
+    return groupes[-1] if groupes else None
+
+
+def _exceptions_sans_element(checklist: Checklist, cible: Cible | None, texte: str, action) -> str:
+    """« Sauf celle de la chambre, qui est en PVC », dit sans nommer l'élément : exception à la dernière règle
+    du logement, ou à défaut correction des éléments de cette pièce. Renvoie le texte sans cette exception."""
+    exceptions = [(p, m) for p in decouper(texte).parties if (p.exception or p.designe) and (m := _LIEU.search(p.texte))]
+    if not exceptions:
+        return texte
+    if checklist.regles:
+        type_element = checklist.regles[-1].type
+    elif cible and cible.type in TYPES and TYPES[cible.type].niveau == "piece" and cible.type not in PAROIS:
+        type_element = cible.type
+    else:
+        return texte
+    debut = texte[: exceptions[0][0].position]
+    tete = _valeurs(type_element, debut)
+    if tete and not any(r.type == type_element and r.piece is None for r in checklist.regles):
+        # « Bois, sauf celle de la chambre qui est en PVC » : une règle pour tout le logement, avec son exception.
+        action("regle", type=type_element, valeurs=tete, piece="", exceptions={
+            _nom_de_piece(m, checklist): _valeurs(type_element, p.texte[: m.start()] + " " + p.texte[m.end():]) for p, m in exceptions})
+        return debut
+    for partie, m in exceptions:
+        nom = _nom_de_piece(m, checklist)
+        valeurs = _valeurs(type_element, partie.texte[: m.start()] + " " + partie.texte[m.end():])
+        if any(r.type == type_element and r.piece is None for r in checklist.regles):
+            action("exception", type=type_element, piece=nom, valeurs=valeurs)
+        elif valeurs:
+            cle = checklist.trouver_piece(nom)
+            elements = _existants(checklist, type_element, cle) if cle else []
+            for element in elements:
+                for champ, valeur in valeurs.items():
+                    action("enregistrer_reponse", element_id=element.id, type=type_element, champ=champ, valeur=valeur)
+            if not elements:
+                _nouvel_element(action, type_element, _nouvelle_description(checklist, type_element, None), None, valeurs, {"piece": nom})
+    return debut
 
 
 def _energie_de_la_chaudiere(checklist: Checklist, resultat: Extraction, action) -> None:
@@ -780,6 +1222,29 @@ def _energie_de_la_chaudiere(checklist: Checklist, resultat: Extraction, action)
                note=f"déduit : même chaudière que le chauffage ({chaudiere.id})")
 
 
+def _chauffage_par_les_emetteurs(checklist: Checklist, resultat: Extraction, action) -> None:
+    """Chauffage à l'électricité et tous les émetteurs du logement électriques : ce sont des radiateurs
+    électriques (effet Joule). Déduction notée comme telle, avec sa source, pour l'écran de validation ;
+    elle évite une question inutile."""
+    notees = [a for a in resultat.actions if a["outil"] == "enregistrer_reponse" and a["type"] == "chauffage"]
+    energie = next((a for a in notees if a["champ"] == "energie"), None)
+    if energie is None or cle_texte(energie["valeur"]) != "electricite" or any(a["champ"] == "type" for a in notees):
+        return
+    if energie.get("element_id") and checklist.trouver_element(energie["element_id"]).valeur("type") is not None:
+        return
+    emetteurs = [e for e in checklist.elements if e.type == "emetteur"]
+    if emetteurs and all((v := e.valeur("type")) is not None and "electrique" in cle_texte(v.valeur) for e in emetteurs):
+        action("enregistrer_reponse", type="chauffage", champ="type", valeur="radiateurs électriques (effet Joule)",
+               element_id=energie.get("element_id", ""), description=energie.get("description", ""),
+               note=f"déduit : émetteurs tous électriques ({', '.join(e.id for e in emetteurs)})")
+
+
+def _modele_pareil(checklist: Checklist, element: Element, champ: str) -> Element | None:
+    """« Pareil » : le dernier élément du même type, dans la même pièce, dont ce champ a été dit."""
+    autres = [e for e in _existants(checklist, element.type, element.piece) if e is not element]
+    return next((e for e in reversed(autres) if (v := e.valeur(champ)) is not None and v.valeur != VALEUR_INCONNUE), None)
+
+
 def _reponse_a_la_cible(checklist: Checklist, cible: Cible, texte: str, segments: list[_Segment], resultat: Extraction, action,
                         phrase: str) -> None:
     reponse = texte.strip(" ,")
@@ -787,6 +1252,13 @@ def _reponse_a_la_cible(checklist: Checklist, cible: Cible, texte: str, segments
         # « Oui, trois fenêtres en PVC » : c'est la suite de la phrase qui décrit l'élément.
         if any(s.type == cible.type for s in segments):
             return
+        if cible.type not in PAROIS and reponse:
+            # « Oui, deux en PVC et une en bois » : plusieurs groupes d'un coup.
+            decoupage = decouper(texte)
+            parties = _parties_valables(cible.type, decoupage, True)
+            if (len(parties) > 1 or any(p.exception for p in parties)) and (groupes := _repartir(cible.type, decoupage, parties, None, False)):
+                _emettre(checklist, cible.type, None, groupes, action, set())
+                return
         valeurs = _valeurs(cible.type, texte) if reponse else {}
         if _NON.match(reponse) and not valeurs:
             if cible.genre == "suite":
@@ -812,6 +1284,21 @@ def _reponse_a_la_cible(checklist: Checklist, cible: Cible, texte: str, segments
         return
     if cible.genre == "piece" or not reponse:
         return
+    if cible.genre == "champ" and cible.element_id:
+        element = checklist.trouver_element(cible.element_id)
+        if element.type not in PAROIS:
+            # Question sur un groupe : « 2 en PVC et une en bois », « tous à eau sauf un », « l'une d'elles est en bois ».
+            decoupage = decouper(texte)
+            parties = _parties_valables(cible.type, decoupage, element.nombre > 1 or decoupage.tous)
+            if parties and (groupes := _repartir(cible.type, decoupage, parties, element.nombre, existant=True)):
+                _emettre(checklist, cible.type, element, groupes, action, set())
+                return
+        if (_PAREIL.match(reponse) and cible.champ not in _valeurs(cible.type, texte)
+                and (modele := _modele_pareil(checklist, element, cible.champ)) is not None):
+            # « Pareil » : la même valeur que l'élément du même type décrit juste avant.
+            action("enregistrer_reponse", element_id=element.id, type=cible.type, champ=cible.champ,
+                   valeur=modele.valeur(cible.champ).valeur, note=f"pareil que {modele.description}")
+            return
     # « Alu, enfin bois » : on garde la dernière version dite (si elle contient une valeur).
     corrige = _CORRECTION.split(texte)[-1]
     if corrige.strip(" ,") and corrige != texte and (_valeurs(cible.type, corrige) or candidats(cible.type, cible.champ, corrige)):
@@ -869,4 +1356,11 @@ def _reponse_a_la_cible(checklist: Checklist, cible: Cible, texte: str, segments
     for champ, valeur in valeurs.items():
         note = " ; ".join(n for n in (notes.get(champ, ""), doute if champ == cible.champ else "") if n)
         action("enregistrer_reponse", element_id=cible.element_id, type=cible.type, champ=champ, valeur=valeur, **({"note": note} if note else {}))
+    if cible.genre == "champ" and valeurs and _TOUS_LES_AUTRES.search(reponse):
+        # « Toutes, des volets roulants » : vaut aussi pour les autres éléments de ce type de la pièce qui n'en ont rien dit.
+        element = checklist.trouver_element(cible.element_id)
+        for autre in _existants(checklist, cible.type, element.piece):
+            for champ, valeur in valeurs.items():
+                if autre is not element and not autre.est_rempli(champ):
+                    action("enregistrer_reponse", element_id=autre.id, type=cible.type, champ=champ, valeur=valeur)
 
