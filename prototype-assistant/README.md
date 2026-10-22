@@ -12,7 +12,7 @@ Ce prototype correspond à l'étape **V1bis** du plan ([docs/02-capture-video.md
 2. Le **serveur** (ce PC) :
    - repère la fin de chaque phrase, et attend la suite si elle est coupée (« Il est… ») ;
    - la transcrit sur place, en 0,05 s : **la voix ne quitte pas le PC** (voir « Étape 5 ») ;
-   - **pré-remplit tout de suite**, sans IA, tout ce qu'il reconnaît dans la phrase, et le dit : « Noté. » (étape 8) ;
+   - **pré-remplit tout de suite**, sans IA, tout ce qu'il reconnaît dans la phrase, et le confirme par un **bip**, sans répéter ce qui a été dit (étape 9) ;
    - calcule la question suivante du parcours (voir « Parcours de la visite » plus bas).
 3. **Claude est le cerveau de chaque phrase** (étape 7) :
    - il comprend n'importe quelle phrase, comme dans une vraie conversation, et y répond : question générale, remarque, ordre (« on fait une pause », « reviens au salon »), correction, récapitulatif ;
@@ -694,13 +694,59 @@ Retour de Noah (`sessions/20261022-120410-53ecb1`, séjour puis cuisine, 5 min 4
 - murs montrés un par un (image et boussole de chaque instant) ;
 - débris et mots collés.
 
-Le prototype compte 233 tests.
+Le prototype comptait alors 233 tests.
+
+(Depuis l'étape 9, « Noté. » n'est plus dit : un bip le remplace, et la contradiction se dit « Je remplace brique. ».)
 
 **Limites** :
 - **Le rejeu ne reproduit pas le téléphone** : la coupure de la voix par le claquement est corrigée côté serveur, à vérifier au prochain test de Noah.
 - **La réflexion de Claude** (impossible à couper par Claude Code) reste le plus long : 1 à 5 s avant sa première phrase. « Noté. » et « Alors… » la masquent, mais le contenu de la réponse arrive ensuite.
 - **L'instant de chaque « ce mur »** est estimé d'après sa place dans la phrase (pas de minutage mot à mot avec le moteur de transcription rapide) : à une seconde près.
 - **« On est dans la cuisine ? »** ne vient que pendant un silence (la veille de Claude) ou si Claude le remarque en répondant.
+
+## Étape 9 : ne pas répéter, jamais de faux doublon (22/10/2026)
+
+Demandes de Noah :
+- ne pas répéter ce qu'il dit : à « laine de verre 30 cm », pas de « OK, c'est noté laine de verre 30 cm » ;
+- plus de faux doublon : il a montré un mur côté couloir jamais décrit, et l'assistant a répondu « je l'avais déjà noté, c'est un doublon, je le retire ».
+
+Visite rejouée avant et après : [rejeux/20261022-etape9-doublons.md](rejeux/20261022-etape9-doublons.md).
+
+**1. Ne pas répéter** :
+- Ce que les règles ont compris est confirmé par un **bip**, sans mots. Puis vient directement la question suivante (de Claude). « Alors… » n'est dit que si rien n'a été compris ni dit au bout de 1,4 s.
+- Une contradiction se dit sans répéter la nouvelle valeur : « **Je remplace brique.** » (et pour un nombre : « Je corrige : il y en avait 2. »). Elle n'est dite qu'une fois.
+- Le serveur ne laisse pas passer une phrase de Claude qui reprend ce qu'il vient de dire, après une description. Il retire « Noté » ou « c'est noté » ; il supprime une phrase dont la moitié des mots porteurs viennent de la sienne (« Laine de verre 30 centimètres. », « Tous les murs en brique. »).
+  - Ce filtre ne s'applique pas à une question posée à l'assistant : y répondre reprend forcément ses mots (« un pont thermique, c'est… »).
+- Les consignes de Claude : rien de ce qu'il vient de dire ; un récapitulatif seulement s'il le demande ou en fin de pièce.
+- **Mesure** (`assistant/repetition.py`) : nombre de mots porteurs de sa phrase repris dans la réponse à une description.
+  - Les articles et le nom de l'élément ne comptent pas : la question doit pouvoir dire « ce mur ».
+  - Ce nombre figure dans le bilan de chaque visite (`mots_repetes_par_reponse`) et dans `python -m assistant.evaluer --conversation`.
+  - Rejeu de la visite : **0,15 mot par réponse** (3 réponses sur 27), contre 0,59 avant et 1,25 au test de Noah. Avec le vrai Claude, sur 27 descriptions : 0,15 aussi.
+
+**2. Jamais de faux doublon, jamais de suppression de lui-même** :
+- **Claude ne peut plus supprimer un élément** de lui-même. Une suppression (ou l'oubli d'une valeur ancienne) n'est acceptée que s'il la demande (« oublie », « annule », « supprime », « c'est le même »). Sinon elle est refusée et notée au journal. Il peut toujours corriger une valeur que les règles ont mal pré-remplie dans la même phrase.
+- **Doublon possible** : Claude le signale (action `doublon`), et le serveur demande « **C'est le même mur que le mur côté voisin ?** ».
+  - « Oui » réunit les deux : ce qui n'était dit que de l'un passe à l'autre. « Non » les garde.
+  - Rien n'est jamais réuni sans son « oui ».
+- **Jamais d'affirmation sans preuve** : une phrase de Claude qui dit « déjà noté », « doublon », « je le retire » ou « c'est le même » n'est pas dite. Seule la question passe.
+  - La preuve (même repère, même orientation, même description dans l'état) est notée au journal avec la question.
+- **Règles corrigées** (elles créaient les faux doublons) :
+  - « le mur du tableau » va sur le mur qui porte ce repère. Au test, il allait sur le dernier mur décrit, celui du miroir, et Claude avait alors supprimé le vrai mur du tableau.
+  - « une fenêtre, cette fenêtre en bois » et « trois fenêtres, ces trois fenêtres en PVC » : un seul élément.
+  - « une fenêtre ici, une fenêtre ici, une fenêtre là-bas » : une seule entrée de 3 fenêtres. Au rejeu de l'étape 8, le séjour finissait avec 9 fenêtres, que Claude « nettoyait » en supprimant. Maintenant il en a 3 sans rien supprimer.
+  - « le radiateur est électrique, un vieux grille-pain » : un seul radiateur.
+- **Rejeu de la visite** : 0 élément supprimé par l'assistant (5 avant, 2 au test de Noah) et 0 « déjà noté » dit sans preuve (3 au test). Une seule question « C'est le même mur que… ? ».
+
+**Tests** : `tests/test_doublons.py` (18 tests).
+- 10 cas de nouveaux murs ressemblant à d'anciens, sans aucune suppression automatique : même « donne sur », même phrase redite, mur côté couloir, mur du tableau, murs montrés un par un, même repère (« non » puis « oui »), doute sans preuve, fenêtre annoncée puis décrite, même orientation.
+- La suppression seulement quand il la demande.
+- La mesure des mots répétés, avec un « Claude bavard » qui reprend tout ce qu'on lui dit : 0 mot répété.
+
+Le prototype compte 251 tests.
+
+**Limites** :
+- Le filtre des reprises est une règle simple (la moitié des mots porteurs) : une reprise courte peut passer (« D'accord, c'est chez le voisin. »), et Claude répète moins de lui-même grâce à ses consignes.
+- Sans suppression automatique, un élément créé en trop reste jusqu'à ce que le diagnostiqueur réponde « oui » à « C'est le même… ? », ou jusqu'à l'écran de validation.
 
 ## Réglages (variables d'environnement)
 
@@ -736,7 +782,7 @@ Le prototype compte 233 tests.
 - La **boussole** et le **gyroscope** du téléphone sont enregistrés (une mesure par seconde) : voir « Étape 6 ». La boussole n'a pas encore été essayée sur un vrai téléphone ; le cap de la caméra de l'iPhone tenu droit (étape 7) est à vérifier au test terrain.
 - **Deux processus Claude Code par visite** : un pour les réponses, un pour la veille, pour que la veille ne retarde jamais une réponse.
 - Différences avec le plan § 3.6 :
-  - **Pas d'« outils » au sens de l'API** : Claude répond en JSON (question + actions), et le serveur applique les actions après vérification. Les actions sont `piece_courante`, `signaler_element`, `enregistrer_reponse`, `marquer_sans_objet`, `cloturer`, `copier`, depuis l'étape 4 `scinder`, `compter`, `regle` et `exception`, depuis l'étape 6 `orienter`, et depuis l'étape 7 `pause`, `reprendre` et `annuler`.
+  - **Pas d'« outils » au sens de l'API** : Claude répond en JSON (question + actions), et le serveur applique les actions après vérification. Les actions sont `piece_courante`, `signaler_element`, `enregistrer_reponse`, `marquer_sans_objet`, `cloturer`, `copier`, depuis l'étape 4 `scinder`, `compter`, `regle` et `exception`, depuis l'étape 6 `orienter`, depuis l'étape 7 `pause`, `reprendre` et `annuler` (depuis l'étape 9, `annuler` un élément seulement à sa demande), et depuis l'étape 9 `doublon` (une question ; « oui » donne `fusionner`).
   - **`champs_manquants` n'existe plus** : la liste des manques est envoyée à chaque message, ce qui évite un aller-retour.
 
 ## Organisation du code
@@ -747,6 +793,7 @@ Le prototype compte 233 tests.
 | `assistant/groupes.py` | Découpage d'une phrase en groupes, quantités et exceptions (« 9 … et 1 … », « dont une », « tous sauf un »). |
 | `assistant/noms.py` | Noms parlants à l'oral : « ce mur », « le mur côté voisin », « le mur nord », jamais « le mur 3 ». |
 | `assistant/plausibilite.py` | Contrôle des valeurs invraisemblables (un mur de 30 m de long) avant de les noter. |
+| `assistant/repetition.py` | Mots de sa phrase repris dans une réponse : mesure, et reconnaissance d'une simple reprise (étape 9). |
 | `assistant/decor.py` | Nouveau décor filmé : avance le coup d'œil de Claude sur la pièce (étape 8). |
 | `assistant/boussole.py`, `boussole.toml` | Boussole et gyroscope du téléphone : orientation des murs et des fenêtres, fiabilité ; seuils réglables. |
 | `assistant/citations.py`, `assistant/actions.py` | Vérification des citations ; application des actions proposées. |
