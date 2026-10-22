@@ -4,6 +4,8 @@
 seulement les questions utiles ; une seule fois chacune ; jamais « répétez »."""
 
 import asyncio
+import json
+import statistics
 
 from assistant.cerveau import Decision
 from assistant.checklist import VALEUR_INCONNUE, Checklist
@@ -67,8 +69,13 @@ def test_piece_complete_a_4_murs(tmp_path):
     assert len(toutes) == len(PIECE_A_4_MURS)  # une seule question par phrase
     assert not any("répét" in q.lower() or "pardon" in q.lower() or "épaisseur d" in q.lower() for q in toutes)
     assert all(len([m for m in q.split() if any(c.isalpha() for c in m)]) <= 10 for q in toutes)  # questions courtes
+    # Posées par le serveur, sans attendre d'IA. Contrôle non chronométrique d'abord : aucune phrase n'est passée par le
+    # cerveau. Puis le temps : médiane serrée, et aucun cas proche d'un appel à Claude ou à Whisper (≥ 2 s) ; une borne
+    # de 0,5 s sur le pire cas échouait parfois sous la charge de la suite complète (0,56 s mesurés par Hermes).
+    decisions = [json.loads(l) for l in (tmp_path / "journal.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert not [d for d in decisions if d["evenement"] == "decision" and d.get("mode") != "parcours"]
     latences = [m["latence_s"] for m in recus if m["type"] == "dire"]
-    assert max(latences) < 0.5  # posées par le serveur, sans attendre d'IA
+    assert statistics.median(latences) < 0.25 and max(latences) < 1.5
 
 
 def test_piece_suivante_plafond_pareil_et_plancher_different(tmp_path):
