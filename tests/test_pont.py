@@ -143,6 +143,44 @@ def test_etat_consolide_par_la_carte_des_pieces(tmp_path):
                           f"  - {fenetre}")
 
 
+def champs(**valeurs):
+    return {cle: {"libelle": cle.replace("_", " "), "valeur": {"valeur": v}} for cle, v in valeurs.items()}
+
+
+def test_visite_par_cotes_etape_13(tmp_path):
+    """Étape 13 : murs et fenêtres sont ceux du logement (« enveloppe »), notés dans les pièces où ils ont été vus ; le
+    rapport les compte par pièce et décrit le DPE du logement par côté. Rien n'est encore écrit pour le DPE dans LICIEL."""
+    vue = visite(tmp_path / "visite", [piece("Séjour"), piece("Cuisine")])
+    etat = json.loads((vue / "etat.json").read_text(encoding="utf-8"))
+    ouest = {**element("M1", "mur"), "nom": "le mur ouest", "pieces": ["Séjour", "Cuisine"], "orientation": {"point": "ouest"},
+             "champs": champs(donne_sur="extérieur", materiau="brique")}
+    voisin = {**element("M3", "mur"), "nom": "le mur ouest côté voisin", "parent": "M1", "pieces": ["Cuisine"],
+              "orientation": {"point": "ouest"}, "champs": champs(donne_sur="local chauffé (voisin)", part="40 %")}
+    fenetres = {**element("F1", "fenetre", 2), "nom": "les 2 fenêtres ouest", "support": "M1", "pieces": ["Séjour"],
+                "champs": champs(menuiserie="PVC")}
+    cloison = {**element("M2", "mur"), "pieces": ["Séjour", "Cuisine"], "interieur": True}
+    etat["enveloppe"] = {"murs": [ouest, voisin], "murs_interieurs": [cloison], "plafonds": [], "planchers": [],
+                         "fenetres": [fenetres], "cotes_manquants": ["nord", "est", "sud"],
+                         "manques": [{"code": "cote:nord", "libelle": "côté nord du logement : sur quoi il donne"},
+                                     {"code": "M1.isolation", "libelle": "le mur ouest : isolation"}]}
+    etat["logement"]["elements"] = [{**element("CH1", "chauffage"), "nom": "la chaudière", "champs": champs(energie="gaz")}]
+    (vue / "etat.json").write_text(json.dumps(etat, ensure_ascii=False), encoding="utf-8")
+    rapport = generer(vue, dossier_test(tmp_path / "modele"), tmp_path / "sortie", maintenant=MAINTENANT, alea=random.Random(1))
+    assert [p.elements for p in rapport.pieces] == [{"mur": 2, "fenêtre": 2, "porte": 0, "émetteur": 0},
+                                                    {"mur": 3, "fenêtre": 0, "porte": 0, "émetteur": 0}]
+    dpe = rapport.dpe
+    assert [(m["id"], m.get("partie_de"), [o["id"] for o in m["ouvertures"]]) for m in dpe["cotes"]["ouest"]] == [
+        ("M1", None, ["F1"]), ("M3", "M1", [])]
+    assert dpe["cotes_non_decrits"] == ["nord"] and dpe["manques"] == ["le mur ouest : isolation"]
+    assert dpe["murs_entre_pieces"] == 1 and [e["nom"] for e in dpe["equipements"]] == ["la chaudière"]
+    texte = rapport.en_texte()
+    assert ("  - côté ouest : le mur ouest : donne sur extérieur, materiau brique ; les 2 fenêtres ouest : menuiserie PVC | "
+            "le mur ouest côté voisin : donne sur local chauffé (voisin), part 40 %") in texte
+    assert "  - murs entre deux pièces (sans effet sur le DPE) : 1" in texte and "  - équipements : la chaudière : energie gaz" in texte
+    # Un état d'avant l'étape 13 (rangé par pièce) n'a pas de partie DPE.
+    assert lancer(tmp_path / "ancien").dpe is None
+
+
 # --- Carrez -------------------------------------------------------------------------------------------------------
 
 

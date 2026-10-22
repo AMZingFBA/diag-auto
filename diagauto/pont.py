@@ -16,7 +16,9 @@ Sortie : un NOUVEAU dossier, jamais sous ``C:\\LICIEL_*`` :
   nouvelles sont ajoutées à la fin ; une pièce du dossier non vue pendant la visite reste telle quelle (signalée) ;
 - ``Z_Carrez_Details`` (une ligne par mesure), ``Z_Carrez_Resume`` (une ligne par pièce), ``Z_Carrez_General``
   (totaux) ;
-- ``diagauto-pont.json`` : ce qui a été fait, ce qui reste à mesurer, les hypothèses.
+- ``diagauto-pont.json`` : ce qui a été fait, ce qui reste à mesurer, les hypothèses ; et, pour une visite de l'étape
+  13, le DPE du logement tel que l'assistant l'a noté (l'enveloppe par côté, puis les équipements), à relire : il n'est
+  pas encore écrit dans les tables LICIEL (étape suivante).
 
 Aucune surface n'est inventée : une pièce sans mesure est écrite à 0 m² et signalée « à mesurer ». Le sens des
 colonnes Carrez vient des dossiers de démonstration (docs/01-cadrage.md § 1.5) ; les points incertains sont listés
@@ -211,6 +213,7 @@ class Rapport:
     hypotheses: list[str]
     etat: str = "etat.json"  # fichier d'état lu
     questions: list[str] = field(default_factory=list)  # questions de la carte des pièces, pour le diagnostiqueur
+    dpe: dict | None = None  # étape 13 : le DPE du logement noté pendant la visite (None : état d'avant l'étape 13)
 
     @property
     def a_mesurer(self) -> list[str]:
@@ -238,6 +241,7 @@ class Rapport:
             "totaux": self.totaux,
             "hypotheses": self.hypotheses,
             "questions": self.questions,
+            "dpe": self.dpe,
         }
 
     def en_texte(self) -> str:
@@ -259,6 +263,8 @@ class Rapport:
         hauteur = f"{self.totaux['HSP']} m" if self.totaux["HSP"] != "0" else "non renseignée"
         lignes.append(f"Totaux Carrez : Carrez {self.totaux['Surface_Carrez']} m², habitable {self.totaux['Surface_Habitable']} m², "
                       f"au sol {self.totaux['Surface_Sol']} m², hauteur {hauteur}")
+        if self.dpe is not None:
+            lignes += _texte_dpe(self.dpe)
         lignes.append(f"Tables écrites : {', '.join(self.tables_ecrites)} ; copiées telles quelles : {len(self.tables_copiees)}")
         lignes.append("Hypothèses :")
         lignes += [f"  - {h}" for h in self.hypotheses]
@@ -272,14 +278,106 @@ _TYPES_RAPPORT = {"mur": "mur", "fenetre": "fenêtre", "porte": "porte", "emette
 _PLURIELS = {"mur": "murs", "fenêtre": "fenêtres", "porte": "portes", "émetteur": "émetteurs"}
 
 
-def _elements(piece: dict) -> dict[str, int]:
-    """Murs, ouvertures et émetteurs vus dans la pièce (pour le rapport ; le DPE est l'étape suivante)."""
+def _elements(piece: dict, parois: list[dict]) -> dict[str, int]:
+    """Murs, ouvertures et émetteurs vus dans la pièce (pour le rapport). Étape 13 : murs et ouvertures sont ceux du
+    logement, notés dans les pièces où ils ont été vus (``parois``), et les radiateurs ceux du logement ; les états
+    d'avant l'étape 13 rangeaient tout par pièce."""
     compte = {nom: 0 for nom in _TYPES_RAPPORT.values()}
-    for e in piece.get("elements", []):
+    for e in [*piece.get("elements", []), *(e for e in parois if piece["nom"] in (e.get("pieces") or []))]:
         nom = _TYPES_RAPPORT.get(e.get("type"))
         if nom:
             compte[nom] += e.get("nombre") or 1
     return compte
+
+
+def _parois(etat: dict) -> list[dict]:
+    """Murs (intérieurs compris), fenêtres et portes du logement (étape 13), chacun avec les pièces où il a été vu."""
+    enveloppe = etat.get("enveloppe") or {}
+    return [*(enveloppe.get("murs") or []), *(enveloppe.get("murs_interieurs") or []), *(enveloppe.get("fenetres") or [])]
+
+
+# --- DPE du logement (étape 13) --------------------------------------------------
+
+POINTS = ("nord", "est", "sud", "ouest")
+
+
+def _valeurs(e: dict) -> dict[str, str]:
+    """Les champs renseignés d'un élément de etat.json : libellé -> valeur (« donne sur » -> « extérieur »). Une valeur
+    qui n'a pas été dite pour lui (déduite, reprise de son groupe ou d'une règle) garde sa note : « palier (déduit : sur
+    le mur est) »."""
+    def texte(v: dict) -> str:
+        return v["valeur"] + (f" ({v['note']})" if v.get("origine", "dit") != "dit" and v.get("note") else "")
+
+    return {c.get("libelle") or cle: texte(c["valeur"]) for cle, c in (e.get("champs") or {}).items() if c.get("valeur")}
+
+
+def _decrit(e: dict, ouvertures: list[dict] | None = None) -> dict:
+    d = {"id": e["id"], "nom": e.get("nom") or e.get("description") or e["id"], "nombre": e.get("nombre") or 1,
+         "valeurs": _valeurs(e)}
+    if e.get("parent"):
+        d["partie_de"] = e["parent"]  # « mur est : 60 % sur le voisin, 40 % dehors » : une autre partie du même mur
+    if e.get("pieces"):
+        d["vu_dans"] = e["pieces"]
+    if ouvertures is not None:
+        d["ouvertures"] = [_decrit(o) for o in ouvertures if o.get("support") == e["id"]]
+    return d
+
+
+def _dpe(etat: dict) -> dict | None:
+    """Ce que le DPE décrit, pour tout le logement, tel que l'assistant l'a noté : chaque côté (ses murs, en parties s'il
+    le faut, et les fenêtres et portes de chacun), le plafond, le plancher, puis les équipements. Les murs entre deux
+    pièces ne comptent pas. None pour un état d'avant l'étape 13 (rangé par pièce)."""
+    enveloppe = etat.get("enveloppe")
+    if not enveloppe:
+        return None
+    ouvertures = enveloppe.get("fenetres") or []
+    ids_murs = {m["id"] for m in enveloppe.get("murs") or []}  # une fenêtre sur un mur entre deux pièces : « sans mur »
+    cotes: dict[str, list[dict]] = {point: [] for point in (*POINTS, "inconnu")}
+    for mur in enveloppe.get("murs") or []:
+        point = (mur.get("orientation") or {}).get("point") or "inconnu"
+        cotes[point if point in cotes else "inconnu"].append(_decrit(mur, ouvertures))
+    logement = etat.get("logement") or {}
+    manques = [*(enveloppe.get("manques") or []), *(logement.get("manques") or [])]
+    return {
+        "cotes": cotes,
+        "cotes_non_decrits": [m["code"].split(":", 1)[1] for m in manques if m["code"].startswith("cote:")],
+        "ouvertures_sans_mur": [_decrit(o) for o in ouvertures if o.get("support") not in ids_murs],
+        "plafonds": [_decrit(e) for e in enveloppe.get("plafonds") or []],
+        "planchers": [_decrit(e) for e in enveloppe.get("planchers") or []],
+        "murs_entre_pieces": len(enveloppe.get("murs_interieurs") or []),
+        "equipements": [_decrit(e) for e in logement.get("elements") or []],
+        "manques": [m["libelle"] for m in manques if not m["code"].startswith("cote:")],
+    }
+
+
+def _en_mots(d: dict) -> str:
+    """« le mur ouest : donne sur extérieur, matériau brique, épaisseur 30 cm ; les 3 fenêtres : menuiserie PVC »."""
+    valeurs = ", ".join(f"{libelle} {valeur}" for libelle, valeur in d["valeurs"].items()) or "rien de noté"
+    texte = f"{d['nom']} : {valeurs}"
+    if d.get("ouvertures"):
+        texte += " ; " + " ; ".join(_en_mots(o) for o in d["ouvertures"])
+    return texte
+
+
+def _texte_dpe(dpe: dict) -> list[str]:
+    lignes = ["DPE du logement (noté pendant la visite, à relire ; pas encore écrit dans LICIEL : étape suivante) :"]
+    for point, murs in dpe["cotes"].items():
+        if murs:
+            cote = "côté inconnu (orientation à trouver)" if point == "inconnu" else f"côté {point}"
+            lignes.append(f"  - {cote} : " + " | ".join(_en_mots(m) for m in murs))
+    if dpe["cotes_non_decrits"]:
+        lignes.append(f"  - côtés non décrits : {', '.join(dpe['cotes_non_decrits'])}")
+    for o in dpe["ouvertures_sans_mur"]:
+        lignes.append(f"  - sans mur connu : {_en_mots(o)}")
+    for e in dpe["plafonds"] + dpe["planchers"]:
+        lignes.append(f"  - {_en_mots(e)}")
+    if dpe["equipements"]:
+        lignes.append("  - équipements : " + " ; ".join(_en_mots(e) for e in dpe["equipements"]))
+    if dpe["murs_entre_pieces"]:
+        lignes.append(f"  - murs entre deux pièces (sans effet sur le DPE) : {dpe['murs_entre_pieces']}")
+    if dpe["manques"]:
+        lignes.append(f"  - encore à renseigner : {' ; '.join(dpe['manques'])}")
+    return lignes
 
 
 def _preparer_sortie(sortie: Path, modele: Path) -> Path:
@@ -352,6 +450,7 @@ def generer(visite: Path, modele: Path, sortie: Path, mesures: Path | None = Non
         cles.add(cle)
         return cle
 
+    parois = _parois(etat)
     generees: dict[int, PieceGeneree] = {}
     for p in etat.get("pieces", []):
         nom = p["nom"]
@@ -365,10 +464,10 @@ def generer(visite: Path, modele: Path, sortie: Path, mesures: Path | None = Non
         else:
             statut = "existante"
         if i in generees:  # deux noms de la visite pour la même pièce du dossier
-            generees[i].elements = {t: n + _elements(p)[t] for t, n in generees[i].elements.items()}
+            generees[i].elements = {t: n + _elements(p, parois)[t] for t, n in generees[i].elements.items()}
             continue
         generees[i] = PieceGeneree(nom, lignes[i].get("Batiment", ""), lignes[i]["Local"], lignes[i]["ClefComposant"],
-                                   statut, vue=True, elements=_elements(p),
+                                   statut, vue=True, elements=_elements(p, parois),
                                    passages=(p.get("carte") or {}).get("sejours") or 0)
     if any(g.statut == "ajoutée" for g in generees.values()) and batiment_des_nouvelles():
         hypotheses.append(HYPOTHESES["batiment"].format(batiment=batiment_des_nouvelles()))
@@ -452,13 +551,12 @@ def generer(visite: Path, modele: Path, sortie: Path, mesures: Path | None = Non
             raise ErreurPont(f"Table_{table.nom}.xml : relecture différente de l'écriture")
     # Questions de la carte, et éléments notés dans une pièce mais filmés dans une autre (comptés là où ils ont été notés).
     questions = list((etat.get("carte") or {}).get("questions") or [])
-    for p in etat.get("pieces") or []:
-        for e in p.get("elements") or []:
-            if (e.get("carte") or {}).get("a_verifier"):
-                questions.append(f"{e.get('description') or e['id']} ({e['id']}) : {e['carte']['a_verifier']} : "
-                                 "dans quelle pièce ?")
+    for e in [*(e for p in etat.get("pieces") or [] for e in p.get("elements") or []), *parois]:
+        if (e.get("carte") or {}).get("a_verifier"):
+            questions.append(f"{e.get('description') or e['id']} ({e['id']}) : {e['carte']['a_verifier']} : "
+                             "dans quelle pièce ?")
     rapport = Rapport(visite, modele, sortie, ordre, non_vues, copiees, [t.nom for t in nouvelles], totaux, hypotheses,
-                      fichier_etat, questions)
+                      fichier_etat, questions, _dpe(etat))
     (sortie / FICHIER_RAPPORT).write_text(json.dumps(rapport.en_dict(), ensure_ascii=False, indent=1), encoding="utf-8")
     return rapport
 
