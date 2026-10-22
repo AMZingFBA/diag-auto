@@ -33,7 +33,7 @@
      - synthèse vocale française open source (Piper fr_FR-siwis ou équivalent) ;
      - oreillette.
    - Latence visée : 2 à 4 s. Un modèle plus fort (Sonnet 5.5, ou Opus 5.5) fait l'analyse finale après le tournage.
-   - Il faut une clé API Anthropic, facturée à l'usage, distincte de l'abonnement Claude Max.
+   - **Pas de clé API (correction de Noah, 22/10/2026)** : le prototype appelle le Claude Code connecté sur le PC (abonnement Claude Max) en mode headless ; ne jamais lire ANTHROPIC_API_KEY. L'abonnement est prévu pour un usage personnel/développement : l'accès pour un usage commercial à grande échelle sera à revoir plus tard (non décidé).
    - Hors réseau : enregistrement local, puis questions a posteriori.
    - Le rattachement définitif des réponses aux murs et tout le calcul 3D restent faits ensuite sur le serveur.
 5. **Précision visée ~3–5 %** : suffisante pour le DPE. **Pour le Carrez/Boutin, la mesure laser fait foi** (télémètre filmé ou dicté) ; la vidéo sert de contrôle et de plan.
@@ -47,6 +47,7 @@
 - docs/protocole-tournage.md : fiche d'une page pour tourner les vidéos de test (V1).
 - docs/exigences-en-attente.md : nouvelles demandes de Noah transmises par Hermes, à intégrer puis vider (garder l'en-tête).
 - samples/ (non versionné) : vidéos de test, ex. samples/video-001 (séjour, 38 s, recompressée par WhatsApp).
+- prototype-assistant/ : prototype V1bis de l'assistant vocal en direct (page web + serveur FastAPI + Claude Code) ; mesures et limites dans son README.
 
 ## Environnement
 - Windows 11, LICIEL installé en local : C:\LICIEL_Programmes\LICIEL Diagnostics (version d'essai : la démo n'enregistre pas les modules Carrez/DPE/Élec). Données : C:\LICIEL_Diagnostics (base LICIEL_Dossiers.mdb + Dossiers_AAAA\<n°>\XML\Table_*.xml).

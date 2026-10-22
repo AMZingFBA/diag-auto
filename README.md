@@ -91,4 +91,5 @@ diagauto/liciel_xml/valeurs.py   conversions (nombres à virgule, Vrai/Faux)
 diagauto/cli.py                  commandes « diagauto inspect » et « diagauto verifier »
 tests/fixtures/                  4 dossiers de démonstration LICIEL + 5 cas tests DPE (données fictives)
 docs/01-cadrage.md               cadrage du projet
+prototype-assistant/             prototype V1bis : assistant vocal en direct pendant le tournage (voir son README)
 ```

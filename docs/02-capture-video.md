@@ -187,6 +187,12 @@ Il **n'affirme jamais** une donnée invisible (« ce mur fait 20 cm ») : il dem
 
 **Décision de Noah (22/10/2026) : le cerveau est Claude (API Anthropic).** Pas de Gemini ni d'OpenAI. L'API Claude n'a pas de mode voix ou vidéo temps réel : elle reçoit du texte et des images, et répond en texte, en continu (« streaming »). On construit donc **une chaîne** : nos briques voix (open source, sur notre serveur) + Claude pour comprendre et décider.
 
+**Précision de Noah (22/10/2026) : pas de clé API pour le prototype.**
+- Le serveur appelle le **Claude Code connecté sur le PC** (abonnement Claude Max), en mode headless, gardé ouvert pendant la visite.
+- L'abonnement est prévu pour un usage personnel et de développement. L'accès pour un usage commercial à grande échelle sera à revoir plus tard (non décidé).
+- Différence mesurée : Claude Code laisse toujours la réflexion de Haiku 5.5 active, ce qui ajoute 1 à 4 s.
+- Détails, mesures et limites : [prototype-assistant/README.md](../prototype-assistant/README.md).
+
 **Architecture temps réel en chaîne**
 
 ```
@@ -311,8 +317,6 @@ Coûts fixes : petit serveur d'application, quelques dizaines d'euros par mois. 
 
 Ce sont des estimations, à mesurer en V1bis. Les prix de catalogue sous-estiment souvent le coût réel, parce que le contexte de la conversation peut être refacturé à chaque échange.
 
-| Option | Calcul | Par minute | Visite de 15 min |
-|---|---|---|---|
 Tarifs Anthropic officiels (22/10/2026, en dollars par million de tokens) :
 
 | Modèle | Entrée | Sortie | Lecture de cache |
@@ -346,7 +350,7 @@ Sources :
 | Étape | Contenu | Critère de réussite |
 |---|---|---|
 | **V1. Preuve : vidéo continue de 2 pièces avec aller-retour** | **Entrée** : 3 à 5 vidéos tournées selon [protocole-tournage.md](protocole-tournage.md) (pièce A → pièce B → retour en A → retour en B), avec 2 ou 3 téléphones, en fichier original. Le diagnostiqueur parle des murs pendant le film. Mesures laser et croquis numéroté relevés **à part**, comme vérité terrain. **Traitement** (script serveur, sans application) : carte 3D unique avec fermeture de boucle → découpage en pièces → plan coté + surfaces (échelle sans mesure dictée) → transcription → rattachement de chaque phrase à un mur. `video-001` sert de premier cas, dégradé. | **2 pièces reconnues, jamais 3 ou 4**, sur toutes les vidéos exploitables ; une vidéo trop dégradée doit être **signalée**, pas mal interprétée. **≥ 80 % des phrases rattachées au bon mur** ; les erreurs restantes signalées en orange. **Écart de surface ≤ 5 %** (objectif 3 %) sans mesure dictée. Temps et coût de calcul mesurés. Décision « on continue / on ajuste » avec Noah. |
-| **V1bis. Assistant vocal en direct sur une pièce** (rapide, **sans SLAM**, en parallèle de V1) | Page web (HTTPS, obligatoire pour la caméra) : caméra + micro → notre petit serveur Python. Chaîne : VAD Silero → faster-whisper (turbo) → **Claude Haiku 5.5** en streaming (image de l'instant + état checklist en cache + outils `enregistrer_reponse` / `champs_manquants` / `piece_courante`) → synthèse Piper (voix fr_FR-siwis) → oreillette. État checklist d'**une pièce** : murs (matériau, épaisseur, isolation, donne sur), fenêtres (menuiserie, vitrage, volets), émetteurs. Enregistrement local de la vidéo en parallèle. Test par Noah dans 2 ou 3 pièces, dont un téléphone ancien. **Deux configurations comparées** : transcription sur le processeur de ce PC, puis sur un GPU loué à l'heure. | **Zéro valeur inventée** : toute valeur a une citation. ≥ 80 % des champs de la pièce remplis à la sortie de la pièce. **Latence mesurée étape par étape**, objectif 2 à 4 s. Coût par minute mesuré. Effet de la voix de l'IA sur l'enregistrement mesuré. Avis de Noah : « utile ou gênant ? ». |
+| **V1bis. Assistant vocal en direct sur une pièce** (rapide, **sans SLAM**, en parallèle de V1) | Page web (HTTPS, obligatoire pour la caméra) : caméra + micro → notre petit serveur Python. Chaîne : VAD Silero → faster-whisper (turbo) → **Claude Haiku 5.5** en streaming (image de l'instant + état checklist en cache + outils `enregistrer_reponse` / `champs_manquants` / `piece_courante`) → synthèse Piper (voix fr_FR-siwis) → oreillette. État checklist d'**une pièce** : murs (matériau, épaisseur, isolation, donne sur), fenêtres (menuiserie, vitrage, volets), émetteurs. Enregistrement local de la vidéo en parallèle. Test par Noah dans 2 ou 3 pièces, dont un téléphone ancien. **Deux configurations comparées** : transcription sur le processeur de ce PC, puis sur un GPU loué à l'heure. | **Zéro valeur inventée** : toute valeur a une citation. ≥ 80 % des champs de la pièce remplis à la sortie de la pièce. **Latence mesurée étape par étape**, objectif 2 à 4 s. Coût par minute mesuré. Effet de la voix de l'IA sur l'enregistrement mesuré. Avis de Noah : « utile ou gênant ? ». **Prototype livré le 22/10/2026** dans [prototype-assistant/](../prototype-assistant/README.md) : chaîne complète testée en rejouant video-001, **≈ 4,8 s** de la fin de phrase à la voix sur ce PC sans carte graphique ; pas encore testé sur téléphone. |
 | **V2. Logement complet** | Application web de capture (vidéo + voix + capteurs, retour en direct, **assistant live via relais serveur** si V1bis est concluant). Logement entier en une vidéo. Fenêtres et portes, orientation, ponts thermiques, plaques, Carrez par télémètre filmé. JSON « Dossier terrain v1 ». | Sur 3 logements : pièces correctes, part des champs de la checklist correctement pré-remplis, zéro valeur sans preuve, coût et temps mesurés. |
 | **V3. De bout en bout** | Administratif depuis le devis + API publiques, écran de validation, génération LICIEL (pièces + Carrez) via `diagauto.liciel_xml`, fiche DPE pré-remplie. Pilote sur 2–3 vraies visites, chronométrées. | Aucune ressaisie des pièces ni du Carrez. Temps total mesuré avant et après. |
 
@@ -358,10 +362,9 @@ Sources :
 - **Q4 — GPU.** Peut-on louer un GPU à l'heure pour V1, pour quelques euros ? Ce PC n'en a pas.
 - **Q5 — Sortie DPE.** Une fiche DPE pré-remplie à recopier est-elle acceptable pendant le prototype ?
 - **Q6 — BDNB.** Conditions d'accès à vérifier (Hermes).
-- **Q7 — Clé API Anthropic.**
-  - Il faut une **clé API Anthropic**, à créer sur la Console Claude (platform.claude.com) avec des crédits. Elle est **facturée à l'usage, séparément de l'abonnement Claude Max** : l'abonnement ne donne pas accès à l'API.
-  - Qui crée le compte et la clé ? Quel plafond de dépense pour le prototype ? Quelques dollars suffisent pour V1bis.
-  - La clé reste sur notre serveur, jamais dans le téléphone.
+- **Q7 — Accès à Claude.** *Tranché pour le prototype (Noah, 22/10/2026)* :
+  - pas de clé API ; le serveur passe par Claude Code et l'abonnement Claude Max du PC.
+  - Reste ouvert, pour plus tard : l'accès pour un usage commercial à grande échelle (clé API facturée à l'usage avec contrat, ou autre).
 - **Q7 bis — Données.**
   - Accepte-t-on d'envoyer à Anthropic des images réduites et du texte ? La voix, elle, reste chez nous.
   - Le traitement se fait hors UE, puisque seules les options « global » et « US » existent.
