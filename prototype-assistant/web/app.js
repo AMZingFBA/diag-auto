@@ -9,6 +9,7 @@ const TYPE_IMAGE = 2;
 
 const etat = {
   liaison: null, // web/liaison.js : battement de cœur, reconnexion silencieuse, rattrapage (étape 10)
+  dejaConnecte: false, // jamais connecté : le serveur est injoignable depuis ce téléphone (pas une coupure)
   attenteReponse: null, // « L'assistant réfléchit… » : Claude lent n'est pas une coupure
   images: 0,
   session: null,
@@ -24,6 +25,9 @@ const etat = {
   enregistreur: null,
   morceaux: [],
   typeVideo: "",
+  // Relevé continu de la boussole et du gyroscope (20 par seconde), envoyé avec la vidéo en fin de visite (étape 12) :
+  // le serveur s'en sert pour savoir quel mur est filmé à chaque instant.
+  capteursContinus: [],
   minuteries: [],
   muet: false,
   termine: false,
@@ -58,8 +62,21 @@ async function chargerStatut() {
     $("ligne-code").hidden = !s.code_requis;
     if (s.boussole) etat.reglagesBoussole = s.boussole;
   } catch {
-    $("statut-serveur").textContent = "Serveur injoignable : vérifiez l'adresse et le Wi-Fi.";
+    serveurInjoignable($("statut-serveur"));
   }
+}
+
+// Le serveur ne répond pas. Le plus souvent (même Wi-Fi que le PC) : le téléphone a oublié le certificat du serveur,
+// accepté une fois, et cette page, gardée sur le téléphone, s'affiche sans montrer l'avertissement qui permet de
+// l'accepter de nouveau. L'adresse /api/statut n'est jamais gardée : l'ouvrir fait réapparaître cet avertissement.
+function serveurInjoignable(element) {
+  const lien = Object.assign(document.createElement("a"), { href: "/api/statut", textContent: "toucher ici" });
+  element.replaceChildren(
+    "Serveur injoignable depuis ce téléphone. 1) Le téléphone doit être sur le même Wi-Fi que le PC (pas la 4G). " +
+    "2) Accepter de nouveau le certificat du serveur : ",
+    lien,
+    ", puis « Afficher les détails » et « visiter ce site web » ; revenir ensuite sur cette page et la recharger.",
+  );
 }
 
 // --- Voix de l'assistant ------------------------------------------------------------------------
@@ -160,7 +177,15 @@ function afficherLiaison(e) {
   $("connexion").className = pastilles[e] || "pastille";
   $("connexion").title = { connecte: "Connecté", lent: "Réseau lent", reconnexion: "Reconnexion…", pause: "En pause (page cachée)",
                            hors_reseau: "Hors réseau", refuse: "Code d'accès incorrect", connexion: "Connexion…" }[e] || e;
+  if (e === "connecte" || e === "lent") etat.dejaConnecte = true;
   if (e === "refuse") return alerte("Code d'accès incorrect.");
+  // Jamais connecté depuis le début : ce n'est pas une coupure. Le serveur est sur le PC : le téléphone doit être sur le
+  // même Wi-Fi que lui (en 4G, même avec un très bon signal, il ne peut pas le joindre).
+  if (e === "hors_reseau" && !etat.dejaConnecte) {
+    alerte("");
+    $("alerte").hidden = false;
+    return serveurInjoignable($("alerte"));
+  }
   if (e === "hors_reseau") return alerte("Hors réseau : l'enregistrement continue, l'assistant reprendra au retour du réseau.");
   if (e === "connecte" && $("alerte").textContent.startsWith("Hors réseau")) {
     alerte("Réseau revenu : l'assistant rattrape ce qui a été dit.");
@@ -354,8 +379,20 @@ function autoriserBoussole() {
     }
     if (e.absolute === false) capteurs.lacet = Boussole.capCamera(e.alpha, e.beta, e.gamma); // gyroscope (sans nord)
     capteurs.inclinaison = e.beta;
+    noterCapteurs();
   });
   etat.minuteries.push(setInterval(afficherBoussole, 250));
+}
+
+function noterCapteurs() {
+  // 20 mesures par seconde au plus, pendant la visite seulement.
+  if (!etat.debut || etat.termine) return;
+  const t = maintenant();
+  const dernier = etat.capteursContinus[etat.capteursContinus.length - 1];
+  if (dernier && t - dernier.t < 0.05) return;
+  const arrondi = (x) => (x == null ? null : Math.round(x * 10) / 10);
+  etat.capteursContinus.push({ t: Math.round(t * 1000) / 1000, cap: arrondi(capteurs.cap), lacet: arrondi(capteurs.lacet),
+                               precision: arrondi(capteurs.precision), inclinaison: arrondi(capteurs.inclinaison) });
 }
 
 function fiabiliteBoussole() {
@@ -505,7 +542,21 @@ function afficherFin(bilan) {
     $("telecharger").href = URL.createObjectURL(blob);
     $("telecharger").download = `visite-${etat.session || "locale"}.${extension}`;
     $("envoyer-video").onclick = () => envoyerVideo(blob);
+    // Étape 12 : la vidéo complète part toute seule (le serveur en a besoin pour reconnaître les pièces et les murs) ;
+    // le bouton reste pour réessayer.
+    envoyerCapteursContinus().finally(() => envoyerVideo(blob));
+  } else {
+    envoyerCapteursContinus();
   }
+}
+
+function envoyerCapteursContinus() {
+  if (!etat.session || !etat.capteursContinus.length) return Promise.resolve();
+  return fetch(`/api/sessions/${etat.session}/capteurs`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-code": etat.code },
+    body: JSON.stringify({ mesures: etat.capteursContinus }),
+  }).catch(() => {});
 }
 
 function envoyerVideo(blob) {

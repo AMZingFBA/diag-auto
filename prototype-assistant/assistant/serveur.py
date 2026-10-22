@@ -34,6 +34,7 @@ mimetypes.add_type("application/manifest+json", ".webmanifest")
 IDENTIFIANT = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{6}$")
 NOM_IMAGE = re.compile(r"^\d{5}\.\d{2}\.jpg$")  # images/<instant>.jpg d'une visite
 TAILLE_MAX_VIDEO = 4 * 1024**3
+TAILLE_MAX_CAPTEURS = 64 * 1024**2  # relevé continu des capteurs : ~10 Mo pour 1 h
 
 
 class Gestionnaire:
@@ -129,6 +130,27 @@ def creer_app(reglages: Reglages | None = None) -> FastAPI:
         if session:
             session.journaliser("video_recue", fichier=chemin.name, octets=taille)
         return {"fichier": chemin.name, "octets": taille}
+
+    @app.post("/api/sessions/{ident}/capteurs")
+    async def recevoir_capteurs(ident: str, request: Request) -> dict:
+        """Relevé continu de la boussole et du gyroscope (20 par seconde), envoyé en fin de visite (étape 12)."""
+        verifier_code(request.headers.get("x-code"))
+        dossier = dossier_session(ident)
+        corps = await request.body()
+        if len(corps) > TAILLE_MAX_CAPTEURS:
+            raise HTTPException(status_code=413, detail="relevé trop gros")
+        try:
+            mesures = json.loads(corps).get("mesures")
+        except (ValueError, AttributeError):
+            raise HTTPException(status_code=400, detail="relevé illisible") from None
+        if not isinstance(mesures, list):
+            raise HTTPException(status_code=400, detail="relevé illisible")
+        propres = [m for m in mesures if isinstance(m, dict) and isinstance(m.get("t"), (int, float))]
+        (dossier / "capteurs-continus.json").write_text(json.dumps({"mesures": propres}), encoding="utf-8")
+        session = gestionnaire.sessions.get(ident)
+        if session:
+            session.journaliser("capteurs_recus", mesures=len(propres))
+        return {"mesures": len(propres)}
 
     @app.get("/api/sessions/{ident}/bilan")
     async def bilan(ident: str, code: str = "") -> JSONResponse:

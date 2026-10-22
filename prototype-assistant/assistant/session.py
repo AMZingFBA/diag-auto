@@ -419,8 +419,14 @@ class Session:
                 return float(v) if isinstance(v, (int, float)) and math.isfinite(v) else None
 
             cap, lacet = nombre("cap"), nombre("lacet")
-            self.boussole.ajouter(Mesure(float(message["t"]), None if cap is None else cap % 360, None if lacet is None else lacet % 360,
-                                         nombre("precision"), nombre("inclinaison")))
+            mesure = Mesure(float(message["t"]), None if cap is None else cap % 360, None if lacet is None else lacet % 360,
+                            nombre("precision"), nombre("inclinaison"))
+            self.boussole.ajouter(mesure)
+            # Gardées sur disque (étape 12) : la carte des pièces s'en sert après la visite, même si le relevé continu du
+            # téléphone n'arrive pas.
+            with open(self.dossier / "capteurs.jsonl", "a", encoding="utf-8") as fichier:
+                fichier.write(json.dumps({"t": round(mesure.t, 3), "cap": mesure.cap, "lacet": mesure.lacet,
+                                          "precision": mesure.precision, "inclinaison": mesure.inclinaison}) + "\n")
             self.checklist.regler_boussole(self.boussole.correction(), self.boussole.fiabilite(), self.boussole.gyroscope)
         elif genre == "fin":
             await self.fin_visite()
@@ -1133,7 +1139,9 @@ class Session:
         proposition = (None if self.conversation else extraction.proposition) or next(
             filter(None, (self._resoudre(p) for p in invraisemblables)), None)
         self.journaliser("extraction", texte=texte, resultats=resultats, devines=extraction.devines, contradictions=self._annonce,
-                         invraisemblables=ecartees, demande=extraction.demande)
+                         invraisemblables=ecartees, demande=extraction.demande,
+                         # Instants de la phrase dans la vidéo : la carte des pièces y rattache la phrase au mur visé.
+                         t_debut=round(lot[0]["t_debut"], 2), t_fin=round(lot[-1]["t_fin"], 2))
         if resultats:
             await self._envoyer_actions(resultats, "extraction")
         return extraction, resultats, notes, proposition
