@@ -113,6 +113,36 @@ def test_murs_ouvertures_emetteurs_au_rapport(tmp_path):
     assert any("hypothèse" in h for h in rapport["hypotheses"])
 
 
+def test_etat_consolide_par_la_carte_des_pieces(tmp_path):
+    """Étape 12 : la carte des pièces (python -m assistant.carte) écrit etat-consolide.json, lu de préférence."""
+    vue = visite_de_noah(tmp_path / "visite")
+    etat = json.loads((vue / "etat.json").read_text(encoding="utf-8"))
+    # Le « couloir » de l'assistant était le séjour (même endroit, fusionné par la carte) ; on est revenu au séjour.
+    etat["pieces"] = [etat["pieces"][0], etat["pieces"][2]]
+    etat["pieces"][0]["carte"] = {"reconnue": True, "passages": [[0.0, 120.0], [300.0, 340.0]], "sejours": 2,
+                                  "revisitee": True, "corrections": []}
+    etat["pieces"][1]["carte"] = {"reconnue": True, "passages": [[125.0, 295.0]], "sejours": 1, "revisitee": False,
+                                  "corrections": []}
+    etat["pieces"][1]["elements"][-1]["description"] = "la fenêtre de l'évier"
+    etat["pieces"][1]["elements"][-1]["carte"] = {"piece_vue": "Séjour", "mur": None, "cap": None,
+                                                  "a_verifier": "noté dans « Cuisine », mais filmé dans « Séjour »"}
+    question = "de 2:59 à 3:02 : Claude voit une autre pièce (couloir), rangé dans « Séjour » : pièce à ajouter ?"
+    etat["carte"] = {"source": "vidéo continue (video.mp4)", "cap": "boussole", "pieces": [], "questions": [question],
+                     "fusions": ["« Couloir » est le même endroit que « Séjour » : fusionnées."]}
+    (vue / "etat-consolide.json").write_text(json.dumps(etat, ensure_ascii=False), encoding="utf-8")
+    rapport = generer(vue, dossier_test(tmp_path / "modele"), tmp_path / "sortie", maintenant=MAINTENANT,
+                      alea=random.Random(1))
+    fenetre = "la fenêtre de l'évier (F1) : noté dans « Cuisine », mais filmé dans « Séjour » : dans quelle pièce ?"
+    assert rapport.etat == "etat-consolide.json" and rapport.questions == [question, fenetre]
+    assert [(p.libelle, p.passages) for p in rapport.pieces] == [("Appartement - Sejour", 2), ("Appartement - Cuisine", 1)]
+    assert lignes(tmp_path / "sortie", "General_Pieces_Toutes") == lignes(tmp_path / "modele", "General_Pieces_Toutes")
+    texte = rapport.en_texte()
+    assert "(état consolidé par la carte des pièces de la vidéo)" in texte
+    assert "Appartement - Sejour [existante] : À MESURER ; vu : 2 murs, 2 fenêtres, 2 émetteurs ; revisitée (2 passages)" in texte
+    assert texte.endswith(f"Questions de la carte des pièces (à trancher par le diagnostiqueur) :\n  - {question}\n"
+                          f"  - {fenetre}")
+
+
 # --- Carrez -------------------------------------------------------------------------------------------------------
 
 

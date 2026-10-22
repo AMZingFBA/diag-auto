@@ -16,6 +16,12 @@ dossier de test (liste des pièces + les 3 tables Carrez), dans un **nouveau dos
 (`sorties/dossier-test`). C'est la préparation des étapes E2 (pièces) et E4 (Carrez) du plan. Il reste à Hermes de poser
 ces tables dans un dossier LICIEL jetable pour voir si LICIEL les relit (voir plus bas). Rien n'est écrit dans LICIEL.
 
+**Étape 12 (22/10/2026)** : après la visite, la **carte des pièces** (`python -m assistant.carte`, dans
+`prototype-assistant`) reconnaît les pièces revisitées, même quand l'assistant se croyait ailleurs, et rattache chaque
+phrase au mur visé (boussole, sinon suivi de la vidéo). Elle écrit `etat-consolide.json`, que `diagauto generer` lit en
+priorité : une seule pièce par endroit, pièces revisitées, questions pour le diagnostiqueur. Pas encore de plan ni de
+surfaces. Détails, mesures et limites : [prototype-assistant/README.md](prototype-assistant/README.md), « Étape 12 ».
+
 ## Installation (Windows)
 
 ```
@@ -47,7 +53,9 @@ Vérifier que toutes les tables d'un ou plusieurs dossiers se relisent et se ré
 ```
 
 - **Visite** : par défaut la plus récente de `prototype-assistant/sessions/` qui a un `etat.json` (autre visite :
-  `--visite <dossier>`). On y lit les pièces, et, pour le rapport, les murs, fenêtres, portes et émetteurs.
+  `--visite <dossier>`). On y lit les pièces, et, pour le rapport, les murs, fenêtres, portes et émetteurs. Si la carte des
+  pièces a été calculée (étape 12), on lit `etat-consolide.json` à la place : une seule pièce par endroit, et le rapport
+  ajoute les pièces revisitées, les questions de la carte et les éléments notés dans une pièce mais filmés dans une autre.
 - **Modèle** : notre dossier de test LICIEL 2610210001 (4 pièces : Sejour, Cuisine, Chambre 1, Salle de bains), ici la
   copie d'Hermes, identique à l'octet au dossier LICIEL. Il est **lu seulement**.
 - **Sortie** : `sorties/dossier-test/XML/Table_*.xml` (autre dossier : `--sortie`), plus `diagauto-pont.json` (ce qui a été

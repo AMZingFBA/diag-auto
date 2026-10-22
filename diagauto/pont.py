@@ -3,7 +3,8 @@
 Entrées :
 
 - l'état d'une visite de l'assistant vocal (``prototype-assistant/sessions/<visite>/etat.json`` : pièces, murs,
-  ouvertures, émetteurs) ;
+  ouvertures, émetteurs), ou mieux, s'il existe, ``etat-consolide.json`` : le même état vu par la carte des pièces de
+  la vidéo (``python -m assistant.carte``) : une seule pièce par endroit, pièces revisitées fusionnées ;
 - s'il existe, ``mesures.json`` dans le dossier de la visite : les mesures laser ou dictées, validées par le
   diagnostiqueur (pour le Carrez, la mesure laser fait foi) ;
 - un dossier LICIEL modèle, lu seulement (le nôtre : 2610210001, créé dans LICIEL par Hermes).
@@ -35,6 +36,7 @@ from .liciel_xml import Table, ecrire_table, lire_fichier, lire_table
 from .liciel_xml.valeurs import format_fr
 
 FICHIER_RAPPORT = "diagauto-pont.json"
+FICHIER_CONSOLIDE = "etat-consolide.json"  # écrit par la carte des pièces (python -m assistant.carte)
 FICHIER_MESURES = "mesures.json"
 
 # Ordre des colonnes relevé dans les dossiers de démonstration LICIEL 4.28 (DEMO_0001 à 0003).
@@ -189,6 +191,7 @@ class PieceGeneree:
     vue: bool  # vue pendant la visite
     mesure: MesurePiece | None = None
     elements: dict[str, int] = field(default_factory=dict)
+    passages: int = 0  # fois où l'on est entré dans la pièce, d'après la carte (2 ou plus : revisitée)
 
     @property
     def libelle(self) -> str:
@@ -206,6 +209,8 @@ class Rapport:
     tables_ecrites: list[str]
     totaux: dict[str, str]
     hypotheses: list[str]
+    etat: str = "etat.json"  # fichier d'état lu
+    questions: list[str] = field(default_factory=list)  # questions de la carte des pièces, pour le diagnostiqueur
 
     @property
     def a_mesurer(self) -> list[str]:
@@ -214,6 +219,7 @@ class Rapport:
     def en_dict(self) -> dict:
         return {
             "visite": str(self.visite),
+            "etat": self.etat,
             "modele": str(self.modele),
             "sortie": str(self.sortie),
             "pieces": [
@@ -222,7 +228,7 @@ class Rapport:
                  "sol": None if not (p.mesure and p.mesure.surfaces) else p.mesure.sol,
                  "hsp": p.mesure.hsp if p.mesure else None,
                  "source_mesure": p.mesure.source if p.mesure else "",
-                 "elements": p.elements}
+                 "elements": p.elements, "passages": p.passages}
                 for p in self.pieces
             ],
             "a_mesurer": self.a_mesurer,
@@ -231,10 +237,13 @@ class Rapport:
             "tables_ecrites": self.tables_ecrites,
             "totaux": self.totaux,
             "hypotheses": self.hypotheses,
+            "questions": self.questions,
         }
 
     def en_texte(self) -> str:
-        lignes = [f"Visite : {self.visite}", f"Modèle : {self.modele} (lu seulement)", f"Sortie : {self.sortie}", ""]
+        etat = ("état consolidé par la carte des pièces de la vidéo" if self.etat == FICHIER_CONSOLIDE
+                else "état de l'assistant (carte des pièces non calculée)")
+        lignes = [f"Visite : {self.visite} ({etat})", f"Modèle : {self.modele} (lu seulement)", f"Sortie : {self.sortie}", ""]
         lignes.append(f"Pièces ({len(self.pieces)}) :")
         for p in self.pieces:
             m = p.mesure
@@ -243,7 +252,8 @@ class Rapport:
             else:
                 carrez = "À MESURER" if p.vue else "non vue pendant la visite"
             elements = ", ".join(f"{n} {_PLURIELS.get(t, t) if n > 1 else t}" for t, n in p.elements.items() if n)
-            lignes.append(f"  - {p.libelle} [{p.statut}] : {carrez}" + (f" ; vu : {elements}" if elements else ""))
+            revisite = f" ; revisitée ({p.passages} passages)" if p.passages > 1 else ""
+            lignes.append(f"  - {p.libelle} [{p.statut}] : {carrez}" + (f" ; vu : {elements}" if elements else "") + revisite)
         if self.non_vues:
             lignes.append(f"Pièces du dossier non vues pendant la visite (laissées telles quelles) : {', '.join(self.non_vues)}")
         hauteur = f"{self.totaux['HSP']} m" if self.totaux["HSP"] != "0" else "non renseignée"
@@ -252,6 +262,9 @@ class Rapport:
         lignes.append(f"Tables écrites : {', '.join(self.tables_ecrites)} ; copiées telles quelles : {len(self.tables_copiees)}")
         lignes.append("Hypothèses :")
         lignes += [f"  - {h}" for h in self.hypotheses]
+        if self.questions:
+            lignes.append("Questions de la carte des pièces (à trancher par le diagnostiqueur) :")
+            lignes += [f"  - {q}" for q in self.questions]
         return "\n".join(lignes)
 
 
@@ -309,7 +322,8 @@ def generer(visite: Path, modele: Path, sortie: Path, mesures: Path | None = Non
     xml_modele = modele / "XML" if (modele / "XML").is_dir() else modele
     if not xml_modele.is_dir():
         raise FileNotFoundError(f"dossier LICIEL modèle introuvable : {modele}")
-    etat = _lire_json(visite / "etat.json")
+    fichier_etat = FICHIER_CONSOLIDE if (visite / FICHIER_CONSOLIDE).is_file() else "etat.json"
+    etat = _lire_json(visite / fichier_etat)
     chemin_mesures = Path(mesures) if mesures else visite / FICHIER_MESURES
     if mesures and not chemin_mesures.is_file():
         raise FileNotFoundError(f"fichier de mesures introuvable : {chemin_mesures}")
@@ -354,7 +368,8 @@ def generer(visite: Path, modele: Path, sortie: Path, mesures: Path | None = Non
             generees[i].elements = {t: n + _elements(p)[t] for t, n in generees[i].elements.items()}
             continue
         generees[i] = PieceGeneree(nom, lignes[i].get("Batiment", ""), lignes[i]["Local"], lignes[i]["ClefComposant"],
-                                   statut, vue=True, elements=_elements(p))
+                                   statut, vue=True, elements=_elements(p),
+                                   passages=(p.get("carte") or {}).get("sejours") or 0)
     if any(g.statut == "ajoutée" for g in generees.values()) and batiment_des_nouvelles():
         hypotheses.append(HYPOTHESES["batiment"].format(batiment=batiment_des_nouvelles()))
     for nom, mesure in toutes_mesures.items():
@@ -435,7 +450,15 @@ def generer(visite: Path, modele: Path, sortie: Path, mesures: Path | None = Non
         relue = lire_fichier(xml / f"Table_{table.nom}.xml")
         if relue.en_octets() != table.en_octets():  # garde-fou : l'écrivain doit relire ce qu'il a écrit
             raise ErreurPont(f"Table_{table.nom}.xml : relecture différente de l'écriture")
-    rapport = Rapport(visite, modele, sortie, ordre, non_vues, copiees, [t.nom for t in nouvelles], totaux, hypotheses)
+    # Questions de la carte, et éléments notés dans une pièce mais filmés dans une autre (comptés là où ils ont été notés).
+    questions = list((etat.get("carte") or {}).get("questions") or [])
+    for p in etat.get("pieces") or []:
+        for e in p.get("elements") or []:
+            if (e.get("carte") or {}).get("a_verifier"):
+                questions.append(f"{e.get('description') or e['id']} ({e['id']}) : {e['carte']['a_verifier']} : "
+                                 "dans quelle pièce ?")
+    rapport = Rapport(visite, modele, sortie, ordre, non_vues, copiees, [t.nom for t in nouvelles], totaux, hypotheses,
+                      fichier_etat, questions)
     (sortie / FICHIER_RAPPORT).write_text(json.dumps(rapport.en_dict(), ensure_ascii=False, indent=1), encoding="utf-8")
     return rapport
 
