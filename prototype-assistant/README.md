@@ -781,6 +781,28 @@ Le prototype compte 263 tests.
 - Écran verrouillé : iOS suspend la page, et le son n'est plus capté pendant ce temps.
 - Serveur redémarré pendant une visite : une nouvelle visite commence à la reconnexion. Ne pas redémarrer le serveur pendant un test.
 
+## Étape 11 : de la visite aux tables LICIEL (22/10/2026)
+
+Le `etat.json` d'une visite (pièces, murs, ouvertures, émetteurs) devient la liste des pièces et le métrage Carrez de notre
+dossier de test LICIEL, dans `sorties/dossier-test`, hors de `C:\LICIEL_*`. Depuis la racine du projet :
+
+```
+.venv\Scripts\diagauto generer --modele C:\Users\conta\Documents\liciel\dossier-test\etape2-dossier-4pieces
+```
+
+Par défaut, la visite prise est la plus récente de `sessions/`. Le détail (tables écrites, mesures, hypothèses, essai à
+faire dans LICIEL) est dans le [README du projet](../README.md#générer-le-dossier-liciel-dune-visite-pont-assistant--liciel).
+
+Sur la dernière visite (le rejeu de la visite de Noah avec le code de l'étape 10) :
+- **Séjour** et **Cuisine** sont retrouvés dans le dossier (« Séjour » = « Sejour ») et gardent leur clé LICIEL ;
+- **Couloir** est ajouté au bâtiment « Appartement » ;
+- Chambre 1 et Salle de bains, non vues, restent telles quelles ;
+- les 3 pièces sont dans le Carrez, **à mesurer** : l'assistant ne relève pas encore les surfaces, et aucune n'est inventée ;
+- `diagauto verifier` : 13 tables sur 13 identiques à la relecture.
+
+**Test** : `tests/test_pont_liciel.py` construit une visite avec la checklist de l'assistant, l'exporte comme la session,
+puis vérifie les pièces et le Carrez produits. Le prototype compte 264 tests.
+
 ## Réglages (variables d'environnement)
 
 | Variable | Défaut | Rôle |
