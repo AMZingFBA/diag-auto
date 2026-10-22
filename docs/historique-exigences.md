@@ -1,10 +1,12 @@
 # Historique des exigences de Noah (transmises par Hermes)
 
-Demandes reçues dans `docs/exigences-en-attente.md`, toutes intégrées le 22/10/2026, puis retirées de ce fichier.
+Demandes reçues dans `docs/exigences-en-attente.md`, intégrées le 22/10/2026, puis retirées de ce fichier.
 Où trouver le résultat :
 
 - étapes 2 à 10 : [prototype-assistant/README.md](../prototype-assistant/README.md) (une section par étape) et les rejeux avant/après dans [prototype-assistant/rejeux/](../prototype-assistant/rejeux/) ;
-- étape 11 (pont assistant → LICIEL) : [README.md](../README.md), section « Générer le dossier LICIEL d'une visite ».
+- étape 11 (pont assistant → LICIEL) : [README.md](../README.md), section « Générer le dossier LICIEL d'une visite » ;
+- étape 12 (carte des pièces, pièces revisitées, phrase → mur) : [prototype-assistant/README.md](../prototype-assistant/README.md),
+  section « Étape 12 », et [prototype-assistant/rejeux/20261022-etape12-carte.md](../prototype-assistant/rejeux/20261022-etape12-carte.md).
 
 ---
 
@@ -69,3 +71,9 @@ Livrable : rejouer cette session réelle avant/après, montrer le dialogue obten
 ## Étape 11 — ENVOYÉE le 22/10 (étape 10 vérifiée : 263 + 624 OK) : reformulation + pont assistant -> tables LICIEL (pièces + Carrez)
 - Reformuler en 10 lignes la compréhension du logiciel DiagAuto.
 - Construire le pont assistant -> LICIEL : à partir de l'état d'une visite (sessions/<dernière>/ : pièces, murs, ouvertures, émetteurs), générer les tables LICIEL de notre dossier de test (liste des pièces + Carrez) avec le sérialiseur octet-exact de diagauto/liciel_xml, dans un dossier hors C:\LICIEL_* (ex. sorties/dossier-test). Valider avec diagauto verifier. Tests, README, ce fichier. Ne jamais toucher à C:\LICIEL_*.
+
+## Étape 12 — ENVOYÉE le 22/10 14:36 (étape 11 vérifiée : 264 + 652 OK) : V1 de la vidéo continue, 2 pièces avec allers-retours
+- Reformuler en 5 lignes la compréhension.
+- Côté serveur, module de reconnaissance des pièces revisitées à partir d'une vidéo continue (suivi continu du mouvement, pas de « photo toutes les 3 s ») : reconnaître qu'on retourne dans une pièce déjà vue (jamais de doublon) ; rattacher chaque phrase dictée (« ce mur c'est brique 30 cm ») au mur visible à cet instant (horodatage + cap boussole/gyro). Tout téléphone, même ancien, sans LiDAR, Claude seul comme IA (pas d'API).
+- Rejouer sur la dernière session réelle et sur une vidéo de test ; tests ; limites documentées honnêtement.
+- Brancher le résultat sur l'état de l'assistant (pièces/murs nommés par repère + cap) et sur diagauto generer. Commit, puis dire ce qui reste.
