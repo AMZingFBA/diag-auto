@@ -20,15 +20,24 @@
    - murs, fenêtres et portes, surfaces, orientation, longueurs de ponts thermiques ;
    - **chaque phrase dite est rattachée à l'élément visé à cet instant** (transcription horodatée ↔ position de la caméra ↔ mur au centre de l'image ; gérer « ce mur », « le deuxième mur », « celui-là ») ;
    - IA vision pour les équipements et la lecture des plaques signalétiques.
-4. **Précision visée ~3–5 %** : suffisante pour le DPE. **Pour le Carrez/Boutin, la mesure laser fait foi** (télémètre filmé ou dicté) ; la vidéo sert de contrôle et de plan.
-5. **Écran de validation** par le diagnostiqueur : chaque valeur proposée montre sa preuve ; une donnée invisible non dite reste vide, l'IA ne la devine jamais.
-6. **Sortie vers LICIEL** par génération des tables XML du dossier (paquet `diagauto.liciel_xml`) : pièces + Carrez d'abord, DPE ensuite.
+4. **Assistant vocal en direct pendant le tournage** (docs/02-capture-video.md § 3.6).
+   - L'IA voit le flux (1 image/s) et parle au diagnostiqueur, dans une oreillette.
+   - Elle pose les questions manquantes et signale les oublis ; elle n'affirme jamais une donnée invisible.
+   - Chaque réponse est enregistrée par un outil, avec la citation du diagnostiqueur et l'horodatage.
+   - L'état « checklist DPE » est tenu par NOTRE serveur, qui calcule ce qui manque.
+   - Fournisseur recommandé : Gemini Live (vidéo native, moins cher) ; alternative : OpenAI Realtime.
+   - Hors réseau : enregistrement local, puis questions a posteriori.
+   - Le rattachement définitif des réponses aux murs et tout le calcul 3D restent faits ensuite sur le serveur.
+5. **Précision visée ~3–5 %** : suffisante pour le DPE. **Pour le Carrez/Boutin, la mesure laser fait foi** (télémètre filmé ou dicté) ; la vidéo sert de contrôle et de plan.
+6. **Écran de validation** par le diagnostiqueur : chaque valeur proposée montre sa preuve ; une donnée invisible non dite reste vide, l'IA ne la devine jamais.
+7. **Sortie vers LICIEL** par génération des tables XML du dossier (paquet `diagauto.liciel_xml`) : pièces + Carrez d'abord, DPE ensuite.
 
 ## Documents du projet
 - docs/01-cadrage.md : stockage LICIEL, options d'injection, plan de MVP, questions ouvertes.
 - docs/02-capture-video.md : parcours terrain, automatique / à confirmer / à dicter, briques techniques, coût serveur, plan de prototype en 3 étapes.
 - docs/checklist-dpe.md : données à relever pour un DPE 3CL-2021.
 - docs/protocole-tournage.md : fiche d'une page pour tourner les vidéos de test (V1).
+- docs/exigences-en-attente.md : nouvelles demandes de Noah transmises par Hermes, à intégrer puis vider (garder l'en-tête).
 - samples/ (non versionné) : vidéos de test, ex. samples/video-001 (séjour, 38 s, recompressée par WhatsApp).
 
 ## Environnement

@@ -296,6 +296,11 @@ Chaque étape a un livrable vérifiable. On ne passe à la suivante que si le cr
 >
 > - Tout se développe sur le PC actuel, sans Mac ni iPhone particulier. La reconstruction 3D demande un GPU : ce PC n'en a pas, donc CPU (lent) ou GPU loué à l'heure.
 > - **Prochaine étape recommandée : V1.** 3 à 5 vidéos tournées selon [protocole-tournage.md](protocole-tournage.md), en fichier original et non par WhatsApp, avec mesures laser et croquis relevés à part comme vérité terrain. En parallèle : E2 (test d'injection des pièces par Hermes).
+> - **Assistant vocal en direct** (demande de Noah, 22/10, 02-capture-video.md § 3.6) :
+>   - Une IA voit le flux et pose les questions manquantes pendant le tournage, avec la checklist DPE comme état tenu par notre serveur.
+>   - Prototype **V1bis** sur une pièce, avec Gemini Live : **rapide, sans SLAM ni GPU**, faisable **en parallèle de V1**.
+>   - Il demande un compte payant chez le fournisseur et l'accord sur l'envoi des données (questions Q7 et Q8 de 02-capture-video.md).
+>   - Coût estimé : environ 0,01 à 0,05 $ par minute de tournage.
 > - Leçons du 1er test (`samples/video-001`, 22/10) :
 >   - vidéo recompressée par WhatsApp et sans capteurs ;
 >   - mouvement trop rapide ;

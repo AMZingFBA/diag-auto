@@ -1,6 +1,6 @@
 # DiagAuto — 02. Capture terrain par vidéo continue (tout téléphone, calcul serveur)
 
-*Version du 22/10/2026 (3e). Elle intègre le retour de Noah sur le 1er test vidéo (`samples/video-001`). Complète [01-cadrage.md](01-cadrage.md) ; liste des données : [checklist-dpe.md](checklist-dpe.md) ; fiche de tournage : [protocole-tournage.md](protocole-tournage.md).*
+*Version du 22/10/2026 (4e). Elle intègre le retour de Noah sur le 1er test vidéo (`samples/video-001`) et l'assistant vocal en direct (§ 3.6). Complète [01-cadrage.md](01-cadrage.md) ; liste des données : [checklist-dpe.md](checklist-dpe.md) ; fiche de tournage : [protocole-tournage.md](protocole-tournage.md).*
 
 ## Le principe
 
@@ -12,7 +12,12 @@
    - Pas de procédure par pièce, pas de bouton, **pas de mesure dictée obligatoire** : l'échelle vient de la reconstruction et de références.
    - Exception : le Carrez, où la mesure laser reste la référence légale (§ 4).
 4. **Tout le calcul est fait sur notre serveur**, avec des briques open source à licence compatible avec un usage commercial.
-5. Ensuite viennent, comme avant :
+5. **Assistant vocal en direct** (demande de Noah, § 3.6) :
+   - Pendant le tournage, une IA regarde le flux et parle au diagnostiqueur, dans une oreillette.
+   - Elle pose les questions manquantes (« ce mur avec la télé, quelle épaisseur ? ») et signale ce qui manque (« il manque l'isolation d'un mur de la chambre 1 »).
+   - Elle **ne fait que poser des questions et noter les réponses**, elle n'affirme rien d'invisible.
+   - Le calcul 3D lourd reste fait ensuite sur le serveur.
+6. Ensuite viennent, comme avant :
    - les données administratives (devis + API RNB, IGN, BDNB, DPE ADEME) ;
    - l'écran de validation avec preuves ;
    - la sortie vers LICIEL (`diagauto.liciel_xml`).
@@ -33,7 +38,7 @@
 |---|---|---|
 | **Devis** | Rien. | Pré-remplit l'administratif depuis le devis et les API publiques. |
 | **Arrivée** (1–2 min) | Ouvre le lien du dossier et confirme adresse, bâtiment, type et année. Lance **une seule** vidéo. | Enregistre vidéo, voix et capteurs. |
-| **Visite** (5 à 15 min de film) | Marche dans le logement en balayant les murs, sans s'arrêter. Parle quand il veut : « ici c'est la cuisine », « ce mur parpaing 20, isolé par l'intérieur », « celui-là donne sur le garage », « la chaudière ». S'approche des plaques signalétiques 2 secondes. Repasse dans une pièce s'il a oublié quelque chose. | Le téléphone vibre si le mouvement est trop rapide. Un indicateur montre la couverture (« 2 murs non vus dans la chambre 2 »). |
+| **Visite** (5 à 15 min de film) | Marche dans le logement en balayant les murs, sans s'arrêter. Parle quand il veut : « ici c'est la cuisine », « ce mur parpaing 20, isolé par l'intérieur », « celui-là donne sur le garage », « la chaudière ». S'approche des plaques signalétiques 2 secondes. Repasse dans une pièce s'il a oublié quelque chose. **Répond à voix haute aux questions de l'assistant**, entendues dans l'oreillette. | Le téléphone vibre si le mouvement est trop rapide. **L'assistant en direct** demande les informations manquantes pour la pièce en cours, et rappelle les oublis avant qu'on la quitte (« avant de sortir : le vitrage de la fenêtre ? »). |
 | **Fin de visite** | Arrête la vidéo. | Envoi reprenable dès que le réseau est là. |
 | **Validation** (5–10 min, sur place ou au bureau) | Vérifie le plan proposé (pièces, murs, ouvertures) et traite les valeurs orange et rouges. Chaque valeur est montrée avec l'image du moment et la phrase dite. | Bloque l'envoi tant qu'une donnée obligatoire manque. Garde la trace des validations. |
 | **Au bureau** | Relit dans LICIEL, édite le rapport. | Génère les tables LICIEL. |
@@ -170,6 +175,77 @@ Rappel : une erreur d'échelle de 2 % donne environ 4 % d'erreur sur les surface
 | **Serveur** | Python (FastAPI) + file de tâches + GPU à la demande + stockage objet, hébergé en France ou dans l'UE. |
 | **Format intermédiaire** | JSON « Dossier terrain v1 » : chaque valeur avec source, confiance, statut et preuve (instant vidéo, élément, extrait audio). |
 
+### 3.6 Assistant vocal en direct pendant le tournage
+
+**Rôle.** L'assistant voit le flux, à 1 image par seconde, et entend le diagnostiqueur. Il :
+- **pose les questions manquantes** sur ce qui est filmé, une à la fois et brièvement, sans couper la parole ;
+- **note les réponses** (« 10 cm ») avec leur horodatage ;
+- **signale les oublis** de la pièce en cours avant qu'on la quitte, et ceux du logement avant d'arrêter le film.
+
+Il **n'affirme jamais** une donnée invisible (« ce mur fait 20 cm ») : il demande. Les réponses restent des valeurs « proposées », avec l'extrait audio comme preuve, et passent par l'écran de validation.
+
+**Architecture temps réel**
+
+```
+Téléphone (PWA)
+ ├─ Enregistrement LOCAL haute qualité (1080p + audio + capteurs) ──► envoi après coup ──► chaîne 3D serveur (§ 3.1–3.5)
+ └─ Flux LIVE léger : audio 16 kHz + 1 image/s (JPEG ~640 px)
+        │  (V1bis : connexion directe du navigateur avec jeton éphémère ;
+        │   V2 : WebRTC vers notre relais, Pipecat ou LiveKit Agents, open source, hébergé en France ou dans l'UE)
+        ▼
+   Modèle temps réel (Gemini Live ou OpenAI Realtime)
+        │  appels d'outils
+        ▼
+   NOTRE serveur : « état checklist » du dossier (même schéma que le Dossier terrain v1)
+```
+
+- **Le relais côté serveur (V2)** :
+  - garde les clés d'API ;
+  - tient l'état et journalise toute la conversation ;
+  - permet de **changer de fournisseur** sans toucher à l'application ;
+  - tolère mieux un réseau mobile instable (WebRTC).
+- Débit du flux live : de quelques centaines de kbit/s à environ 1 Mbit/s selon le transport. C'est compatible avec la 4G.
+
+**Comparatif des deux fournisseurs** (pages officielles consultées le 22/10/2026, prix en dollars par million de jetons)
+
+| | **Gemini Live** (`gemini-3.8-live`, `gemini-3.1-flash-live-preview`) | **OpenAI Realtime** (`gpt-realtime-2.1`, `-mini`) |
+|---|---|---|
+| Vidéo | **Oui, nativement** : images JPEG, au plus 1 par seconde | **Pas de flux vidéo** : des images envoyées une à une dans la conversation |
+| Transport navigateur | WebSocket. Connexion directe possible avec **jeton éphémère**. WebRTC via des partenaires (LiveKit, Pipecat). | **WebRTC natif** avec clé éphémère (recommandé par OpenAI) ; WebSocket côté serveur |
+| Durée de session | Audio + vidéo : **2 min sans option**, connexion d'environ 10 min. Il faut activer la compression du contexte et la reprise de session (jeton de reprise valable 2 h). | Non indiquée |
+| Outils (checklist) | `gemini-3.8-live` : appels de fonction **asynchrones**. `3.1-flash-live` : séquentiels seulement. | Appels d'outils pris en charge |
+| Prix affichés | Audio entrée 3 $, image/vidéo 1 $, audio sortie 12 $. Google indique **≈ 0,005 $/min** d'écoute, **≈ 0,002 $/min** de vidéo, **≈ 0,018 $/min** de parole de l'IA. | Flagship : audio entrée 32 $, sortie 64 $, image 5 $. Mini : 10 $ / 20 $ / 0,80 $. Pas de prix à la minute officiel. |
+| Données | Version payante : **contenus non utilisés pour améliorer les produits** (la version gratuite, si). Résidence UE non indiquée. | Points d'accès « résidence des données » à +10 %. Rétention : à vérifier. |
+| Statut | **Préversion** (« preview ») | Disponible (GA) |
+| Latence | Pas de chiffre officiel : **à mesurer** | Pas de chiffre officiel : **à mesurer** |
+
+**Recommandation : Gemini Live pour V1bis.** Il voit la vidéo nativement, coûte environ 5 fois moins cher et accepte des appels d'outils asynchrones. OpenAI Realtime sert d'alternative, à comparer une demi-journée si le temps le permet. Un équivalent 100 % open source auto-hébergé en temps réel (voix + vision) n'est pas réaliste à court terme ; on le réévaluera plus tard pour la souveraineté.
+
+**La checklist DPE comme état partagé**
+
+| Règle | Détail |
+|---|---|
+| **C'est notre serveur qui sait ce qui manque, pas l'IA** | Moteur déterministe : à partir de la checklist (docs/checklist-dpe.md) et de l'état courant, il calcule les champs manquants pour la pièce en cours, par priorité. |
+| Outils exposés à l'IA | `piece_courante(nom)`, `enregistrer_reponse(element_decrit, champ, valeur, citation)`, `champs_manquants(piece)`, `marquer_sans_objet(champ)`. |
+| Rôle de l'IA | Formuler la question suivante naturellement (« et ce mur avec la télé, il fait quelle épaisseur ? ») et appeler `enregistrer_reponse` avec la citation exacte. |
+| Garde-fous dans les consignes | Une question à la fois. Ne pas couper la parole. Nombre maximal de questions par minute. **Jamais de valeur sans citation du diagnostiqueur.** |
+
+**Cohabitation avec le traitement 3D**
+
+| Sujet | Fonctionnement |
+|---|---|
+| Ce que l'assistant comprend en direct | Il ne connaît que ce qu'on lui **dit** et ce qu'il **voit** : la pièce (« chambre 1 ») et une description de l'élément (« le mur avec la télé »). Il n'a **pas** de carte 3D. |
+| Rattachement définitif | Chaque réponse est enregistrée **avec son horodatage**. Après coup, l'ancrage du § 3.4 la rattache au **vrai mur de la carte 3D**, comme une phrase spontanée. Si la description de l'assistant et l'ancrage géométrique ne concordent pas : **orange**. |
+| Ce qui reste au serveur | Couverture géométrique (« 2 murs non vus »), surfaces, plan : le serveur, après coup. En direct, l'assistant ne vérifie que la **complétude des informations** (checklist). |
+| Voix de l'IA dans l'enregistrement | Elle risque de polluer la transcription. Parade : oreillette conseillée, annulation d'écho du navigateur, et retrait des phrases de l'IA (dont on connaît le texte et l'horodatage) avant la transcription finale. |
+
+**Mode hors réseau** (cave, combles, zone blanche)
+
+| Moment | Fonctionnement |
+|---|---|
+| Pendant le tournage | L'enregistrement local continue, rien n'est perdu. L'assistant se tait et reprend au retour du réseau avec l'état à jour. |
+| Après envoi | Le serveur calcule les manques sur la vidéo complète. Il produit une **liste de questions a posteriori**, chacune avec l'image concernée. Le diagnostiqueur y répond à la voix ou au doigt sur l'écran de validation, ou retourne filmer s'il est encore sur place. |
+
 ## 4. Précision et risques
 
 | Sujet | Risque | Parade |
@@ -187,6 +263,13 @@ Rappel : une erreur d'échelle de 2 % donne environ 4 % d'erreur sur les surface
 | Licences | Plusieurs briques de pointe sont non commerciales (MASt3R-SLAM, SuperGlue…) ou GPL (ORB-SLAM3). | Liste blanche (MIT, BSD, Apache-2.0). Les briques GPL ou non commerciales servent seulement de comparaison. |
 | Vie privée (RGPD) | Vidéo continue d'un logement habité. | Floutage des visages, conservation limitée, hébergement en France ou dans l'UE. |
 | Sortie DPE vers LICIEL | Injection non prouvée. | Fiche DPE pré-remplie en attendant (01-cadrage.md). |
+| **Assistant live : réseau** | Cave, combles, zone blanche. | Mode hors réseau (§ 3.6) : enregistrement local et questions a posteriori. |
+| **Assistant live : latence** | Une réponse lente casse le rythme. | Mesurée en V1bis. Questions courtes. Le diagnostiqueur n'attend jamais l'IA pour continuer à filmer. |
+| **Assistant live : l'IA invente** | Elle « voit » un mur de 20 cm et l'affirme. | Consigne : questions seulement. Enregistrement **uniquement** par outil, avec citation du diagnostiqueur. Contrôle a posteriori : toute valeur sans citation est rejetée. |
+| **Assistant live : trop bavard** | Fatigue, distraction. | Plafond de questions par minute. Questions regroupées à la sortie de la pièce. Mode « silencieux » possible. |
+| **Assistant live : limites techniques** | Préversion (Gemini). Sessions de 2 min audio + vidéo sans option, connexion d'environ 10 min. | Compression du contexte, reprise de session et reconnexion automatique. Relais serveur pour pouvoir changer de fournisseur. |
+| **Assistant live : confidentialité** | Vidéo et voix d'un logement habité envoyées en direct à Google ou OpenAI (entreprises américaines). | Version payante uniquement (non utilisée pour l'entraînement chez Google). Contrat de traitement des données et résidence UE à vérifier. Information du propriétaire. Flux live en basse définition. |
+| **Assistant live : téléphone ancien** | Enregistrement 1080p + flux live + son en même temps : chauffe, batterie, saccades. | Testé en V1bis sur un téléphone ancien. Si besoin, enregistrement en 720p. |
 
 ## 5. Coût serveur approximatif par dossier
 
@@ -202,12 +285,30 @@ Ordres de grandeur **à mesurer en V1**. Hypothèse : 10 min de vidéo continue,
 
 Coûts fixes : petit serveur d'application, quelques dizaines d'euros par mois. GPU loués à la demande au démarrage.
 
+**Assistant vocal en direct : coût par minute de tournage**
+
+Ce sont des estimations, à mesurer en V1bis. Les prix de catalogue sous-estiment souvent le coût réel, parce que le contexte de la conversation peut être refacturé à chaque échange.
+
+| Option | Calcul | Par minute | Visite de 15 min |
+|---|---|---|---|
+| **Gemini Live** (prix Google) | 0,005 $ d'écoute + 0,002 $ de vidéo + 0,018 $ × environ 20 % du temps où l'IA parle ≈ 0,011 $/min au catalogue ; réel estimé 1 à 5 fois plus | **≈ 0,01 à 0,05 $** | ≈ 0,15 à 0,75 $ |
+| **OpenAI Realtime** (`gpt-realtime-2.1`) | Pas de prix officiel à la minute. Mesures publiées par des tiers : environ 0,02 à 0,11 $/min pour l'audio, plus les images envoyées | **≈ 0,05 à 0,15 $** | ≈ 0,75 à 2,25 $ |
+| OpenAI Realtime **mini** | Tarifs environ 3 fois plus bas | ≈ 0,02 à 0,05 $ | ≈ 0,30 à 0,75 $ |
+
+Avec Gemini, le **total par dossier passe donc d'environ 0,50–3 € à environ 0,70–4 €**.
+
+Sources :
+- [tarifs Gemini](https://ai.google.dev/gemini-api/docs/pricing), [Live API](https://ai.google.dev/gemini-api/docs/live), [gestion de session](https://ai.google.dev/gemini-api/docs/live-api/session-management), [jetons éphémères](https://ai.google.dev/gemini-api/docs/live-api/ephemeral-tokens) ;
+- [tarifs OpenAI](https://developers.openai.com/api/docs/pricing), [Realtime](https://developers.openai.com/api/docs/guides/realtime), [Realtime WebRTC](https://developers.openai.com/api/docs/guides/realtime-webrtc) ;
+- estimations tierces OpenAI à la minute : [Forasoft](https://www.forasoft.com/blog/article/openai-realtime-api-pricing), [HackerNoon](https://hackernoon.com/openai-realtime-api-pricing-in-2026-real-world-data-from-4000-measured-sessions).
+
 ## 6. Plan de prototype
 
 | Étape | Contenu | Critère de réussite |
 |---|---|---|
 | **V1. Preuve : vidéo continue de 2 pièces avec aller-retour** | **Entrée** : 3 à 5 vidéos tournées selon [protocole-tournage.md](protocole-tournage.md) (pièce A → pièce B → retour en A → retour en B), avec 2 ou 3 téléphones, en fichier original. Le diagnostiqueur parle des murs pendant le film. Mesures laser et croquis numéroté relevés **à part**, comme vérité terrain. **Traitement** (script serveur, sans application) : carte 3D unique avec fermeture de boucle → découpage en pièces → plan coté + surfaces (échelle sans mesure dictée) → transcription → rattachement de chaque phrase à un mur. `video-001` sert de premier cas, dégradé. | **2 pièces reconnues, jamais 3 ou 4**, sur toutes les vidéos exploitables ; une vidéo trop dégradée doit être **signalée**, pas mal interprétée. **≥ 80 % des phrases rattachées au bon mur** ; les erreurs restantes signalées en orange. **Écart de surface ≤ 5 %** (objectif 3 %) sans mesure dictée. Temps et coût de calcul mesurés. Décision « on continue / on ajuste » avec Noah. |
-| **V2. Logement complet** | Application web de capture (vidéo + voix + capteurs, retour en direct). Logement entier en une vidéo. Fenêtres et portes, orientation, ponts thermiques, plaques, Carrez par télémètre filmé. JSON « Dossier terrain v1 ». | Sur 3 logements : pièces correctes, part des champs de la checklist correctement pré-remplis, zéro valeur sans preuve, coût et temps mesurés. |
+| **V1bis. Assistant vocal en direct sur une pièce** (rapide, **sans SLAM ni GPU**, en parallèle de V1) | Page web : caméra + micro → Gemini Live (jeton éphémère délivré par un petit serveur ; page servie en HTTPS, obligatoire pour la caméra). État checklist d'**une pièce** : murs (matériau, épaisseur, isolation, donne sur), fenêtres (menuiserie, vitrage, volets), émetteurs. Outils `enregistrer_reponse` / `champs_manquants`. Enregistrement local de la vidéo en parallèle. Test par Noah dans 2 ou 3 pièces, dont un téléphone ancien, avec oreillette. Comparaison rapide avec OpenAI Realtime si le temps le permet. | **Zéro valeur inventée** : toute valeur a une citation. ≥ 80 % des champs de la pièce remplis à la sortie de la pièce. Latence et coût par minute **mesurés**. Effet de la voix de l'IA sur l'enregistrement mesuré. Avis de Noah : « utile ou gênant ? ». |
+| **V2. Logement complet** | Application web de capture (vidéo + voix + capteurs, retour en direct, **assistant live via relais serveur** si V1bis est concluant). Logement entier en une vidéo. Fenêtres et portes, orientation, ponts thermiques, plaques, Carrez par télémètre filmé. JSON « Dossier terrain v1 ». | Sur 3 logements : pièces correctes, part des champs de la checklist correctement pré-remplis, zéro valeur sans preuve, coût et temps mesurés. |
 | **V3. De bout en bout** | Administratif depuis le devis + API publiques, écran de validation, génération LICIEL (pièces + Carrez) via `diagauto.liciel_xml`, fiche DPE pré-remplie. Pilote sur 2–3 vraies visites, chronométrées. | Aucune ressaisie des pièces ni du Carrez. Temps total mesuré avant et après. |
 
 ## 7. Questions ouvertes
@@ -218,3 +319,7 @@ Coûts fixes : petit serveur d'application, quelques dizaines d'euros par mois. 
 - **Q4 — GPU.** Peut-on louer un GPU à l'heure pour V1, pour quelques euros ? Ce PC n'en a pas.
 - **Q5 — Sortie DPE.** Une fiche DPE pré-remplie à recopier est-elle acceptable pendant le prototype ?
 - **Q6 — BDNB.** Conditions d'accès à vérifier (Hermes).
+- **Q7 — Assistant live : compte et données.**
+  - Peut-on ouvrir un compte **payant** Google AI Studio (Gemini), et éventuellement OpenAI, pour V1bis ? La version gratuite de Gemini utilise les données pour améliorer les produits : à exclure.
+  - Accepte-t-on, pour le prototype, d'envoyer en direct l'image et la voix à Google ou OpenAI ? Hermes peut-il vérifier les contrats de traitement des données et la résidence UE ?
+- **Q8 — Oreillette.** Les diagnostiqueurs acceptent-ils de porter une oreillette (filaire ou Bluetooth) pendant la visite ? Sinon, l'IA parle par le haut-parleur, avec plus d'écho dans l'enregistrement.
