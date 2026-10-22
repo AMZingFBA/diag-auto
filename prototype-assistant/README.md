@@ -12,11 +12,13 @@ Ce prototype correspond à l'étape **V1bis** du plan ([docs/02-capture-video.md
 2. Le **serveur** (ce PC) :
    - repère la fin de chaque phrase, et attend la suite si elle est coupée (« Il est… ») ;
    - la transcrit sur place, en 0,05 s : **la voix ne quitte pas le PC** (voir « Étape 5 ») ;
-   - **note tout de suite**, sans IA, tout ce qu'il reconnaît dans la phrase (quelques millisecondes) ;
-   - **pose aussitôt la question suivante du parcours**, sans attendre l'IA (voir « Parcours de la visite » plus bas).
-3. **Claude** n'intervient qu'en appui :
-   - quand les règles n'ont rien compris à une phrase, il essaie de la comprendre (images comprises) ;
-   - il relit en arrière-plan les phrases longues, au cas où les règles auraient manqué une valeur ;
+   - **pré-remplit tout de suite**, sans IA, tout ce qu'il reconnaît dans la phrase (quelques millisecondes ; un bip dit « noté ») ;
+   - calcule la question suivante du parcours (voir « Parcours de la visite » plus bas).
+3. **Claude est le cerveau de chaque phrase** (étape 7) :
+   - il comprend n'importe quelle phrase, comme dans une vraie conversation, et y répond : question générale, remarque, ordre (« on fait une pause », « reviens au salon »), correction, récapitulatif ;
+   - il vérifie le pré-remplissage du serveur, le corrige ou l'annule si besoin ;
+   - puis il reprend la visite avec la question proposée par le parcours ;
+   - sa réponse est lue **dès sa première phrase**, pendant qu'il écrit la suite ;
    - pendant les silences, il regarde les images et signale les éléments visibles (fenêtre, radiateur…), sans parler.
 4. **Le serveur vérifie tout** :
    - une valeur n'est notée que si sa citation se retrouve dans ce que le diagnostiqueur a réellement dit ;
@@ -141,7 +143,7 @@ set DIAGAUTO_CERVEAU=simulation
 ..\.venv\Scripts\python -m assistant
 ```
 
-Tout fonctionne comme avec Claude : les valeurs sont notées par l'extraction immédiate, et les questions viennent du parcours du serveur. Seule différence : une phrase que les règles n'ont pas comprise reste sans suite, et les images ne sont pas regardées.
+Tout fonctionne comme en mode `rapide` : les valeurs sont notées par l'extraction immédiate, et les questions viennent du parcours du serveur. Différences : pas de conversation (une question ou une phrase que les règles n'ont pas comprise reste sans suite), et les images ne sont pas regardées.
 
 Si faster-whisper n'est pas installé, ou avec `DIAGAUTO_TRANSCRIPTION=simulation`, rien n'est transcrit : on écrit alors les phrases dans « Outils de test ».
 
@@ -182,6 +184,8 @@ cd prototype-assistant
 Ajoutez `--simulation` pour l'exécuter sans Claude. Le même parcours est vérifié, question par question, par les tests automatiques (`tests/test_dialogue.py`). Les 10 phrases avec fautes de transcription de l'étape 1 sont vérifiées dans `tests/test_extraction.py`.
 
 `python -m assistant.evaluer --comprehension` joue des réponses difficiles, que les règles ne peuvent pas trancher seules. Il montre comment Claude les interprète par rapport à la question posée (voir « Étape 3 »).
+
+Ces deux évaluations jouent le parcours en mode `rapide` (sans conversation). `python -m assistant.evaluer --conversation` joue une visite en cours, puis **30 phrases libres**, avec le vrai Claude en cerveau de chaque phrase (voir « Étape 7 »). Ajoutez `--sortie fichier.md` pour garder le résultat.
 
 ## Ce qui est enregistré
 
@@ -511,7 +515,7 @@ La différence entre les deux est la même pour toute la visite. Estimée sur de
 - un mur filmé près d'un radiateur en fonte reste juste (la boussole perturbée y est notée) ;
 - deux murs **face à face sont toujours opposés** (nord ↔ sud).
 
-**Fiabilité** : bonne, moyenne, faible, ou absente (pas de boussole, accès refusé). Elle repose sur la précision annoncée par l'iPhone, sinon sur la stabilité de la différence cap − gyroscope. Les seuils (15° et 30°, 12° et 25°) sont des hypothèses à ajuster sur le terrain.
+**Fiabilité** : bonne, moyenne, faible, ou absente (pas de boussole, accès refusé). Elle repose sur la précision annoncée par l'iPhone, sinon sur la stabilité de la différence cap − gyroscope. Les seuils (15° et 30°, 12° et 25°) sont des hypothèses à ajuster sur le terrain : depuis l'étape 7, ils sont dans `boussole.toml`.
 
 **Correction à l'oral**, à tout moment : « Non, c'est le mur ouest », « ce mur est plein sud », « le mur est donne dehors ».
 - L'orientation dite l'emporte sur la boussole, et sa preuve est gardée : « dit : non, c'est le mur ouest (la boussole donnait nord) ».
@@ -541,9 +545,101 @@ Le prototype compte 189 tests.
 
 **Limites** :
 - La boussole n'a pas encore été essayée sur un vrai téléphone ; c'est à faire avec Noah, sur iPhone et sur un Android ancien.
-- Le cap de l'iPhone (`webkitCompassHeading`) est à vérifier quand le téléphone est tenu droit.
+- Le cap de l'iPhone tenu droit : corrigé à l'étape 7 (calcul par la matrice de rotation), à vérifier au test terrain.
 - Le gyroscope dérive de quelques degrés sur une longue visite : sans effet sur l'arrondi au point cardinal (± 45°), mais la référence se recale si une orientation est redite.
 - Un mur filmé de biais, depuis un coin de la pièce, donne un cap faux : l'orientation reste à confirmer à l'écran de validation, comme toute valeur de capteur.
+
+## Étape 7 : une vraie conversation, Claude cerveau de chaque phrase (22/10/2026)
+
+Demande de Noah : « il ne faut pas ajouter 3-4 mots de vocabulaire. Il faut qu'il comprenne TOUT, n'importe quelle phrase, comme quand je parle à Claude ».
+
+**Ce qui change** :
+- **Claude lit chaque phrase**, avec les images de l'instant et l'état complet de la visite. Il répond à tout, puis reprend la visite :
+  - question générale : « C'est quoi un pont thermique ? » → « Un pont thermique, c'est un point faible de l'enveloppe où la chaleur s'échappe plus facilement… Un autre mur dans cette cuisine ? » ;
+  - hors sujet : « Comment ça va ? » → « Très bien, merci. On continue la cuisine : un autre mur dans cette pièce ? » ;
+  - ordre : « On fait une pause, je prends un appel », « reviens au séjour » ;
+  - correction : « En fait, la chaudière date de 2012 », « oublie ce que je viens de dire sur la chaudière » ;
+  - récapitulatif : « Tu as noté quoi pour la cuisine ? », « Où on en est ? ».
+- **Les règles du serveur ne font que pré-remplir**. Ce qu'elles reconnaissent est noté tout de suite (bip), puis envoyé à Claude comme « déjà noté automatiquement », éléments créés compris.
+  - Claude le vérifie : il corrige une valeur, ou annule un élément créé à tort (« un vieux grille-pain » n'est pas un deuxième radiateur).
+  - Sa valeur remplace celle des règles, sans contradiction signalée, et n'est jamais ramenée à un seul mot du vocabulaire (« pierre et brique » reste « pierre et brique »).
+  - Les règles ne bloquent jamais Claude.
+- **Une question posée à l'assistant ne pré-remplit rien** : « Ça sert à quoi une VMC ? » ne crée plus de VMC.
+- **Le serveur garde la main** sur la question suivante. Le parcours la calcule et la propose à Claude, avec le nom de l'élément (« le mur extérieur »), pour qu'il la nomme après une digression. Les garde-fous restent (une seule question, jamais « répétez », jamais « le mur 3 »), ainsi que la vérification des citations.
+- **Une question restée sans réponse** est reposée à la fin de chaque digression, et non plus une seule fois.
+- **Pause** : « on fait une pause » arrête les questions du parcours jusqu'à « on reprend ». Ce qui est dit pendant la pause est quand même noté.
+- **Nouvelles actions de Claude** : `pause`, `reprendre`, `annuler`. `annuler` sert pour un pré-remplissage faux, ou pour « oublie ce que je viens de dire sur … » : la valeur revient à la précédente, ou l'élément est retiré.
+- **Si Claude ne répond pas** (délai, abonnement indisponible), le serveur pose seul la question du parcours, comme avant.
+
+**Rapidité** :
+- La réponse de Claude arrive au fil de l'eau. **La voix démarre dès sa première phrase**, et le téléphone enchaîne les phrases suivantes sans couper.
+- **File d'attente sans blocage** : pendant que Claude répond, la phrase suivante est déjà transcrite et pré-remplie (bip). Elle passe ensuite à Claude, avec les autres phrases dites entre-temps, en un seul appel.
+- Si le diagnostiqueur reparle, la fin de la réponse en cours n'est pas lue.
+- Mesuré sur les 30 phrases libres, avec le vrai Claude :
+  - première phrase dite entre **1,5 et 1,8 s** (médiane de trois passages) après la fin de la phrase, **4 s au pire** ;
+  - à ajouter : 0,7 s de silence pour détecter la fin de phrase, et ~0,05 s de transcription.
+- **Le prix d'une vraie conversation** : à l'étape 5, la question du parcours partait en 0,1 s, sans IA. Elle attend maintenant Claude (~1,5 à 2,5 s). Le « noté » (bip) reste immédiat (0,09 s). L'ancien fonctionnement reste disponible : `DIAGAUTO_CONVERSATION=rapide`.
+
+**Essai avec le vrai Claude** : `python -m assistant.evaluer --conversation`. Une visite est d'abord mise en place (séjour décrit, cuisine commencée). Puis viennent 30 phrases libres : 6 questions générales, 5 hors sujet, 6 de navigation, 5 corrections, 5 récapitulatifs et 3 descriptions libres. Résultat complet, phrase par phrase : [rejeux/20261022-etape7-conversation.md](rejeux/20261022-etape7-conversation.md). Les 30 phrases ont reçu une réponse sensée, suivie de la reprise de la visite.
+
+**La visite réelle de Noah, rejouée** (son et images, au rythme réel, même version du serveur dans ses deux modes ; détail dans le même rapport) :
+
+| | Mode rapide (étapes 5-6) | Conversation (étape 7) |
+|---|---|---|
+| Fin de phrase → réponse prête, médiane | 0,1 s | 2,3 s |
+| Fin de phrase → réponse prête, pire cas | 3,2 s | 4,4 s |
+| Bip « noté », médiane | — | 0,09 s |
+| Séjour rempli à la fin | 60 % | 76 % |
+| Informations manquantes à la fin | 11 | 7 |
+
+En mode rapide, la question part tout de suite, mais elle est mécanique : « Il est en quoi ? » quatre fois, et « Un sous-sol » est compris comme un mur côté cave. En conversation, l'assistant comprend mieux :
+- « Il te faut quoi d'autre sur ce mur ? » → « Pour le mur des trois fenêtres, j'ai tout. Il reste le plancher : il donne sur quoi ? » ;
+- il relève de lui-même que « 30 mètres » est invraisemblable pour ce mur ;
+- « Quel mur ? » → « C'est le mur qu'on n'a pas encore décrit, celui avec la télé, en face des fenêtres. ».
+
+Quand Noah enchaîne ses phrases sans s'arrêter, l'assistant se tait : le bip confirme ce qui est noté, et la question vient au premier silence.
+
+**Corrections des règles trouvées par cet essai** (elles faussaient le pré-remplissage) :
+- « le premier mur du séjour », « ce mur de la chambre » : c'est la pièce où est le mur, et non « donne sur le séjour » ;
+- « la chaudière date de 2012 » : la chaudière déjà décrite (correction signalée), et non une deuxième chaudière ;
+- « il fait chaud dans cette cuisine » : la pièce où l'on est n'est jamais une valeur ;
+- « reviens au séjour », « on retourne dans la cuisine » : changement de pièce ;
+- « Pas d'autre mur. » : la liste des murs est close (n'était pas comprise sans Claude) ;
+- Claude omet souvent le type d'un élément qu'il désigne par son identifiant : le serveur le déduit (ces corrections étaient refusées).
+
+**Boussole (réponses d'Hermes à l'étape 6)** :
+- **iPhone** : `webkitCompassHeading` donne le cap du haut de l'appareil, pas celui de la caméra.
+  - Le cap de la caméra arrière est maintenant calculé par la **matrice de rotation complète** (alpha, bêta, gamma, norme W3C) : juste quand le téléphone est tenu droit, incliné ou en paysage.
+  - `webkitCompassHeading` ne sert plus qu'à recaler le nord : on mesure l'écart avec le cap du haut calculé, quand le haut est à moins de 60° de l'horizontale, et on le lisse.
+  - Code : [web/boussole.js](web/boussole.js). Il est testé avec Node par `tests/test_boussole_js.py` (11 tests : poses connues, 200 poses au hasard comparées à un calcul Python, recalage de l'iPhone). À vérifier au test terrain de Noah.
+- **Seuils** : dans [boussole.toml](boussole.toml) (précision, dispersion, visée, correction, cohérence, iPhone), à ajuster sur le terrain sans toucher au code.
+
+**Tests** :
+- `tests/test_conversation.py` (12 tests), avec un faux Claude écrit à l'avance :
+  - chaque phrase va à Claude ;
+  - réponse lue phrase par phrase, une seule question, à la fin ;
+  - question restée sans réponse reposée ;
+  - pause et reprise ;
+  - « reviens au séjour » ;
+  - correction et annulation du pré-remplissage, sans contradiction ;
+  - réponse périmée abandonnée, phrase suivante pré-remplie sans attendre ;
+  - phrases en attente réunies en un seul appel ;
+  - question du parcours si Claude n'en pose pas ;
+  - « Décrivez le premier mur » de Claude compté comme sa question (pas de doublon) ;
+  - Claude indisponible ;
+  - contexte envoyé à Claude ;
+  - les 30 phrases libres jouées de bout en bout.
+- `tests/test_cerveau.py` : lecture de la réponse phrase par phrase pendant qu'elle s'écrit.
+- `tests/test_boussole_js.py` : calcul du cap de la caméra.
+
+Le prototype compte 215 tests.
+
+**Limites** :
+- **Réponses aux questions générales** : elles viennent des connaissances de Claude (Haiku), sans vérification par le serveur. Elles sont justes dans l'essai, mais parfois approximatives (validité des anciens DPE). Les consignes lui demandent de dire quand il n'est pas sûr.
+- **Récapitulatifs** : justes, mais parfois maladroits (« il reste à voir les radiateurs, déjà notés »).
+- **Latence** : environ 1,5 à 2 s de plus qu'à l'étape 5 avant la question. Elle monte à 4 s quand Claude écrit une longue première phrase, au premier message de la visite, ou au remplacement de son processus (tous les 30 messages).
+- **Diagnostiqueur qui parle sans pause** : la réponse en cours est abandonnée dès qu'il reparle, pour ne pas lui couper la parole. Un bruit fort peut aussi l'interrompre.
+- **Vouvoiement** : l'assistant vouvoie le diagnostiqueur, comme les questions du parcours. C'est une ligne des consignes, facile à changer.
 
 ## Réglages (variables d'environnement)
 
@@ -554,6 +650,7 @@ Le prototype compte 189 tests.
 | `DIAGAUTO_EFFORT` | `low` | Effort de Claude (`low` à `max`). |
 | `DIAGAUTO_IMAGES` | `message` | `message` (le plus rapide) ou `fichiers` (Claude ouvre les images avec son outil de lecture). |
 | `DIAGAUTO_CLAUDE` | trouvé automatiquement | Chemin de `claude.exe`. |
+| `DIAGAUTO_CONVERSATION` | `claude` | `claude` : Claude lit et répond à chaque phrase (étape 7). `rapide` : le serveur pose seul la question du parcours, Claude n'intervient que pour une phrase non comprise (étape 5, plus rapide mais sans conversation). |
 | `DIAGAUTO_TRANSCRIPTION` | `auto` | `rapide` (FastConformer, Whisper en second avis : voir « Étape 5 »), `whisper`, `fastconformer`, `simulation`, ou `auto` (`rapide` si les deux moteurs sont installés, sinon Whisper). |
 | `DIAGAUTO_WHISPER_MODELE` | `auto` | `auto` = `large-v3-turbo` avec carte graphique, `small` sinon. |
 | `DIAGAUTO_WHISPER_FAISCEAU` | `5` | Largeur de recherche de Whisper. `1` est un peu plus rapide (−0,2 s) mais se trompe davantage sur les mots courts. |
@@ -565,9 +662,7 @@ Le prototype compte 189 tests.
 ## Limites connues de ce prototype
 
 - **Testé une fois sur iPhone par Noah** (version précédente). Restent à tester : Android récent, Android ancien, et cette version corrigée.
-- **L'extraction immédiate** ne connaît que le vocabulaire listé dans `assistant/extraction.py`.
-  - Le reste est compris par Claude, en relecture de la phrase.
-  - Mais la question du parcours part avant cette relecture : un mot inconnu des règles peut donc entraîner une question sur ce qui vient d'être dit. Le vocabulaire est à enrichir au fil des tests.
+- **L'extraction immédiate** ne connaît que le vocabulaire listé dans `assistant/extraction.py`. Depuis l'étape 7, ce n'est plus un frein : Claude lit chaque phrase et comprend le reste. En mode `rapide`, en revanche, la question du parcours part avant Claude.
 - **Le parcours suit un ordre** (murs, plafond, plancher, fenêtres, radiateurs). Le diagnostiqueur peut décrire dans l'ordre qu'il veut, tout est noté. Seules les questions suivent cet ordre ; leur contenu s'adapte à ce qui a été dit (étape 4).
 - **Hypothèse à faire valider par un diagnostiqueur** : une paroi sur local chauffé n'est pas déperditive en 3CL, donc ses détails ne sont pas demandés.
 - **Certificat fait maison** :
@@ -577,10 +672,10 @@ Le prototype compte 189 tests.
 - La vidéo est gardée **dans la mémoire du téléphone** jusqu'à la fin. Cela convient pour des tests de quelques minutes ; en 1080p, environ 60 Mo par minute.
 - La **détection de fin de phrase** se fait sur le volume du son, ce qui est simple. Silero VAD reste à évaluer, une fois sa licence vérifiée.
 - La **voix** est celle du navigateur ; Piper (voix fr_FR-siwis, sur le serveur) viendra ensuite.
-- La **boussole** et le **gyroscope** du téléphone sont enregistrés (une mesure par seconde) : voir « Étape 6 ». La boussole n'a pas encore été essayée sur un vrai téléphone ; sur iPhone, le cap utilisé (`webkitCompassHeading`) est à vérifier quand le téléphone est tenu droit.
+- La **boussole** et le **gyroscope** du téléphone sont enregistrés (une mesure par seconde) : voir « Étape 6 ». La boussole n'a pas encore été essayée sur un vrai téléphone ; le cap de la caméra de l'iPhone tenu droit (étape 7) est à vérifier au test terrain.
 - **Deux processus Claude Code par visite** : un pour les réponses, un pour la veille, pour que la veille ne retarde jamais une réponse.
 - Différences avec le plan § 3.6 :
-  - **Pas d'« outils » au sens de l'API** : Claude répond en JSON (question + actions), et le serveur applique les actions après vérification. Les actions sont `piece_courante`, `signaler_element`, `enregistrer_reponse`, `marquer_sans_objet`, `cloturer`, `copier`, et depuis l'étape 4 `scinder`, `compter`, `regle` et `exception`.
+  - **Pas d'« outils » au sens de l'API** : Claude répond en JSON (question + actions), et le serveur applique les actions après vérification. Les actions sont `piece_courante`, `signaler_element`, `enregistrer_reponse`, `marquer_sans_objet`, `cloturer`, `copier`, depuis l'étape 4 `scinder`, `compter`, `regle` et `exception`, depuis l'étape 6 `orienter`, et depuis l'étape 7 `pause`, `reprendre` et `annuler`.
   - **`champs_manquants` n'existe plus** : la liste des manques est envoyée à chaque message, ce qui évite un aller-retour.
 
 ## Organisation du code
@@ -591,20 +686,20 @@ Le prototype compte 189 tests.
 | `assistant/groupes.py` | Découpage d'une phrase en groupes, quantités et exceptions (« 9 … et 1 … », « dont une », « tous sauf un »). |
 | `assistant/noms.py` | Noms parlants à l'oral : « ce mur », « le mur côté voisin », « le mur nord », jamais « le mur 3 ». |
 | `assistant/plausibilite.py` | Contrôle des valeurs invraisemblables (un mur de 30 m de long) avant de les noter. |
-| `assistant/boussole.py` | Boussole et gyroscope du téléphone : orientation des murs et des fenêtres, fiabilité. |
+| `assistant/boussole.py`, `boussole.toml` | Boussole et gyroscope du téléphone : orientation des murs et des fenêtres, fiabilité ; seuils réglables. |
 | `assistant/citations.py`, `assistant/actions.py` | Vérification des citations ; application des actions proposées. |
 | `assistant/lexique.py` | Lexique métier pour la transcription, corrections connues (« parpin » → parpaing). |
 | `assistant/vad.py`, `assistant/transcription.py` | Fin de phrase ; transcription (FastConformer, Whisper en second avis). |
 | `assistant/extraction.py` | Extraction immédiate, sans IA, de tout ce qui est dit (description libre, réponse courte, mot mal transcrit deviné, « je ne sais pas »). |
 | `assistant/garde.py` | Garde-fous sur les questions : une seule, jamais « répétez », jamais un champ déjà rempli ou déjà demandé. |
-| `assistant/cerveau.py` | Claude via Claude Code : consignes, messages, processus gardé ouvert. |
+| `assistant/cerveau.py` | Claude via Claude Code : consignes de conversation, messages, processus gardé ouvert, réponse lue phrase par phrase. |
 | `assistant/parcours.py` | Le parcours de la visite : quelle question poser maintenant (mur par mur, plafond, plancher…). |
 | `assistant/simulation.py` | Cerveau de simulation, sans Claude (règles et parcours seulement). |
-| `assistant/evaluer.py` | Évaluation sur une pièce complète à 4 murs, avec la latence de chaque étape. |
-| `assistant/session.py` | Une visite : chaîne son → texte → Claude → voix, veille, journal, bilan. |
+| `assistant/evaluer.py` | Évaluations : pièce complète à 4 murs, réponses difficiles, 30 phrases libres en conversation. |
+| `assistant/session.py` | Une visite : chaîne son → texte → pré-remplissage → Claude → voix (trois postes en file, sans blocage), pause, veille, journal, bilan. |
 | `assistant/serveur.py`, `assistant/__main__.py` | Serveur web et lancement. |
 | `assistant/rejouer.py` | Rejouer une vidéo de test. |
-| `web/` | La page du téléphone. |
+| `web/` | La page du téléphone ; `web/boussole.js` : cap de la caméra par la matrice de rotation. |
 
 Tests (sans Claude ni réseau ; Claude Code y est remplacé par un faux programme) :
 
