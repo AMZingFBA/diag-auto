@@ -107,7 +107,7 @@ Au premier lancement, le modèle de transcription se télécharge (environ 500 M
 ## Sur le téléphone
 
 1. Ouvrez l'adresse affichée pour le téléphone, dans Chrome (Android) ou Safari (iPhone).
-2. Un avertissement de sécurité s'affiche, parce que le certificat est fait maison. Touchez « Paramètres avancés », puis « Continuer vers le site ». C'est normal pour ce prototype : le HTTPS est obligatoire pour que le téléphone autorise la caméra et le micro.
+2. Un avertissement de sécurité s'affiche, parce que le certificat est fait maison. Touchez « Paramètres avancés », puis « Continuer vers le site ». C'est normal pour ce prototype : le HTTPS est obligatoire pour que le téléphone autorise la caméra et le micro. Le téléphone oublie parfois ce certificat (« Serveur injoignable » alors que le Wi-Fi est bon) : touchez le lien « toucher ici » de l'accueil, ou ouvrez l'adresse suivie de `/api/statut`, et acceptez de nouveau.
 3. Branchez une **oreillette**, de préférence. Sans oreillette, la voix de l'assistant passe par le haut-parleur et peut être captée par le micro.
 4. Touchez **Démarrer la visite** et autorisez la caméra et le micro. Sur iPhone, autorisez aussi l'accès à l'**orientation** (boussole) : elle donne l'orientation des murs et des fenêtres (« le mur nord »). Si vous refusez, l'assistant demandera une fois l'orientation d'un mur à l'oral. Une petite boussole reste affichée en haut à droite (voir « Étape 6 »).
 5. Filmez en parlant normalement, en décrivant librement :
@@ -118,13 +118,15 @@ Au premier lancement, le modèle de transcription se télécharge (environ 500 M
    - « je ne sais pas » ;
    - « pas de radiateur ici ».
 6. À côté de chaque question sur un élément, l'écran montre sa **vignette** : l'image filmée quand il a été décrit. Le diagnostiqueur sait ainsi de quel mur on parle.
-7. Les boutons :
+7. Sous chaque question, ses **réponses en boutons** : un appui vaut une réponse dite, et la question suivante arrive aussitôt. On peut répondre à l'oral ou au doigt, au choix.
+8. Les boutons :
+   - **📋 Fiche** : toute la pièce en cours, chaque information avec sa valeur ou « à remplir » ; un appui sur une ligne pour la remplir ou la corriger ;
    - **Assistant actif / muet** : en mode muet, les questions s'affichent sans être lues.
    - **Terminer** :
      - au 1er appui, l'assistant dit ce qui manque encore ;
      - au 2e appui (« Arrêter vraiment »), la visite s'arrête.
-8. À la fin :
-   - **Envoyer la vidéo au serveur** : le fichier original, sans recompression ; **jamais par WhatsApp**.
+9. À la fin :
+   - la vidéo complète part toute seule vers le PC (fichier original, sans recompression ; **jamais par WhatsApp**) : rester sur la page jusqu'à « Vidéo envoyée ✓ » ; le bouton **Envoyer la vidéo au serveur** sert à réessayer ;
    - ou **Garder la vidéo sur le téléphone**.
 
 Si le réseau coupe (cave, combles) :
@@ -802,6 +804,52 @@ Sur la dernière visite (le rejeu de la visite de Noah avec le code de l'étape 
 
 **Test** : `tests/test_pont_liciel.py` construit une visite avec la checklist de l'assistant, l'exporte comme la session,
 puis vérifie les pièces et le Carrez produits. Le prototype compte 264 tests.
+
+## Test de Noah du 22/10 après-midi : questionnaire en direct, moins de questions
+
+Visite `sessions/20261022-153605-67f6df` (11 min 43, trois pièces). Noah : « il pose trop de questions que je répète, des
+fois plus de réponse pendant 2 minutes, il me fait passer à une pièce alors qu'on n'a pas fini celle-là ; un questionnaire
+en direct sur le téléphone pour cocher les réponses en même temps qu'à l'oral ». Analyse complète et rejeu avant/après :
+[rejeux/20261022-noah-apres-midi.md](rejeux/20261022-noah-apres-midi.md).
+
+**Questionnaire en direct** (`web/app.js`, `assistant/reponses.py`) :
+- chaque question arrive sur le téléphone **avec ses réponses en boutons** (« PVC · Bois · Alu · Bois-alu · Métal »,
+  « Oui · Non », « Non isolé · Isolé par l'intérieur… ») ; un appui vaut une réponse dite : notée tout de suite (citation
+  « coché sur le téléphone »), et la question suivante part aussitôt, sans attendre Claude ;
+- le bouton **📋 Fiche** montre toute la pièce en cours (et le chauffage, l'eau chaude, la ventilation) : chaque information
+  utile, sa valeur ou « à remplir » en rouge ; un appui sur une ligne montre ses réponses, pour compléter ou corriger ;
+- les réponses en boutons sont celles du vocabulaire des règles : une réponse cochée est rangée comme la même réponse dite.
+
+**Moins de questions répétées** :
+- **bruits** : la transcription rapide donnait des lettres sur un bruit (« A. », « F. », « Il. ») ; l'assistant y voyait une
+  réponse incomprise et reposait sa question (« PVC, bois ou alu ? » 4 fois). Une phrase courte sans aucun mot connu est
+  maintenant réécoutée par Whisper : bruit (rien n'est dit), ou vraie réponse ;
+- **réponses courtes mal transcrites** : « Vaime s. » (VMC), « Na. » (non) ; Whisper les retrouve, guidé au besoin par les
+  réponses attendues à la question posée ;
+- **« Un autre mur dans cette pièce ? »** (10 fois) devient « D'autres murs sur l'extérieur ou un local non chauffé ? »,
+  une fois par pièce, reposée seulement après un nouveau mur de ce genre (un mur sur un voisin chauffé ne compte pas pour
+  le DPE). Claude ne peut plus la reposer sous une autre forme : ses questions ont la même clé que celles du parcours.
+  « Pas d'autre mur » peut être dit à tout moment ;
+- **« c'est le même mur »** réunit les deux murs, même sans « oui » au début ou transcrit avec un point d'interrogation.
+
+**Plus de longs silences** : une réponse coupée par un bruit n'était reprise que s'il n'y avait eu qu'un seul bruit ; avec
+deux bruits de suite (téléphone manipulé), jamais, d'où 30 à 35 s de silence et les « Allô ? ». Elle est reprise dès
+qu'aucune vraie phrase n'a été dite depuis.
+
+**Pas de changement de pièce avant la fin de la pièce** : « On est dans la cuisine ? », proposé d'après l'image alors que la
+première pièce n'était pas finie, n'est plus proposé tant qu'il manque quelque chose ; Noah peut toujours le dire lui-même.
+La première pièce n'est plus nommée « U » (« c'est la première pièce » : « Pièce 1 »).
+
+**« Hors réseau » alors que le réseau est bon** (même jour) : le téléphone avait oublié le certificat du serveur, et la page
+gardée en mémoire s'affichait sans montrer l'avertissement. L'accueil affiche maintenant « Serveur injoignable depuis ce
+téléphone » avec un lien (« toucher ici ») qui fait réapparaître l'avertissement du certificat.
+
+**Rejeu de la visite** (même son, nouveau code) : « D'autres murs… ? » 2 fois au lieu de 10 ; aucun bruit pris pour une
+réponse (17 avant) ; délai de réponse au pire 9,1 s au lieu de 32 s ; un seul mur pour la phrase qui en donnait deux ;
+plus de « pièce U » ni de changement de pièce proposé trop tôt. Détails et limites dans le rapport de rejeu.
+
+**Tests** : `tests/test_questionnaire.py` (19), `tests/test_capture.py` (3), scénarios de référence mis à jour. Le prototype
+compte 287 tests.
 
 ## Réglages (variables d'environnement)
 
