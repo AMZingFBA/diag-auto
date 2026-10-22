@@ -173,3 +173,20 @@ def test_claude_probable_donne_une_confirmation_et_pas_une_valeur(tmp_path):
     assert session.checklist.trouver_element("E1").valeur("type").note == "confirmé : « radiateur à eau »"
     contexte = cerveau.contextes[-1]
     assert "radiateur à eau" in contexte.valeurs_attendues and contexte.derniere_question.startswith("E1.type")
+
+
+def test_transcription_inventee_sur_du_silence_ecartee():
+    from types import SimpleNamespace as S
+
+    from assistant.extraction import chiffres
+    from assistant.lexique import est_recopie_du_contexte
+    from assistant.transcription import transcription_douteuse
+
+    # Mesures réelles (enregistrement de Noah) : « Laine de verre. » inventé, puis de vraies réponses.
+    assert transcription_douteuse("Laine de verre.", [S(no_speech_prob=0.40, avg_logprob=-1.25)])
+    assert transcription_douteuse("Merci d'avoir regardé cette vidéo.", [S(no_speech_prob=0.50, avg_logprob=-0.84)])
+    assert not transcription_douteuse("Eau chaude.", [S(no_speech_prob=0.01, avg_logprob=-0.14)])
+    assert not transcription_douteuse("BASSE.", [S(no_speech_prob=0.01, avg_logprob=-0.71)])
+    assert not transcription_douteuse("C'est la laine de verre.", [S(no_speech_prob=0.00, avg_logprob=-0.21)])
+    assert est_recopie_du_contexte("Laine de verre.") and not est_recopie_du_contexte("C'est la laine de verre.")
+    assert chiffres("deux milles") == "2000"

@@ -21,7 +21,7 @@ class Reglages:
     effort: str = field(default_factory=lambda: _env("DIAGAUTO_EFFORT", "low"))
     # Images envoyées à Claude : « message » (dans le message, le plus rapide) ou « fichiers » (outil Read).
     images: str = field(default_factory=lambda: _env("DIAGAUTO_IMAGES", "message"))
-    # Transcription : « auto » (faster-whisper s'il est installé), « whisper » ou « simulation ».
+    # Transcription : « auto » (faster-whisper s'il est installé), « whisper », « fastconformer » (option) ou « simulation ».
     transcription: str = field(default_factory=lambda: _env("DIAGAUTO_TRANSCRIPTION", "auto"))
     whisper_modele: str = field(default_factory=lambda: _env("DIAGAUTO_WHISPER_MODELE", "auto"))
     whisper_appareil: str = field(default_factory=lambda: _env("DIAGAUTO_WHISPER_APPAREIL", "auto"))

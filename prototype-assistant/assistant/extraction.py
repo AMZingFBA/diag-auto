@@ -32,13 +32,13 @@ _UNITES = {
     "dix": 10, "onze": 11, "douze": 12, "treize": 13, "quatorze": 14, "quinze": 15, "seize": 16,
     "vingt": 20, "vingts": 20, "trente": 30, "quarante": 40, "cinquante": 50, "soixante": 60,
 }
-_NOMBRE_MOTS = set(_UNITES) | {"un", "une", "cent", "cents", "mille", "et"}
+_NOMBRE_MOTS = set(_UNITES) | {"un", "une", "cent", "cents", "mille", "milles", "et"}
 
 
 def _valeur_mots(mots: list[str]) -> int:
     total, courant = 0, 0
     for mot in mots:
-        if mot == "mille":
+        if mot in ("mille", "milles"):
             total += (courant or 1) * 1000
             courant = 0
         elif mot in ("cent", "cents"):

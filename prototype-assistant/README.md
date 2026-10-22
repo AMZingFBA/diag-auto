@@ -173,6 +173,8 @@ cd prototype-assistant
 
 Ajoutez `--simulation` pour l'exécuter sans Claude. Le même parcours est vérifié, question par question, par les tests automatiques (`tests/test_dialogue.py`). Les 10 phrases avec fautes de transcription de l'étape 1 sont vérifiées dans `tests/test_extraction.py`.
 
+`python -m assistant.evaluer --comprehension` joue des réponses difficiles, que les règles ne peuvent pas trancher seules. Il montre comment Claude les interprète par rapport à la question posée (voir « Étape 3 »).
+
 ## Ce qui est enregistré
 
 Chaque visite a son dossier `prototype-assistant/sessions/<date-heure-code>/`. Ce dossier n'est pas versionné dans git : il contient des images et du son d'un logement.
@@ -285,6 +287,75 @@ Vérifié aussi avec le vrai Claude :
 - La voix du navigateur parle aussi un peu plus vite.
 - Pour aller plus bas, il faut une **carte graphique** pour la transcription. Un essai avec une fenêtre d'analyse plus courte (10 ou 15 s au lieu de 30 s) n'a rien gagné : le moteur la complète de toute façon à 30 s.
 
+## Étape 3 : compréhension orale robuste (22/10/2026)
+
+Cas réel de Noah : il a dit « eau chaude », la transcription a donné « Oh ! est chaude », et l'assistant n'a pas compris. La réponse est maintenant interprétée **par rapport à la dernière question posée**, en quatre couches. Chacune ne sert que si la précédente n'a pas suffi.
+
+1. **Nettoyage de l'oral** :
+   - les hésitations disparaissent (« euh », « hum », « bah ») ;
+   - les répétitions aussi (« le… le mur », « roulant, roulant ») ;
+   - ainsi que les faux départs d'un bégaiement (« pa… parpaing », « dou… double ») ;
+   - les points de suspension ne coupent plus la phrase (« le mur il fait… trente » = 30 cm) ;
+   - une correction l'emporte (« alu… enfin bois » = bois ; « brique, non, parpaing » = parpaing).
+2. **Ressemblance avec les réponses possibles de la question**, par l'orthographe **et par le son**, avec une clé phonétique française :
+   - « Oh ! est chaude » se prononce comme « eau chaude » (ressemblance 0,91), ce qui donne radiateur à eau ;
+   - de même, « vie de sanitaire » donne vide sanitaire, « comble perdue » combles perdus, « doublevitrage » double, « pévécé » PVC, « condensassion » condensation, « ballon thermo » thermodynamique ;
+   - les mots courts doivent se prononcer exactement pareil, sinon « allô » ressemblerait à « agglo ».
+3. **Doute** : si plusieurs réponses se ressemblent, si la ressemblance est faible, ou si deux valeurs sont dites (« bois… ou alu ? »), l'assistant **propose l'interprétation la plus probable** : « J'ai compris double, c'est bien ça ? ».
+   - « Oui », « c'est ça », « exactement » : la valeur est notée, marquée « confirmé ».
+   - « Non, triple » : c'est triple qui est noté.
+   - « Non » : rien n'est noté, et l'assistant n'insiste pas.
+4. **Claude, avec le contexte**, quand les règles n'ont rien compris :
+   - il reçoit la dernière question, ses **valeurs possibles** et les images ;
+   - s'il est sûr, il note ;
+   - s'il n'est que « probable », le serveur demande confirmation au lieu de noter ;
+   - il ne fait jamais répéter.
+
+Ce qui est deviné, déduit, confirmé ou dit avec un doute (« je crois que c'est du béton ») est noté comme tel, pour l'écran de validation.
+
+**Tests** : 31 transcriptions bruitées réalistes (`tests/test_comprehension.py`), chacune avec son interprétation attendue (notée, à confirmer, « je ne sais pas » ou rien à noter). S'y ajoutent les réponses à une confirmation et le cas où Claude n'est que probable.
+
+**Cas difficiles avec le vrai Claude** (`python -m assistant.evaluer --comprehension`) :
+
+| Question | Réponse entendue | Résultat |
+|---|---|---|
+| Au-dessus du plafond ? | « Au-dessus c'est le voisin, il est chauffé. » | noté : local chauffé (logement au-dessus) |
+| Sous le plancher ? | « En dessous y a le parking de l'immeuble. » | « J'ai compris local non chauffé : garage, c'est bien ça ? » (Claude, 1,6 s) |
+| Radiateurs à eau ou électriques ? | « Ils sont branchés sur la chaudière. » | « J'ai compris radiateur à eau, c'est bien ça ? » |
+| Fenêtres PVC, bois ou alu ? | « Du plastique blanc. » | « J'ai compris PVC, c'est bien ça ? » (Claude, 1,9 s) |
+| Le mur est en quoi ? | « Du, euh, comment on dit, du bloc creux. » | noté : parpaing |
+| Radiateurs à eau ou électriques ? | « Oh ! » | rien : trop peu pour deviner ; rien n'est inventé, rien n'est redemandé |
+
+**Vocabulaire métier donné à la transcription** (comparé sur l'enregistrement de Noah) :
+- **Retenu : un contexte enrichi avec la liste de Noah** (parpaing, PVC, double vitrage, VMC hygro, chaudière à condensation, PAC air/eau, ballon thermodynamique, combles perdus, ITI/ITE, vide sanitaire, terre-plein…).
+  - Gains : « eau chaude » au lieu de « Chaude », « Basse » au lieu de « BAS ! », et plus de « 100 cm » inventé.
+  - Même vitesse qu'avant.
+- **À ne jamais mettre dans ce contexte** : « je ne sais pas », « oui », « non ». Whisper les inventait sur du silence, et un « je ne sais pas » inventé marquerait un champ « inconnu ».
+- **Écartés : les « hotwords » de faster-whisper**. Ils sont plus lents (2,9 s au lieu de 2,4 s) et ont **inventé des phrases métier sur du silence** (« Laine de verre, polystyrène, radiateur à condensation. »).
+- **Garde-fou** : même avec le contexte retenu, Whisper a recopié « Laine de verre. » deux fois sur des passages sans parole. Une telle invention, en réponse à une question sur l'isolation, deviendrait une valeur.
+  - Whisper donne pour chaque passage une probabilité « pas de parole » et une confiance. Sur les 52 phrases de Noah :
+    - les inventions sont à 0,39–0,50, avec une confiance de −0,8 à −1,3 ;
+    - les vraies réponses sont à 0,09 au plus.
+  - Une transcription douteuse, ou recopiée du contexte sur un passage probablement sans parole, est donc écartée.
+  - Vérifié sur le son réel : les deux « Laine de verre » disparaissent ; « Extérieur », « eau chaude » et « BASSE » restent.
+
+**Modèles de transcription essayés** (52 phrases de l'enregistrement de Noah, ce PC sans carte graphique) :
+
+| Moteur | Temps par phrase | Qualité observée | Licence |
+|---|---|---|---|
+| **Whisper small** (OpenAI), avec le contexte et le garde-fou : **retenu par défaut** | 2,3 s | bon en général ; quelques erreurs (« Blois » pour « Bois », « Ocean » pour « eau chaude ») | MIT |
+| Whisper small français (`bofenghuang/whisper-small-cv11-french`) | 2,4 s | meilleur sur certaines phrases (« Derrière le rideau », « eau chaude ») mais invente davantage sur du silence (« Réalisé par l'Institut… », « Brique, parpaing, basse température. ») ; nombres en lettres | Apache-2.0 (version CTranslate2 publiée par un tiers : à vérifier) |
+| **FastConformer français** (NVIDIA, version ONNX) : **en option** | **0,05 s** | souvent juste (« Je ne t'entends plus », « Derrière le rideau », « Bois ») ; parfois abîmé (« de la' prriix » pour brique, « Euxux chaudes ») ; sur du silence, du charabia mais jamais de valeur métier | CC-BY-4.0 (mention de NVIDIA obligatoire ; version ONNX publiée par OpenVoiceOS : à vérifier avant usage commercial) |
+
+Aucun Whisper plus gros ne tient la vitesse sur ce processeur : turbo, medium et les versions françaises « distil » gardent un gros encodeur et prennent 7 à 10 s.
+
+**À essayer avec Noah** : le FastConformer ramènerait la question à **moins de 1 s après la fin de la phrase** (au lieu d'environ 3 s). Ses mots abîmés sont en partie rattrapés par la comparaison phonétique et par Claude. Pour l'essayer :
+
+```
+set DIAGAUTO_TRANSCRIPTION=fastconformer
+..\.venv\Scripts\python -m assistant
+```
+
 ## Réglages (variables d'environnement)
 
 | Variable | Défaut | Rôle |
@@ -294,12 +365,12 @@ Vérifié aussi avec le vrai Claude :
 | `DIAGAUTO_EFFORT` | `low` | Effort de Claude (`low` à `max`). |
 | `DIAGAUTO_IMAGES` | `message` | `message` (le plus rapide) ou `fichiers` (Claude ouvre les images avec son outil de lecture). |
 | `DIAGAUTO_CLAUDE` | trouvé automatiquement | Chemin de `claude.exe`. |
-| `DIAGAUTO_TRANSCRIPTION` | `auto` | `whisper`, `simulation`, ou `auto`. |
+| `DIAGAUTO_TRANSCRIPTION` | `auto` | `whisper`, `fastconformer` (option rapide à l'essai, voir « Étape 3 »), `simulation`, ou `auto` (Whisper s'il est installé). |
 | `DIAGAUTO_WHISPER_MODELE` | `auto` | `auto` = `large-v3-turbo` avec carte graphique, `small` sinon. |
 | `DIAGAUTO_WHISPER_FAISCEAU` | `5` | Largeur de recherche de Whisper. `1` est un peu plus rapide (−0,2 s) mais se trompe davantage sur les mots courts. |
 | `DIAGAUTO_FIN_SILENCE` | `0.7` | Silence (en secondes) qui termine une phrase. Trop court, l'assistant coupe la parole ; trop long, il paraît lent. |
 | `DIAGAUTO_VEILLE_S` | `10` | Pendant un silence, l'assistant regarde les images toutes les N secondes et peut poser une question. |
-| `DIAGAUTO_QUESTIONS_MINUTE` | `6` | Nombre maximal de questions par minute. |
+| `DIAGAUTO_QUESTIONS_MINUTE` | `20` | Nombre maximal de questions par minute (garde-fou ; c'est le diagnostiqueur qui donne le rythme). |
 | `DIAGAUTO_CODE` | aucun | Code d'accès demandé par la page. **Obligatoire si le serveur est joignable depuis Internet** (tunnel). |
 
 ## Limites connues de ce prototype

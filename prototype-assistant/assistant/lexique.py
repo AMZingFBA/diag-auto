@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 # Donné à Whisper comme contexte : il oriente l'orthographe des mots métier et des réponses courtes.
 # Comparé sur l'enregistrement de Noah (22/10/2026) : meilleur que le contexte précédent (« eau chaude » au
@@ -60,6 +61,17 @@ def corriger(texte: str) -> str:
     for motif, remplacement in CORRECTIONS:
         texte = re.sub(motif, remplacement, texte, flags=re.IGNORECASE)
     return " ".join(texte.split())
+
+
+def _comparable(texte: str) -> str:
+    sans_accents = unicodedata.normalize("NFKD", texte).encode("ascii", "ignore").decode().lower()
+    return " ".join(re.sub(r"[^a-z0-9/]+", " ", sans_accents).split())
+
+
+def est_recopie_du_contexte(texte: str) -> bool:
+    """Le texte n'est-il qu'un morceau recopié du vocabulaire donné en contexte à Whisper ?"""
+    morceau = _comparable(texte)
+    return bool(morceau) and f" {morceau} " in f" {_comparable(CONTEXTE_WHISPER)} "
 
 
 def est_hallucination(texte: str) -> bool:
