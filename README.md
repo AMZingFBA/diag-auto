@@ -22,6 +22,13 @@ phrase au mur visé (boussole, sinon suivi de la vidéo). Elle écrit `etat-cons
 priorité : une seule pièce par endroit, pièces revisitées, questions pour le diagnostiqueur. Pas encore de plan ni de
 surfaces. Détails, mesures et limites : [prototype-assistant/README.md](prototype-assistant/README.md), « Étape 12 ».
 
+**Étape 13 (22/10/2026)** : le DPE est décrit **pour tout le logement, par côté** (nord, est, sud, ouest), et non pièce
+par pièce. L'assistant ne demande jamais dans quelle pièce on est ; il demande « Ce mur donne sur quoi ? », puis les
+fenêtres et portes de ce mur, puis les côtés qui manquent, le plafond, le plancher et les équipements, une seule fois. Un
+même côté peut avoir plusieurs parties (« mur est : 60 % sur le voisin, 40 % dehors »). Les pièces ne servent plus qu'au
+Carrez et au repérage. Le rapport de `diagauto generer` montre ce DPE du logement par côté (il n'est pas encore écrit dans
+les tables LICIEL). Détails : [prototype-assistant/README.md](prototype-assistant/README.md), « Étape 13 ».
+
 ## Installation (Windows)
 
 ```
@@ -56,6 +63,9 @@ Vérifier que toutes les tables d'un ou plusieurs dossiers se relisent et se ré
   `--visite <dossier>`). On y lit les pièces, et, pour le rapport, les murs, fenêtres, portes et émetteurs. Si la carte des
   pièces a été calculée (étape 12), on lit `etat-consolide.json` à la place : une seule pièce par endroit, et le rapport
   ajoute les pièces revisitées, les questions de la carte et les éléments notés dans une pièce mais filmés dans une autre.
+  Pour une visite de l'étape 13, le rapport décrit aussi le **DPE du logement** : chaque côté avec ses murs (et leurs
+  parties) et les fenêtres et portes de chacun, le plafond, le plancher, les équipements et ce qui reste à renseigner ; une
+  valeur déduite y est marquée comme telle. Ces informations ne sont pas encore écrites dans les tables LICIEL.
 - **Modèle** : notre dossier de test LICIEL 2610210001 (4 pièces : Sejour, Cuisine, Chambre 1, Salle de bains), ici la
   copie d'Hermes, identique à l'octet au dossier LICIEL. Il est **lu seulement**.
 - **Sortie** : `sorties/dossier-test/XML/Table_*.xml` (autre dossier : `--sortie`), plus `diagauto-pont.json` (ce qui a été

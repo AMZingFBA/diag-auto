@@ -937,8 +937,8 @@ Détails, avant/après et réponses de Claude : [rejeux/20261022-etape12-carte.m
 - **Orientation des murs** : l'axe des murs d'une pièce est estimé d'après les caps où la caméra s'attarde. Avec la boussole
   lue une fois par seconde, il a varié de 40° pour la pièce U d'un calcul à l'autre (images retenues différentes). Le
   nord, l'est, le sud ou l'ouest d'un mur est donc à confirmer, en attendant les capteurs à 20 mesures par seconde et une
-  estimation par les lignes des murs dans l'image.
-- **Phrase → mur** : « ce mur », « celui-là » (le mur en face) ; pas encore « le deuxième mur » ni « à gauche ».
+  estimation par les lignes des murs dans l'image. *Étape 13 : axe du logement, voir plus bas.*
+- **Phrase → mur** : « ce mur », « celui-là » (le mur en face) ; pas encore « le deuxième mur » ni « à gauche ». *Fait à l'étape 13.*
 - **Pièces identiques** (deux chambres pareilles) : vérification géométrique et questions ; pas encore essayé sur une vraie
   visite.
 - Claude varie un peu d'un calcul à l'autre (une hésitation de plus ou de moins) ; ses réponses sont gardées dans
@@ -951,6 +951,101 @@ Détails, avant/après et réponses de Claude : [rejeux/20261022-etape12-carte.m
 - `tests/test_pont.py` (racine du projet) : état consolidé lu par `diagauto generer`.
 
 Le prototype compte 299 tests.
+
+## Étape 13 : le DPE du logement, par côté (22/10/2026)
+
+**Ce que Noah a demandé** : le DPE décrit l'**enveloppe** du logement (tout ce qui l'entoure), pas chaque pièce. On
+raisonne par côté : un « mur ouest », ce sont tous les murs ouest du logement, toutes pièces confondues. Les murs entre
+deux pièces ne comptent pas. Et pendant la visite : « qu'on soit dans le séjour ou la chambre, pour le DPE on s'en
+fiche » : l'assistant ne doit pas demander la pièce.
+
+**Ce que le diagnostiqueur entend maintenant** (sans jamais une question sur la pièce) :
+1. « Ce mur donne sur quoi ? », puis, s'il donne dehors ou sur un local non chauffé, son matériau, son épaisseur, son
+   isolation ; un mur sur un voisin ou sur une autre pièce ne demande rien de plus ;
+2. « Des fenêtres ou une porte sur ce mur ? », puis leur menuiserie, leur vitrage, leurs volets ; une porte sur un mur qui
+   donne dehors ou sur les parties communes donne dehors ou sur le palier : c'est déduit, pas demandé ;
+3. « Et côtés nord et sud, le logement donne sur quoi ? » (avec la boussole : seuls les côtés dont rien n'est dit), ou
+   « Les autres côtés du logement donnent sur quoi ? » (sans boussole). Bouton « Des voisins » ou « Non, c'est tout » ;
+4. le plafond, puis le plancher du logement, **une fois** ;
+5. le chauffage, les radiateurs (« à eau ou électriques ? », sauté s'il est déjà clair : radiateurs électriques), l'eau
+   chaude, la ventilation, **une fois** ;
+6. « C'est complet pour le DPE. »
+
+Il peut tout dire à sa façon, dans l'ordre qu'il veut : « au nord le voisin, à l'est la cage d'escalier », « au sud la
+cour, brique 30 cm, avec deux fenêtres en alu », « mur est : 60 % sur le voisin, 40 % dehors », « le mur de gauche donne
+sur le voisin ». Une pièce dite (« on passe dans la chambre ») est seulement notée, pour le Carrez et le repérage.
+
+**Comment c'est rangé** (`assistant/checklist.py`) :
+- les murs, fenêtres, portes, le plafond et le plancher sont ceux du **logement** (« enveloppe »), avec les pièces où ils
+  ont été vus ; les radiateurs, le chauffage, l'eau chaude et la ventilation aussi ;
+- un mur filmé ou dit du même côté qu'un mur déjà décrit, et qui donne sur la même chose, **le rejoint** : rien n'est
+  redemandé. Dit autrement (le même côté sur un voisin dans la chambre), c'est une **autre partie** de ce côté, avec sa
+  part ou sa longueur ; ses fenêtres vont sur la partie qui donne dehors ;
+- une fenêtre est **sur un mur** (« sur ce mur : 3 fenêtres ») ; sa boussole l'emporte sur le mur dont on parlait ;
+- les murs entre deux pièces sont gardés à part et **ignorés pour le DPE** ;
+- l'état (`etat.json`) a une partie `enveloppe` : murs par côté, murs entre pièces, plafond, plancher, fenêtres (chacune
+  avec son mur), côtés pas encore décrits ;
+- l'écran du téléphone montre la **fiche « DPE du logement »** : chaque côté, ses murs et leurs fenêtres, puis plafond,
+  plancher et équipements, à corriger d'un appui.
+
+**Points ouverts de l'étape 12, vérifiés** (`assistant/carte.py`, après la visite) :
+- **orientation des murs** : l'axe des murs était estimé pièce par pièce, sur les images prises en balayant ; il variait de
+  40° d'un calcul à l'autre pour la pièce U. Désormais :
+  - avec la boussole, l'axe est celui du **logement** (les murs des pièces sont parallèles), estimé sur toutes les pièces ;
+    une pièce que cet axe explique vraiment mal garde le sien ;
+  - le cap de chaque image vient du **suivi de la vidéo**, recalé sur **toutes** les mesures de boussole des images
+    reliées entre elles, chaque mesure comparée au cap de son propre instant (avant : une seule mesure, prise jusqu'à
+    0,4 s à côté pendant que la caméra tourne) ;
+  - les murs désignés pendant la visite (« ce mur ») comptent davantage ;
+  - des murs tournés de près de 45° par rapport au nord (côté incertain) deviennent une question ;
+  - un côté filmé différent du côté noté par l'assistant devient une question.
+- **« le mur de gauche », « sur ma droite », « celui derrière moi », « en face »** : le mur visé est celui de la caméra
+  décalé de 90° ou 180°, à l'instant où c'est dit (« ça donne derrière sur les toilettes » n'est pas pris pour « derrière
+  moi ») ;
+- **« le deuxième mur »** : le deuxième montré dans la pièce (comme pendant la visite) ; à défaut, le deuxième noté par
+  l'assistant dans la pièce.
+
+| Essai | Avant | Après |
+|---|---|---|
+| Vidéo de synthèse, boussole correcte | 5 phrases sur 5 au bon mur | 5 sur 5 |
+| Même vidéo, boussole à 1 mesure par seconde, bruitée de ±20° (6 tirages) | 24 sur 30 ; axes des deux pièces écartés jusqu'à 74° | **30 sur 30** ; un seul axe, juste à 12° près |
+| « à gauche », « sur ma droite », « derrière moi », « le deuxième mur » (synthèse) | non rattachés | 5 sur 5 |
+| Visite de Noah, après-midi (images à 1 par seconde, boussole) | axe de U variable de 40° ; cuisine seule | **un seul axe (67°) pour U, la cuisine et la chambre** |
+
+**Pont LICIEL** (`diagauto/pont.py`) : le rapport de `diagauto generer` (texte et `diagauto-pont.json`, partie `dpe`)
+décrit le DPE du logement : chaque côté, ses murs et leurs parties, les fenêtres et portes de chacun, le plafond, le
+plancher, les équipements, les côtés pas encore décrits et ce qui reste à renseigner. Une valeur déduite y est marquée
+« déduit ». Les pièces restent pour le Carrez, avec ce qui y a été vu. **Ce DPE n'est pas encore écrit dans les tables
+LICIEL** : c'est l'étape suivante du plan (docs/01-cadrage.md).
+
+**Relecture** : une relecture indépendante du code a trouvé 9 défauts, tous corrigés et testés (`tests/test_enveloppe.py`) :
+« il l'est » pris pour le côté est ; « par l'intérieur » pris pour un mur sur l'intérieur ; la deuxième partie d'un mur
+sans côté ; « le reste » d'un mur pris pour « les autres murs » ; la longueur d'une partie recopiée sur l'autre ; une
+fenêtre rangée sans tenir compte de sa pièce ; la porte déduite non mise à jour quand son mur est corrigé ; un mur réuni
+d'office à un autre puis dit différent, qui écrasait le premier ; et l'évaluation qui plantait. Ont aussi été corrigés :
+« radiateur basse » pris pour « radiateur acier » (donc « à eau » inventé), et le chauffage électrique déduit des
+radiateurs seulement si les radiateurs étaient dits avant.
+
+**Rejeu des visites de Noah** (phrases réellement dites, sans Claude ni boussole) : voir
+[rejeux/20261022-etape13-dpe-par-cote.md](rejeux/20261022-etape13-dpe-par-cote.md). Aucune question sur la pièce ; les
+murs de la vraie visite sont reconnus et nommés comme avant (« le mur des 3 fenêtres », « le mur côté voisin »).
+
+**Limites, honnêtement** :
+- **Sans boussole**, on ne sait pas de quel côté est un mur : il est rangé « côté à trouver », et l'assistant demande une
+  fois « Les autres côtés du logement donnent sur quoi ? ». « C'est tout » clôt la liste des murs.
+- Un mur que rien ne distingue (pas de côté, pas de repère, pas de fenêtre) se nomme encore par son rang dans sa pièce
+  (« le deuxième mur », « le premier mur du séjour » vu d'ailleurs).
+- Les parties d'un mur ont leur part ou leur longueur dite ; leur **surface** n'est pas encore calculée (pas de plan coté).
+- **Hypothèses 3CL à faire valider** : un mur sur un voisin ou sur une pièce chauffée n'est pas déperditif (rien d'autre
+  n'est demandé) ; l'orientation d'un mur sert à ranger le logement par côté et celle d'une fenêtre aux apports solaires.
+- Pas encore testé en vrai par Noah avec ce parcours ; les vraies visites n'ont que des images à 1 par seconde (le suivi
+  continu de la vidéo n'est éprouvé que sur la synthèse).
+
+**Tests** : `tests/test_dialogue.py` (visite par côtés sans pièce, question par question), `tests/test_enveloppe.py`,
+`tests/test_groupes.py`, `tests/test_carte.py` (« à gauche », « le deuxième mur », boussole bruitée, état par côté),
+`tests/test_pont_liciel.py` et, à la racine, `tests/test_pont.py`.
+
+Le prototype compte 310 tests (et le projet, à la racine, 654).
 
 ## Réglages (variables d'environnement)
 
@@ -974,7 +1069,7 @@ Le prototype compte 299 tests.
 
 - **Testé une fois sur iPhone par Noah** (version précédente). Restent à tester : Android récent, Android ancien, et cette version corrigée.
 - **L'extraction immédiate** ne connaît que le vocabulaire listé dans `assistant/extraction.py`. Depuis l'étape 7, ce n'est plus un frein : Claude lit chaque phrase et comprend le reste. En mode `rapide`, en revanche, la question du parcours part avant Claude.
-- **Le parcours suit un ordre** (murs, plafond, plancher, fenêtres, radiateurs). Le diagnostiqueur peut décrire dans l'ordre qu'il veut, tout est noté. Seules les questions suivent cet ordre ; leur contenu s'adapte à ce qui a été dit (étape 4).
+- **Le parcours suit un ordre** (étape 13 : chaque mur et ses fenêtres, les côtés qui manquent, plafond, plancher, équipements). Le diagnostiqueur peut décrire dans l'ordre qu'il veut, tout est noté. Seules les questions suivent cet ordre ; leur contenu s'adapte à ce qui a été dit (étape 4).
 - **Hypothèse à faire valider par un diagnostiqueur** : une paroi sur local chauffé n'est pas déperditive en 3CL, donc ses détails ne sont pas demandés.
 - **Certificat fait maison** :
   - l'avertissement du navigateur est à accepter à chaque nouveau téléphone ;

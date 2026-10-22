@@ -77,3 +77,12 @@ Livrable : rejouer cette session réelle avant/après, montrer le dialogue obten
 - Côté serveur, module de reconnaissance des pièces revisitées à partir d'une vidéo continue (suivi continu du mouvement, pas de « photo toutes les 3 s ») : reconnaître qu'on retourne dans une pièce déjà vue (jamais de doublon) ; rattacher chaque phrase dictée (« ce mur c'est brique 30 cm ») au mur visible à cet instant (horodatage + cap boussole/gyro). Tout téléphone, même ancien, sans LiDAR, Claude seul comme IA (pas d'API).
 - Rejouer sur la dernière session réelle et sur une vidéo de test ; tests ; limites documentées honnêtement.
 - Brancher le résultat sur l'état de l'assistant (pièces/murs nommés par repère + cap) et sur diagauto generer. Commit, puis dire ce qui reste.
+
+## Étape 13 (ENVOYÉE le 22/10 16:35, intégrée le 22/10) — Le DPE se fait de façon GLOBALE, pas pièce par pièce (consigne de Noah, 22/10, à envoyer après l'étape 12)
+- Dans le DPE, on décrit l'ENVELOPPE du logement (tout ce qui l'entoure), pas chaque pièce. Les murs entre pièces intérieures ne comptent pas (« on s'en fiche »).
+- Donc le système (assistant live + checklist + extraction + pont LICIEL) doit raisonner par ORIENTATION : mur ouest, mur nord, mur sud, mur est. Pour chaque mur extérieur : donne sur la rue / l'extérieur / un voisin / local non chauffé, isolation, nombre de fenêtres et portes sur ce mur.
+- Les données sont globales à l'appartement / la maison : un « mur ouest » = tous les murs ouest du logement, toutes pièces confondues. Ne PAS créer un mur par pièce pour le DPE. Les pièces servent pour Carrez et le repérage, pas pour le DPE.
+- Cas à gérer : UN MÊME MUR dont une partie donne sur l'extérieur et l'autre partie sur un voisin → il faut pouvoir scinder le mur en segments (ex. « mur est : 60 % sur voisin, 40 % sur extérieur », avec surface/longueur de chaque partie, fenêtres rattachées au bon segment).
+- À adapter : checklist-dpe.md, questions de l'assistant (ne pas demander « quels murs dans cette pièce » mais « ce mur donne sur quoi ? »), schéma des données, extraction, rejeux de test, tests pytest, README.
+- Noah demande qu'on lui envoie un message quand c'est terminé.
+- Précision de Noah pendant l'étape (22/10, message direct) : « quand on veut faire un dpe il nous demande dans quel piece on est mais c pas imprtant pour le dpe puisque on veut savoir quel chose de globale […] qu'on soit dans le sejour ou chambre pour le dpe on s'en fiche » → l'assistant ne demande jamais la pièce.
