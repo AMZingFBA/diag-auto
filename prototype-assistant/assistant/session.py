@@ -26,8 +26,9 @@ from . import parcours, plausibilite
 from .actions import appliquer
 from .cerveau import Contexte, Decision, ImageInstant, phrases_finies
 from .checklist import ORIENTABLES, TOUJOURS_PRESENTS, Checklist, Element, cle_texte, horodatage
-from .extraction import VOCABULAIRE, Cible, extraire, valeur_normalisee
-from .boussole import Boussole, Mesure
+from .extraction import VOCABULAIRE, Cible, extraire, normaliser, valeur_normalisee
+from .boussole import MEME_COTE, Boussole, Mesure, ecart
+from .decor import Decor
 from .garde import Questions, champ_rempli, demande_de_repeter, nom_abstrait
 from .simulation import CerveauSimulation
 from .reglages import Reglages
@@ -83,6 +84,51 @@ def _normaliser(actions) -> list[dict]:
     return normalisees
 
 
+# Étape 8 : la voix part en moins de 2 s. « Noté. » dès que les règles ont noté quelque chose ; sinon « Alors… » si Claude
+# n'a encore rien écrit 1,4 s après la fin de phrase détectée (il réfléchit avant d'écrire, ~1,8 s en médiane).
+ACCUSES = ("Noté.", "C'est noté.", "D'accord, noté.")
+RELANCES = ("Alors…", "Voyons…")
+RELANCE_S = 1.4
+# « Ce mur, ce mur et ce mur », « un mur ici, un mur ici » : des murs montrés un par un (texte normalisé).
+_DESIGNATION_MUR = re.compile(r"\b(?:(?:ce|cet)\s+mur(?:\s+(?:ici|la))?|un\s+mur\s+(?:ici|la))\b"
+                              r"(?!\s+(?:de|du|des|d|en|est|donne|fait|avec|qui)\b)")
+
+
+# Claude redit souvent « Noté » après le « Noté. » du serveur : retiré de sa première phrase (étape 8).
+_ACCUSE_DEBUT = re.compile(r"^(?:(?:oui|d'accord|ok|très bien|parfait|bien)\s*,\s*)*(?:c'est\s+)?(?:bien\s+)?not[ée]e?s?\s*(?:[,.:!]\s*|$)",
+                           re.IGNORECASE)
+_ACCUSE_FIN = re.compile(r",\s*(?:c'est\s+)?(?:bien\s+|déjà\s+)?not[ée]e?s?\s*([.!])$", re.IGNORECASE)
+_ACCUSE_SEUL = re.compile(r"^(?:oui|d'accord|ok|très bien|parfait|bien|compris)\s*[.!]?$", re.IGNORECASE)
+
+
+def sans_accuse(phrase: str) -> str:
+    """« Noté, trois fenêtres en PVC. » → « Trois fenêtres en PVC. » ; « Oui, brique, c'est noté. » → « Oui, brique. » ;
+    « D'accord, noté. » → « » (déjà dit par le serveur)."""
+    reste = _ACCUSE_FIN.sub(r"\1", _ACCUSE_DEBUT.sub("", phrase.strip())).strip()
+    if not reste or _ACCUSE_SEUL.match(reste):
+        return ""
+    return reste[:1].upper() + reste[1:]
+
+
+_MASCULINS = {"sejour", "salon", "couloir", "degagement", "bureau", "cellier", "garage", "grenier", "dressing"}
+
+
+def _avec_article(nom: str) -> str:
+    """« Cuisine » → « la cuisine », « Séjour » → « le séjour », « Entrée » → « l'entrée », « Combles » → « les combles »."""
+    bas = nom[:1].lower() + nom[1:] if not nom.isupper() else nom
+    cle = cle_texte(nom).split()[0] if nom.strip() else ""
+    if cle in ("combles", "toilettes", "wc"):
+        return f"les {bas}"
+    if cle[:1] in "aeiouyh":
+        return f"l'{bas}"
+    return f"{'le' if cle in _MASCULINS else 'la'} {bas}"
+
+
+def relance_utile(phrase: str) -> bool:
+    """Une vraie phrase (au moins deux mots, ou une question) attend une réponse ; pas un mot isolé (débris, « euh »)."""
+    return "?" in phrase or len([m for m in phrase.split() if any(c.isalpha() for c in m)]) >= 2
+
+
 _CONSIGNE = re.compile(r"(?:^|[,;:] )(?:et )?(?:decrivez|decris|dites|dis|precisez|precise|indiquez|indique|montrez|montre|donnez|donne)\b")
 
 
@@ -129,6 +175,16 @@ class Session:
         # Étape 7 : Claude cerveau de chaque phrase (sauf en simulation, ou si DIAGAUTO_CONVERSATION=rapide).
         self.conversation = reglages.conversation == "claude" and not isinstance(cerveau, CerveauSimulation)
         self.en_pause = False  # « on fait une pause » : plus de question du parcours jusqu'à « on reprend »
+        # Étape 8 : parole confirmée, réponse coupée à redire après un bruit, élément en cours de description.
+        self._parole_confirmee = False
+        self._dernier_bruit = -1  # numéro de la dernière prise de parole qui n'était qu'un bruit
+        self._interrompue: dict | None = None
+        self._en_cours: tuple[str, float] | None = None
+        self._t_question = 0.0
+        self._compteur_accuses = 0
+        self._compteur_relances = 0
+        self.decor = Decor()  # nouveau décor filmé : Claude vérifie la pièce au prochain silence
+        self._piece_du_decor: str | None = None
         self.vad = DetecteurPhrases(ReglagesVad(fin_silence_s=reglages.fin_silence_s))
         self.images: deque[ImageInstant] = deque(maxlen=30)
         self.phrases: list[tuple[float, float, str]] = []
@@ -275,13 +331,20 @@ class Session:
         for ev in self.vad.ajouter(pcm, t):
             if ev.type == "debut":
                 self._en_parole = True
+                self._parole_confirmee = False
+            elif ev.type == "parole":
+                # Parole confirmée (assez longue pour ne pas être un bruit) : l'assistant se tait, sa réponse en cours
+                # est abandonnée. Étape 8 : un claquement de 0,1 s ne coupe plus la voix.
+                self._parole_confirmee = True
                 self._paroles += 1
                 await self._envoyer({"type": "parole_debut", "t": round(ev.t, 2)})
             else:
                 self._en_parole = False
                 self._fin_parole = time.monotonic()
                 if ev.phrase is not None:
-                    await self._file.put(("audio", ev.phrase, self._fin_parole))
+                    if not self._parole_confirmee:
+                        self._paroles += 1  # phrase courte dite pendant que l'assistant parlait
+                    await self._file.put(("audio", ev.phrase, self._fin_parole, self._paroles))
 
     async def recevoir_image(self, t: float, jpeg: bytes) -> None:
         if self.termine or not jpeg.startswith(b"\xff\xd8"):
@@ -290,13 +353,20 @@ class Session:
         chemin = self.dossier / "images" / f"{t:08.2f}.jpg"
         chemin.write_bytes(jpeg)
         self.images.append(ImageInstant(t, jpeg, chemin))
+        if self._piece_du_decor != self.checklist.piece_courante:
+            self._piece_du_decor = self.checklist.piece_courante
+            self.decor.nouvelle_piece()
+        if await asyncio.to_thread(self.decor.ajouter, jpeg):
+            # Nouveau décor : Claude regarde les images au prochain silence (a-t-on changé de pièce ?).
+            self._veille_bientot = True
+            self.journaliser("decor_nouveau", t_image=round(t, 2))
 
     async def recevoir_controle(self, message: dict) -> None:
         genre = message.get("type")
         if genre == "texte" and str(message.get("texte", "")).strip():
             # Phrase écrite dans la page (tests sans micro, ou sans transcription).
             self._paroles += 1
-            await self._file.put(("texte", str(message["texte"]).strip(), time.monotonic()))
+            await self._file.put(("texte", str(message["texte"]).strip(), time.monotonic(), self._paroles))
         elif genre == "tts":
             self.vad.ia_parle = message.get("etat") == "debut"
             if message.get("etat") == "debut" and isinstance(message.get("id"), int):
@@ -324,17 +394,17 @@ class Session:
 
     async def _boucle_transcription(self) -> None:
         while True:
-            genre, donnee, reference = await self._file.get()
+            genre, donnee, reference, paroles = await self._file.get()
             self._transcription_en_cours = True
             try:
-                await self._transcrire(genre, donnee, reference)
+                await self._transcrire(genre, donnee, reference, paroles)
             except Exception as e:
                 log.exception("Transcription d'une phrase")
                 self.journaliser("erreur", etape="transcription", message=str(e))
             finally:
                 self._transcription_en_cours = False
 
-    async def _transcrire(self, genre: str, donnee, reference: float) -> None:
+    async def _transcrire(self, genre: str, donnee, reference: float, paroles: int = 0) -> None:
         attente = time.monotonic() - reference
         son = None
         if genre == "audio":
@@ -345,8 +415,12 @@ class Session:
             t_debut, t_fin, son = phrase.t_debut, phrase.t_fin, phrase.audio
         else:
             texte, t_debut, t_fin, duree = donnee, self.t_video, self.t_video, 0.0
-        if not texte:
-            self.journaliser("phrase_vide", t_phrase=round(t_fin, 2), transcription_s=round(duree, 3))
+        if not texte or not re.search(r"\w", texte):
+            # Rien de dit (« . » : un bruit). Étape 8 : plus d'appel à Claude ni à Whisper pour ça ; et si ce bruit a coupé
+            # la réponse de l'assistant, elle est redite.
+            self.journaliser("phrase_vide", t_phrase=round(t_fin, 2), transcription_s=round(duree, 3), texte=texte)
+            self._dernier_bruit = paroles
+            await self._reprendre()
             return
         ligne = f"[{horodatage(t_fin)}] Diagnostiqueur : « {texte} »"
         self.phrases.append((t_debut, t_fin, texte))
@@ -355,6 +429,7 @@ class Session:
         await self._file_textes.put({
             "source": genre, "texte": texte, "t_debut": t_debut, "t_fin": t_fin, "ligne": ligne, "reference": reference,
             "attente_transcription_s": attente, "transcription_s": duree, "pret": time.monotonic(), "audio": son,
+            "paroles": paroles,
         })
 
     async def _boucle_reponses(self) -> None:
@@ -366,7 +441,7 @@ class Session:
                 # plutôt qu'une file d'attente qui retarde chaque réponse.
                 while not self._file_textes.empty():
                     lot.append(self._file_textes.get_nowait())
-                if phrase_inachevee(lot[-1]["texte"]):
+                if phrase_inachevee(lot[-1]["texte"]) and not self.conversation:
                     await self._attendre_suite(lot)
                 await self._repondre(lot)
             except Exception as e:
@@ -412,7 +487,7 @@ class Session:
         contexte = Contexte(
             mode="reponse", t=dernier["t_fin"], checklist=self.checklist,
             dialogue=[l for l in self.dialogue if l not in lignes][-8:],
-            images=self._images_pour(lot[0]["t_debut"], dernier["t_fin"]), phrase=texte,
+            images=self._images_pour(lot[0]["t_debut"], dernier["t_fin"])[-1 if self.conversation else 0:], phrase=texte,
             t_phrase=(lot[0]["t_debut"], dernier["t_fin"]),
             derniere_question=self._derniere_question_texte,
             valeurs_attendues=valeurs_attendues(self._cible),
@@ -428,10 +503,10 @@ class Session:
         mesure["extraction_ms"] = round((time.perf_counter() - debut) * 1000, 1)
         compris = [r for r in resultats if r["statut"] == "accepte"]
         son = lot[0].get("audio") if len(lot) == 1 else None
-        # Second avis de Whisper : sans conversation, pour toute phrase non comprise ; en conversation, Claude comprend les
-        # mots abîmés, Whisper sert seulement à reconnaître un bruit (phrase très courte et incomprise).
-        court = len(texte.split()) <= 2 or not self.conversation
-        if (court and not compris and not proposition and not extraction.demande and son is not None
+        # Second avis de Whisper : sans conversation seulement, pour une phrase non comprise. En conversation, Claude
+        # comprend les mots abîmés ; et le second avis coûtait 2 à 3 s, en inventant parfois une phrase sur un bruit
+        # (« . » devenu « Laine de verre. », test de Noah, étape 8).
+        if (not self.conversation and not compris and not proposition and not extraction.demande and son is not None
                 and hasattr(self.transcripteur, "second_avis")):
             # 1 bis. Pas compris : second avis de Whisper, guidé par le vocabulaire métier (moteur « rapide »).
             debut = time.perf_counter()
@@ -460,10 +535,15 @@ class Session:
         contexte.questions_recentes = self.questions.recentes(time.monotonic(), self.checklist.piece_courante)
 
         if self.conversation:
-            # Pré-rempli par les règles : « noté » tout de suite (bip et écran), puis la phrase va à Claude, qui la vérifie.
+            # Pré-rempli par les règles : « Noté. » à voix haute tout de suite (avec la contradiction relevée, s'il y en a
+            # une), puis la phrase va à Claude, qui la vérifie et enchaîne (étape 8 : la voix part en moins de 2 s).
+            deja_dit = ""
             if notes:
-                await self._bip(round(time.monotonic() - reference, 3))
-                mesure["bip_s"] = round(time.monotonic() - reference, 3)
+                deja_dit = self._annonce or self._accuse()
+                mesure["accuse_s"] = mesure["question_s"] = round(time.monotonic() - reference, 3)
+                await self.dire(deja_dit, reference, mesure, forcer=True, question=False)
+                if self.muet:
+                    await self._bip(mesure["accuse_s"])
                 await self.envoyer_etat()
             pre_rempli = {"phrases": [texte], "signalements": avant["signalements"],
                           "valeurs": {(r.get("element"), r["action"].get("champ")) for r in notes
@@ -471,7 +551,9 @@ class Session:
                           "crees": [e.id for e in self.checklist.elements if e.id not in avant["ids"]]}
             await self._file_claude.put({"contexte": contexte, "reference": reference, "mesure": mesure, "demande": extraction.demande,
                                          "notes": notes, "proposition": proposition, "en_attente": en_attente,
-                                         "pre_rempli": pre_rempli, "lignes": lignes})
+                                         "pre_rempli": pre_rempli, "lignes": lignes, "deja_dit": deja_dit,
+                                         "paroles": dernier.get("paroles", self._paroles),
+                                         "etat": self._etat_reponse(reference, mesure, deja_dit, texte)})
         elif not compris and not proposition and extraction.demande:
             # « Quel mur ? », « il te faut quoi d'autre ? » : réponse du serveur, puis la question en attente reposée.
             await self._repondre_a_la_demande(extraction.demande, reference, mesure, texte)
@@ -505,6 +587,8 @@ class Session:
                 # Phrases dites pendant la réponse précédente de Claude : un seul appel pour toutes.
                 while not self._file_claude.empty():
                     attente.append(self._file_claude.get_nowait())
+                if phrase_inachevee(attente[-1]["contexte"].phrase):
+                    await self._attendre_suite_claude(attente)
                 await self._converser(**self._fusionner(attente))
             except Exception as e:
                 log.exception("Conversation avec Claude")
@@ -512,12 +596,33 @@ class Session:
             finally:
                 self._claude_en_cours = False
 
+    async def _attendre_suite_claude(self, attente: list[dict], calme_s: float = 1.0, maximum_s: float = 2.5) -> None:
+        """« Le mur fait… » : il cherche ses mots. Claude attend la suite (2,5 s au plus), pour répondre à l'ensemble ; le
+        pré-remplissage, lui, n'attend pas (test de Noah, étape 8 : la file restait bloquée 8 s)."""
+        limite = time.monotonic() + maximum_s
+        calme_depuis = time.monotonic()
+        while time.monotonic() < limite:
+            try:
+                attente.append(await asyncio.wait_for(self._file_claude.get(), timeout=0.2))
+                while not self._file_claude.empty():
+                    attente.append(self._file_claude.get_nowait())
+                if not phrase_inachevee(attente[-1]["contexte"].phrase):
+                    return
+                calme_depuis = time.monotonic()
+            except asyncio.TimeoutError:
+                if (self._en_parole or self._transcription_en_cours or self._reponse_en_cours or not self._file.empty()
+                        or not self._file_textes.empty()):
+                    calme_depuis = time.monotonic()
+                elif time.monotonic() - calme_depuis > calme_s:
+                    return
+
     def _fusionner(self, attente: list[dict]) -> dict:
         """Plusieurs phrases en attente de Claude réunies en une : texte, déjà-noté et pré-remplissage mis bout à bout ;
         la dernière question et la question en attente sont celles d'avant la première phrase."""
         premier, dernier = attente[0], attente[-1]
         if len(attente) == 1:
             return {cle: v for cle, v in premier.items() if cle != "lignes"}
+        deja_dit = " ".join(a["deja_dit"] for a in attente if a.get("deja_dit"))
         contexte = dernier["contexte"]
         lignes = {l for a in attente for l in a["lignes"]}
         contexte.phrase = " ".join(a["contexte"].phrase for a in attente)
@@ -527,6 +632,7 @@ class Session:
         contexte.derniere_question, contexte.valeurs_attendues = premier["contexte"].derniere_question, premier["contexte"].valeurs_attendues
         for a in attente[:-1]:
             a["mesure"]["regroupee_avec_la_suivante"] = True
+        dernier["etat"]["phrases"] = sum(a["etat"]["phrases"] for a in attente)
         return {
             "contexte": contexte, "reference": dernier["reference"], "mesure": dernier["mesure"],
             "demande": next((a["demande"] for a in reversed(attente) if a["demande"]), ""),
@@ -537,10 +643,15 @@ class Session:
                            "signalements": premier["pre_rempli"]["signalements"],
                            "valeurs": set().union(*(a["pre_rempli"]["valeurs"] for a in attente)),
                            "crees": [i for a in attente for i in a["pre_rempli"]["crees"]]},
+            "deja_dit": deja_dit, "paroles": dernier.get("paroles", 0),
+            # Ce qui a été dit pour les phrases réunies (« Noté. », « Alors… ») : la réponse de Claude le prolonge. (Le même
+            # dictionnaire que celui de la relance de la dernière phrase, qui peut encore partir.)
+            "etat": dernier["etat"],
         }
 
     async def _converser(self, contexte: Contexte, reference: float, mesure: dict, demande: str, notes: list[dict],
-                         proposition: dict | None, en_attente: str, pre_rempli: dict) -> None:
+                         proposition: dict | None, en_attente: str, pre_rempli: dict, deja_dit: str = "", paroles: int = 0,
+                         etat: dict | None = None) -> None:
         """Étape 7 : Claude, cerveau de CHAQUE phrase. Les règles ont déjà pré-rempli (et bippé) ; Claude comprend la
         phrase quelle qu'elle soit, y répond, corrige le pré-remplissage s'il le faut, et reprend la visite avec la
         question que propose le parcours. Sa réponse est lue phrase par phrase, dès la première ; si le diagnostiqueur
@@ -570,21 +681,37 @@ class Session:
         if demande:
             remarques.append(f"Il demande quelque chose ; réponse possible : « {self._texte_demande(demande, contexte.phrase)} »")
         contexte.remarques = remarques
+        contexte.deja_dit = deja_dit
+        contexte.en_cours = self._texte_en_cours()
+        self._interrompue = None
         await self._pret.wait()
         debut = time.perf_counter()
-        dit = {"phrases": 0, "question": False}
+        dit = etat or self._etat_reponse(reference, mesure, deja_dit, contexte.phrase)
+        dit.update(question=False, abandonnees=[], claude=False)
         paroles = self._paroles
+        relance = dit.get("relance")
 
         async def sur_dire(texte: str, code_cible: str) -> None:
             for phrase in phrases_finies(texte):
                 if dit["question"]:
                     return  # une seule question, toujours la dernière chose dite
+                question_de_claude = ("?" in phrase or _consigne(phrase)
+                                      or (plan is not None and _sans_ponctuation(phrase) == _sans_ponctuation(plan.texte)))
+                cle = plan.cle if question_de_claude and plan is not None and code_cible == plan.code else None
                 if self._paroles != paroles:
+                    # Il reparle (ou un bruit) : la suite n'est pas lue maintenant ; gardée pour être redite si ce
+                    # n'était qu'un bruit (étape 8).
                     self.journaliser("reponse_abandonnee", texte=phrase, raison="le diagnostiqueur reparle")
-                    return
+                    dit["abandonnees"].append((phrase, code_cible, cle, question_de_claude))
+                    dit.setdefault("paroles_interruption", self._paroles)
+                    continue
+                if deja_dit and not dit["claude"] and not question_de_claude:
+                    phrase = sans_accuse(phrase)
+                    if not phrase:
+                        continue
+                dit["claude"] = True
                 premiere = dit["phrases"] == 0
-                if "?" in phrase or _consigne(phrase) or (plan is not None and _sans_ponctuation(phrase) == _sans_ponctuation(plan.texte)):
-                    cle = plan.cle if plan is not None and code_cible == plan.code else None
+                if question_de_claude:
                     question, cible, raison, cle = self.questions.filtrer(phrase, code_cible, self.checklist, time.monotonic(),
                                                                           cle=cle, reposer=en_attente)
                     if raison:
@@ -604,16 +731,25 @@ class Session:
                     mesure["question_dite"] = True
                 dit["phrases"] += 1
 
-        decision = await self.cerveau.decider(contexte, sur_dire)
+        try:
+            decision = await self.cerveau.decider(contexte, sur_dire)
+        finally:
+            if relance is not None:
+                relance.cancel()
         mesure["cerveau_total_s"] = round(time.perf_counter() - debut, 3)
         mesure["cerveau"] = decision.mesures
         actions, commandes = self._commandes(decision.actions, pre_rempli)
-        probables = [a for a in actions if a.get("certitude") == "probable" and a.get("outil") == "enregistrer_reponse"]
-        actions, invraisemblables, ecartees = plausibilite.filtrer(_normaliser(a for a in actions if a not in probables))
+        # Interprétation probable de Claude : notée, « à vérifier » à l'écran de validation, au lieu d'être perdue puis
+        # redemandée (test de Noah, étape 8 : « laine de verre 20 cm » dit, puis « il est isolé ? »).
+        actions = [{**a, "note": a.get("note") or "interprété par Claude, à vérifier"}
+                   if a.get("certitude") == "probable" and a.get("outil") == "enregistrer_reponse" else a for a in actions]
+        probables: list[dict] = []
+        actions, invraisemblables, ecartees = plausibilite.filtrer(_normaliser(actions))
         signales = len(self.checklist.signalements)
         resultats = appliquer(self.checklist, actions, contexte.t, self._phrases_recentes(contexte))
         notes_claude = self._compter(resultats)
         self._noter_contradictions(signales)
+        self._suivre(resultats)
         if contexte.t_phrase:
             self._situer(resultats, *contexte.t_phrase)
         if resultats:
@@ -635,12 +771,127 @@ class Session:
             else:
                 if not self.en_pause and not await self._question_du_parcours(reference, mesure_question, reposer=en_attente, suite=suite):
                     await self._annoncer(reference, mesure_question)
+        if dit["abandonnees"]:
+            self._interrompue = {"paroles": dit["paroles_interruption"], "phrases": dit["abandonnees"], "en_attente": en_attente}
         self.journaliser("decision", mode="conversation", dire=decision.dire, cible=decision.cible, commandes=commandes,
                          resultats=resultats, invraisemblables=ecartees, erreur=decision.erreur, brut=decision.brut[:2000],
                          mesures=mesure)
+        await self._reprendre()
         if decision.erreur:
             await self._envoyer({"type": "erreur", "message": f"Assistant : {decision.erreur}"})
         await self.envoyer_etat()
+
+    async def _reprendre(self) -> None:
+        """La réponse coupée par un bruit (pris pour une prise de parole, puis transcrit vide) est redite : il n'avait rien
+        dit (étape 8). Rien n'est redit s'il a vraiment parlé depuis, ou si une phrase attend d'être traitée."""
+        interrompue = self._interrompue
+        if (interrompue is None or self._dernier_bruit != interrompue["paroles"] or self._paroles != interrompue["paroles"]
+                or self._en_parole or not self._file.empty() or not self._file_textes.empty() or not self._file_claude.empty()):
+            return
+        self._interrompue = None
+        self.journaliser("reprise", phrases=[p for p, *_ in interrompue["phrases"]])
+        reference = time.monotonic()
+        for k, (phrase, code_cible, cle, question_de_claude) in enumerate(interrompue["phrases"]):
+            if question_de_claude:
+                question, cible, raison, cle = self.questions.filtrer(phrase, code_cible, self.checklist, time.monotonic(), cle=cle,
+                                                                      reposer=interrompue["en_attente"])
+                if not raison:
+                    await self.dire(question, reference, None, cible=cible, cle=cle, une_fois=bool(cle), suite=k > 0)
+                return
+            await self.dire(phrase, reference, None, suite=k > 0, question=False)
+
+    def _etat_reponse(self, reference: float, mesure: dict, deja_dit: str, phrase: str) -> dict:
+        """Ce qui a déjà été dit pour une phrase (« Noté. », « Alors… »), et sa relance : « Alors… » part 1,4 s après la
+        fin de phrase si rien n'a été dit, même si Claude répond encore à la phrase précédente (étape 8)."""
+        etat = {"phrases": 1 if deja_dit else 0, "paroles": self._paroles}
+
+        async def relancer() -> None:
+            await asyncio.sleep(max(0.0, reference + RELANCE_S - time.monotonic()))
+            if etat["phrases"] == 0 and self._paroles == etat["paroles"] and not self.en_pause:
+                etat["phrases"] += 1
+                mesure["relance_s"] = mesure["question_s"] = round(time.monotonic() - reference, 3)
+                await self.dire(self._relance(), reference, mesure, forcer=True, question=False)
+
+        etat["relance"] = asyncio.create_task(relancer()) if not deja_dit and relance_utile(phrase) else None
+        return etat
+
+    def _accuse(self) -> str:
+        self._compteur_accuses += 1
+        return ACCUSES[(self._compteur_accuses - 1) % len(ACCUSES)]
+
+    def _relance(self) -> str:
+        self._compteur_relances += 1
+        return RELANCES[(self._compteur_relances - 1) % len(RELANCES)]
+
+    def _suivre(self, resultats: list[dict]) -> None:
+        """L'élément dont il parle en ce moment : le dernier à avoir reçu une valeur ou à avoir été créé."""
+        for r in reversed(resultats):
+            if r["statut"] == "accepte" and r.get("element") and r["action"].get("outil") in (
+                    "enregistrer_reponse", "signaler_element", "scinder", "compter", "orienter"):
+                self._en_cours = (r["element"], time.monotonic())
+                return
+
+    def _cible_actuelle(self) -> Cible | None:
+        """La dernière question, sauf s'il a décrit un autre élément depuis : une phrase qui ne nomme rien complète alors
+        cet élément (test de Noah, étape 8 : « l'isolant, c'est de la laine de verre 30 cm », en parlant du mur, avait
+        été rangé sur le plafond de la dernière question)."""
+        if self._en_cours is None:
+            return self._cible
+        ident, t = self._en_cours
+        if self._cible is not None and (t <= self._t_question or self._cible.element_id == ident):
+            return self._cible
+        try:
+            element = self.checklist.trouver_element(ident)
+        except ValueError:
+            return self._cible
+        if element.piece is not None and element.piece != self.checklist.piece_courante:
+            return self._cible  # il a changé de pièce : le mur du séjour n'est plus « en cours »
+        return Cible("element", element.type, "", element.id)
+
+    def _texte_en_cours(self) -> str:
+        cible = self._cible_actuelle()
+        if cible is None or cible.genre != "element":
+            return ""
+        element = self.checklist.trouver_element(cible.element_id)
+        return f"{element.id} (« {self.checklist.nom(element, demonstratif=False)} »)"
+
+    def _designer_murs(self, texte: str, lot: list[dict], contexte: Contexte, resultats: list[dict]) -> list[dict]:
+        """« Il y a ce mur, ce mur et ce mur » : chaque « ce mur » montre le mur filmé à cet instant (étape 8). Un mur est
+        créé pour chacun, avec l'image et la visée de la boussole de son instant (estimé d'après sa place dans la
+        phrase), sauf si la caméra visait un mur déjà connu. Claude reçoit ces images et donne à chacun un repère."""
+        normalise = normaliser(texte)
+        trouves = list(_DESIGNATION_MUR.finditer(normalise))
+        if (len(trouves) < 2 or self.checklist.piece_courante is None
+                or any(r["statut"] == "accepte" and r["action"].get("type") == "mur" for r in resultats)):
+            return []
+        audio = lot[-1]["source"] == "audio"
+        debut = lot[0]["t_debut"] + (self.vad.reglages.pre_roll_s if audio else 0.0)
+        fin = max(debut, lot[-1]["t_fin"] - (self.vad.reglages.fin_gardee_s if audio else 0.0))
+        nouveaux, images, lignes = [], [], []
+        for m in trouves:
+            t = debut + (fin - debut) * (m.start() + m.end()) / 2 / max(1, len(normalise))
+            visee = self.boussole.visee(t - 0.5, t + 0.5)
+            murs = [e for e in self.checklist.elements_de(self.checklist.piece_courante) if e.type == "mur"]
+            if visee is not None and visee.cap is not None and any(
+                    e.cap is not None and abs(ecart(e.cap, visee.cap)) < MEME_COTE for e in murs):
+                continue  # la caméra visait un mur déjà connu
+            numero = sum(e.type == "mur" for e in self.checklist.elements) + 1
+            element = self.checklist.signaler_element("mur", f"le mur {numero}", t, source="voix")
+            image = min(self.images, key=lambda i: abs(i.t - t), default=None)
+            if image is not None and image.chemin is not None:
+                element.image = image.chemin.name
+                if image not in images:
+                    images.append(image)
+            if visee is not None:
+                self.checklist.mesurer(element.id, visee)
+            lignes.append(f"{element.id} désigné à {horodatage(t)}" + (f" (image de {horodatage(image.t)})" if image else ""))
+            nouveaux.append({"action": {"outil": "signaler_element", "type": "mur", "description": element.description,
+                                        "source": "voix", "citation": texte}, "statut": "accepte", "raison": "", "element": element.id})
+        if images:
+            contexte.images = images[:4]
+        contexte.designations = lignes
+        self.journaliser("murs_designes", murs=lignes)
+        return nouveaux
 
     def _deja_note(self, resultats: list[dict]) -> list[str]:
         """Ce que les règles ont noté pour cette phrase, dit à Claude (éléments créés compris : il peut les retirer)."""
@@ -747,13 +998,16 @@ class Session:
         proposition à confirmer). Une valeur invraisemblable (un mur de 30 m de long) n'est jamais notée : sa
         lecture probable devient la proposition."""
         signales = len(self.checklist.signalements)
-        extraction = extraire(texte, self.checklist, self._cible)
+        extraction = extraire(texte, self.checklist, self._cible_actuelle())
         actions, invraisemblables, ecartees = plausibilite.filtrer(extraction.actions)
         resultats = appliquer(self.checklist, actions, contexte.t, self._phrases_recentes(contexte) + [texte])
+        resultats += self._designer_murs(texte, lot, contexte, resultats)
         notes = self._compter(resultats)
         self._noter_contradictions(signales)
+        self._suivre(resultats)
         self._situer(resultats, lot[0]["t_debut"], lot[-1]["t_fin"])
-        proposition = extraction.proposition or next(filter(None, (self._resoudre(p) for p in invraisemblables)), None)
+        proposition = (None if self.conversation else extraction.proposition) or next(
+            filter(None, (self._resoudre(p) for p in invraisemblables)), None)
         self.journaliser("extraction", texte=texte, resultats=resultats, devines=extraction.devines, contradictions=self._annonce,
                          invraisemblables=ecartees, demande=extraction.demande)
         if resultats:
@@ -1023,6 +1277,7 @@ class Session:
             self.questions.noter(cle, maintenant, une_fois)
         if not forcer and question:
             self._cible = cible
+            self._t_question = maintenant
             self._derniere_cle = cle
             self._dernier_element_id = cible.element_id if cible and cible.element_id else None
             self._derniere_question_texte = f"{cible.code} : « {texte} »" if cible else f"« {texte} »"
@@ -1076,7 +1331,9 @@ class Session:
                             questions_recentes=self.questions.recentes(time.monotonic(), self.checklist.piece_courante))
         debut = time.perf_counter()
         decision = await self.cerveau_veille.decider(contexte, None)
-        actions = [a for a in decision.actions if a.get("outil") in ("signaler_element", "piece_courante")]
+        actions = [a for a in decision.actions if a.get("outil") == "signaler_element"]
+        # Une autre pièce reconnue sur les images : elle n'est pas décidée par l'image seule, on la lui demande.
+        propositions = [str(a.get("nom") or "").strip() for a in decision.actions if a.get("outil") == "piece_courante"]
         resultats = appliquer(self.checklist, actions, contexte.t, self._phrases_recentes(contexte))
         self._compter(resultats)
         self.journaliser("decision", mode="veille", resultats=resultats, erreur=decision.erreur, brut=decision.brut[:2000],
@@ -1084,6 +1341,20 @@ class Session:
         if resultats:
             await self._envoyer_actions(resultats, "veille")
             await self.envoyer_etat()
+        for nom in propositions:
+            if nom and self.checklist.trouver_piece(nom) != self.checklist.piece_courante and not self._en_parole:
+                await self._proposer_piece(nom)
+                break
+
+    async def _proposer_piece(self, nom: str) -> None:
+        """« On est dans la cuisine ? » : la pièce que Claude reconnaît sur les images, à confirmer (étape 8). « Oui »
+        change de pièce ; une seule fois par pièce proposée."""
+        cible = Cible("piece", champ="proposee", source=nom)
+        question, cible, raison, cle = self.questions.filtrer(f"On est dans {_avec_article(nom)} ?", cible.code, self.checklist,
+                                                              time.monotonic())
+        if not raison:
+            self.journaliser("piece_proposee", nom=nom)
+            await self.dire(question, time.monotonic(), None, cible=cible, cle=cle, une_fois=True)
 
     # --- Fin et bilan ---------------------------------------------------------------------------
 

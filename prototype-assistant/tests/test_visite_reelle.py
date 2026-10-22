@@ -263,7 +263,7 @@ def test_second_avis_de_whisper_seulement_si_pas_compris(tmp_path):
         session.envoyer = envoyer
         await session.demarrer()
         for k in range(3):
-            await session._file.put(("audio", Phrase(np.zeros(16_000, np.float32), 2.0 * k, 2.0 * k + 1), time.monotonic()))
+            await session._file.put(("audio", Phrase(np.zeros(16_000, np.float32), 2.0 * k, 2.0 * k + 1), time.monotonic(), k + 1))
             await asyncio.sleep(0.05)
             while session.occupe or not session._file.empty():
                 await asyncio.sleep(0.02)

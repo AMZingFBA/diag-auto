@@ -25,11 +25,13 @@ def envoyer(detecteur, signal, t0=0.0, taille=1600):
 def test_une_phrase_detectee_avec_ses_instants():
     d = DetecteurPhrases()
     ev = envoyer(d, son((1.0, 0), (1.5, 6000), (1.2, 0)), t0=10.0)
-    assert [e.type for e in ev] == ["debut", "fin"]
-    phrase = ev[1].phrase
+    # « parole » : parole confirmée (0,35 s), c'est là que la voix de l'assistant se coupe (étape 8).
+    assert [e.type for e in ev] == ["debut", "parole", "fin"]
+    assert abs(ev[1].t - 11.35) < 0.05  # la voix commence à 11,0 s
+    phrase = ev[2].phrase
     assert abs(phrase.t_debut - 10.0) < 0.1  # 1 s de son gardé avant la voix (11,0 s)
     assert abs(phrase.t_fin - 13.0) < 0.15  # 0,5 s gardée après la voix (12,5 s)
-    assert ev[1].t - 12.5 < 0.9  # fin déclarée moins de 0,9 s après la fin de la voix
+    assert ev[2].t - 12.5 < 0.9  # fin déclarée moins de 0,9 s après la fin de la voix
 
 
 def test_bruit_court_ignore():

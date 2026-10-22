@@ -136,7 +136,7 @@ def test_pause_puis_reprise(tmp_path):
     cerveau = CerveauScenario(poli({
         "On fait une pause, je prends un appel.": ("D'accord, je vous attends.", [{"outil": "pause"}], False),
         "Allô ? Oui, je te rappelle.": ("", [], False),  # adressé à quelqu'un d'autre : rien à dire
-        "Bon, ce mur donne dehors.": ("Noté.", [], False),
+        "Bon, ce mur donne dehors.": ("", [], False),  # le serveur a déjà dit « Noté. »
         "C'est bon, on reprend.": ("C'est reparti.", [{"outil": "reprendre"}], False),
     }))
     phrases = ["Ici c'est le séjour.", "On fait une pause, je prends un appel.", "Allô ? Oui, je te rappelle.", "Bon, ce mur donne dehors.",
@@ -144,7 +144,7 @@ def test_pause_puis_reprise(tmp_path):
     session, apres, _ = asyncio.run(visite(tmp_path, phrases, cerveau))
     assert dits(apres[1]) == ["D'accord, je vous attends."]  # pas de question du parcours en pause
     assert dits(apres[2]) == []
-    assert dits(apres[3]) == ["Noté."] and [m["type"] for m in apres[3]].count("bip") == 1  # noté, mais aucune question
+    assert dits(apres[3]) == ["Noté."]  # « Noté. » tout de suite (étape 8), mais aucune question en pause
     assert all("Visite EN PAUSE" in m and "Question suivante du parcours" not in m for m in cerveau.messages[2:4])
     # Reprise : Claude n'a pas posé de question, le parcours enchaîne avec la suivante, dans la même réponse.
     assert dits(apres[4]) == ["C'est reparti.", "Ce mur est en quoi ?"] and suites(apres[4]) == [False, True]
@@ -208,7 +208,7 @@ def test_annuler_ce_que_les_regles_ont_cree_ou_ce_qu_il_faut_oublier(tmp_path):
 def test_reponse_perimee_abandonnee_et_phrase_suivante_pre_remplie_sans_attendre(tmp_path):
     cerveau = CerveauScenario(poli({
         "C'est quoi un pont thermique ?": "Une fuite de chaleur. Souvent aux jonctions.",
-    }, defaut="Noté."), pause_s=0.3)
+    }), pause_s=0.3)
 
     async def scenario():
         session, recus = await ouvrir(tmp_path, cerveau)
@@ -223,11 +223,13 @@ def test_reponse_perimee_abandonnee_et_phrase_suivante_pre_remplie_sans_attendre
         return session, recus[debut:]
 
     session, recus = asyncio.run(scenario())
-    # Il a reparlé : le reste de la réponse sur le pont thermique n'est pas lu ; sa phrase reçoit sa propre réponse.
+    # Il a reparlé : le reste de la réponse sur le pont thermique n'est pas lu ; sa phrase reçoit sa propre réponse :
+    # « Noté. » tout de suite (le serveur), puis la question (Claude).
     assert dits(recus) == ["Une fuite de chaleur.", "Noté.", "Ce mur est en quoi ?"]
-    # Sa phrase a été pré-remplie (et bippée) pendant que Claude répondait encore à la précédente : pas de file bloquée.
+    # Sa phrase a été pré-remplie (et « Noté. » dit) pendant que Claude répondait encore à la précédente : pas de file
+    # bloquée.
     assert cerveau.murs_a_la_fin[1] == ["M1"]
-    assert [m["type"] for m in recus].index("bip") < [m.get("texte") for m in recus].index("Noté.")
+    assert next(m for m in recus if m.get("texte") == "Noté.")["latence_s"] < 0.3
     assert cerveau.phrases[1:] == ["C'est quoi un pont thermique ?", "Ce mur donne dehors."]
 
 
@@ -255,7 +257,8 @@ def test_phrases_dites_pendant_que_claude_repond_reunies_en_un_appel(tmp_path):
 
 
 def test_question_du_parcours_si_claude_n_en_pose_pas(tmp_path):
-    cerveau = CerveauScenario(lambda contexte: ("Noté.", "", []))
+    # Claude dit « Noté. » (ou rien si le serveur l'a déjà dit), sans question : le parcours enchaîne, dans la même réponse.
+    cerveau = CerveauScenario(lambda contexte: ("" if contexte.deja_dit else "Noté.", "", []))
     _, apres, _ = asyncio.run(visite(tmp_path, ["Ici c'est le séjour.", "Ce mur donne dehors, brique 30 cm."], cerveau))
     assert dits(apres[0]) == ["Noté.", "Décrivez le premier mur."]
     assert dits(apres[1]) == ["Noté.", "Ce mur est isolé ?"] and suites(apres[1]) == [False, True]
@@ -272,7 +275,7 @@ def test_claude_indisponible_le_parcours_continue(tmp_path):
     cerveau = CerveauScenario(lambda contexte: Decision(erreur="pas de réponse de Claude en 25 s"))
     _, apres, recus = asyncio.run(visite(tmp_path, ["Ici c'est le séjour.", "Ce mur donne dehors, brique 30 cm.", "Quel mur ?"], cerveau))
     assert dits(apres[0]) == ["Décrivez le premier mur."]
-    assert dits(apres[1]) == ["Ce mur est isolé ?"]
+    assert dits(apres[1]) == ["Noté.", "Ce mur est isolé ?"]
     assert len(dits(apres[2])) == 1 and dits(apres[2])[0].startswith("Je parle du mur") and dits(apres[2])[0].endswith("isolé ?")
     assert any(m["type"] == "erreur" for m in recus)
 
@@ -283,7 +286,8 @@ def test_le_contexte_donne_a_claude_la_question_suivante_et_les_remarques(tmp_pa
                "Il te faut quoi d'autre sur ce mur ?"]
     asyncio.run(visite(tmp_path, phrases, cerveau))
     message = cerveau.messages[2]
-    assert "Remarques du serveur (à dire brièvement) : Noté : parpaing au lieu de brique." in message
+    # La contradiction est dite tout de suite par le serveur (étape 8) : Claude le sait, et ne la répète pas.
+    assert "Déjà dit par le serveur à l'instant : « Noté : parpaing au lieu de brique. »" in message
     assert "« Il est isolé ? » [M1.isolation] (élément : « le mur extérieur »)" in message  # pour la nommer après une digression
     deja_demande = next(l for l in message.splitlines() if l.startswith("Déjà demandé récemment"))
     assert "M1.isolation" not in deja_demande  # la question proposée est à reposer, pas « déjà demandée »

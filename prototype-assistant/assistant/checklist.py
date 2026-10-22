@@ -215,6 +215,8 @@ def contradiction(ancienne: Valeur, nouvelle: Valeur, generale: bool = False) ->
     bois »), n'en est pas une."""
     if generale or VALEUR_INCONNUE in (ancienne.valeur, nouvelle.valeur) or cle_texte(ancienne.valeur) == cle_texte(nouvelle.valeur):
         return False
+    if cle_texte(nouvelle.valeur).startswith(cle_texte(ancienne.valeur)):
+        return False  # « isolé », puis « isolé laine de verre 30 cm » : une précision (étape 8)
     return ancienne.origine != "groupe" and not (ancienne.origine == "regle" and nouvelle.origine == "dit")
 
 

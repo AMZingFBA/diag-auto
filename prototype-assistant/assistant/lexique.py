@@ -50,6 +50,11 @@ CORRECTIONS: list[tuple[str, str]] = [
     (r"\bcomblots?\b", "combles"),
     (r"\b(?:y |est )?embriques?\b", "est en brique"),
     (r"\b(?:des pays|DPE|d[ée]pa|d[ée]p[ée])\s+(isol)", r"est pas \1"),
+    # Test de Noah après l'étape 7 : mots collés et demandes abîmées.
+    (r"\b(?:cemurs?|semur(?:e|ure)?s?)\b", "ce mur"),  # « cemur, cemur et cemur », « semur, semurure et semure »
+    (r"\b(?:murici|movici[e]?|mourici|morici)\b", "mur ici"),
+    (r"\b(?:qui|il te|y te|ils te)\s+(?:faut|veut|faudrait)\s+quoi\s+d'?\s?(?:ôtes?|otes?|outes?|autres?)\b", "il te faut quoi d'autre"),
+    (r"\bqui faut quoi doute\b", "il te faut quoi d'autre"),
 ]
 
 # Phrases que Whisper invente sur du silence ou du bruit (connu en français).

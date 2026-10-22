@@ -33,6 +33,11 @@ class ReglagesVad:
     marge_db: float = 12.0  # au-dessus du plancher de bruit = parole
     seuil_absolu_db: float = -48.0  # jamais de parole en dessous
     marge_ia_parle_db: float = 10.0  # marge en plus quand l'IA parle (écho du haut-parleur)
+    # Parole confirmée (étape 8) : c'est seulement là que la voix de l'assistant est coupée. Test de Noah du 22/10/2026 :
+    # un claquement de 0,1 à 0,3 s arrivait juste après chaque phrase de l'assistant (le téléphone qui bascule sa sortie
+    # son) ; détecté comme un début de parole, il coupait la voix, et la réponse n'était jamais entendue.
+    confirmation_s: float = 0.35
+    confirmation_ia_parle_s: float = 0.6  # plus long quand l'assistant parle : son écho n'est pas une prise de parole
 
 
 @dataclass
@@ -50,7 +55,7 @@ class Phrase:
 
 @dataclass
 class Evenement:
-    type: str  # « debut » ou « fin »
+    type: str  # « debut », « parole » (parole confirmée : assez longue pour ne pas être un bruit) ou « fin »
     t: float
     phrase: Phrase | None = None
 
@@ -72,6 +77,8 @@ class DetecteurPhrases:
         self._phrase: list[np.ndarray] = []
         self._trames_avant = 0
         self._t_debut_phrase = 0.0
+        self._trames_parlees = 0  # trames de parole depuis le début de la phrase (pour la confirmer)
+        self._confirmee = False
 
     @staticmethod
     def niveau_db(trame: np.ndarray) -> float:
@@ -120,11 +127,19 @@ class DetecteurPhrases:
                 self._trames_avant = len(self._phrase) - self._trames_parole  # pré-roll (sans la parole déjà là)
                 self._t_debut_phrase = t + TRAME / TAUX - len(self._phrase) * TRAME / TAUX
                 self._historique = []
+                self._trames_parlees = self._trames_parole
+                self._confirmee = False
                 evenements.append(Evenement("debut", t))
             return evenements
 
         self._phrase.append(trame)
         self._trames_silence = 0 if parole else self._trames_silence + 1
+        if parole and not self._confirmee:
+            self._trames_parlees += 1
+            seuil_s = r.confirmation_ia_parle_s if self.ia_parle else r.confirmation_s
+            if self._trames_parlees * TRAME / TAUX >= seuil_s:
+                self._confirmee = True
+                evenements.append(Evenement("parole", t))
         duree = len(self._phrase) * TRAME / TAUX
         if self._trames_silence * TRAME / TAUX >= r.fin_silence_s or duree >= r.duree_max_s:
             evenements += self._clore(t + TRAME / TAUX)

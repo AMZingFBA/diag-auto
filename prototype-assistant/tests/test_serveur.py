@@ -101,7 +101,8 @@ def test_visite_par_la_voix(tmp_path):
         signal = np.concatenate([rng.normal(0, 30, 16000), voix, rng.normal(0, 30, 24000)]).astype("<i2")
         for i in range(0, len(signal), 1600):
             ws.send_bytes(binaire(1, 5.0 + i / 16000, signal[i:i + 1600].tobytes()))
-        assert attendre(ws, "parole_debut")["t"] == pytest.approx(6.0, abs=0.15)
+        # La voix commence à 6,0 s ; la parole est confirmée (l'assistant se tait) 0,35 s plus tard (étape 8).
+        assert attendre(ws, "parole_debut")["t"] == pytest.approx(6.35, abs=0.15)
         transcription = attendre(ws, "transcription")
         assert transcription["texte"] == "ici c'est la chambre 2"
         assert attendre(ws, "etat")["piece"] == "Chambre 2"

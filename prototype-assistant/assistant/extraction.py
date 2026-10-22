@@ -372,8 +372,9 @@ _NOMS_PIECES = "|".join(sorted(_PIECES, key=len, reverse=True))
 # qui décrivent un plafond ou un mur.
 _PIECE = re.compile(
     r"\b(?:ici c est|ici|on est dans|on entre dans|on passe (?:dans|a|au)|on va (?:dans|a|au)|on arrive dans|nous sommes dans|maintenant"
-    r"|(?:on )?(?:revient|reviens|revenons|revenir|retourne|retournons|retourner|repasse|repassons)\s+(?:dans|a|au|en))\s+"
-    r"(?:la |le |l |les |a la |au )?(" + _NOMS_PIECES + r")(?:\s+(\d+))?\b"
+    r"|(?:on )?(?:revient|reviens|revenons|revenir|retourne|retournons|retourner|repasse|repassons)\s+(?:dans|a|au|en)"
+    r"|la c est|(?:apres|ensuite|puis)\s*,?\s*(?:la\s*,?\s*)?(?:il y a|c est|on a|on arrive dans))\s+"
+    r"(?:la |le |l |les |a la |au |un |une )?(" + _NOMS_PIECES + r")(?:\s+(\d+))?\b"
 )
 _NOM_PIECE = re.compile(r"\b(" + _NOMS_PIECES + r")(?:\s+(\d+))?\b")  # réponse à « Quelle est la pièce suivante ? »
 _ANNEE = re.compile(r"\b(19[3-9]\d|20[0-3]\d)\b")
@@ -483,7 +484,9 @@ MOTS_POUR_DEVINER = 4
 class Cible:
     """La dernière question posée : un champ d'un élément, ou une étape du parcours."""
 
-    genre: str  # « champ », « presence », « suite », « pareil », « piece » ou « secondaire »
+    # « champ », « presence », « suite », « pareil », « piece » ou « secondaire » ; « element » (étape 8) : pas une
+    # question, mais l'élément qu'il est en train de décrire (une phrase qui ne nomme rien le complète).
+    genre: str
     type: str = ""
     champ: str = ""
     element_id: str | None = None
@@ -504,6 +507,9 @@ class Cible:
             return cls("pareil", type_element, source=source) if type_element in TYPES and source in checklist.pieces else None
         if prefixe == "piece" and reste in ("suivante", "nom"):
             return cls("piece", champ=reste)
+        if prefixe == "piece" and reste.startswith("proposee:") and reste.split(":", 1)[1].strip():
+            # « On est dans la cuisine ? » : pièce reconnue sur les images, à confirmer (étape 8).
+            return cls("piece", champ="proposee", source=reste.split(":", 1)[1].strip())
         if prefixe == "confirmer":
             # « J'ai compris eau chaude, c'est bien ça ? » : confirmer:E1.type=radiateur à eau
             designation, _, valeur = reste.partition("=")
@@ -543,7 +549,8 @@ class Cible:
             "presence": f"presence:{self.type}",
             "suite": f"suite:{self.type}",
             "pareil": f"pareil:{self.type}:{self.source}",
-            "piece": f"piece:{self.champ}",
+            "piece": f"piece:{self.champ}" + (f":{self.source}" if self.champ == "proposee" else ""),
+            "element": f"element:{self.element_id}",
             "confirmation": f"confirmer:{self.element_id}.{self.champ}={self.source}",
             "orientation": f"orientation:{self.element_id}",
         }.get(self.genre, f"secondaire:{self.type}.{self.champ}")
@@ -716,8 +723,13 @@ def _valeurs_paroi(type_element: str, texte: str) -> dict[str, str]:
             continue
         coupure = _DEBUT_ISOLATION.search(clause)
         avant, isolation = (clause[: coupure.start()], clause[coupure.start():]) if coupure else (clause, "")
-        if isolation and "isolation" not in valeurs and (v := _valeur_isolation(isolation)):
-            valeurs["isolation"] = v
+        if isolation and (v := _valeur_isolation(isolation)):
+            deja = valeurs.get("isolation")
+            if deja is None:
+                valeurs["isolation"] = v
+            elif v.startswith("isolé ") and deja in ("isolé", "ITI", "ITE", "ITR"):
+                # « L'isolant, c'est de la laine de verre 30 cm » : la clause suivante précise l'isolation (étape 8).
+                valeurs["isolation"] = deja + v[len("isolé"):]
         if mur and "long" in avant and "longueur" not in valeurs:
             if m := re.search(r"\b(\d+(?:\.\d+)?)\s*(?:m|metres?)\b(?:\s*(\d{1,2})\b)?", avant):
                 valeurs["longueur"] = f"{m.group(1).replace('.', ',')}{',' + m.group(2) if m.group(2) else ''} m"
@@ -913,6 +925,9 @@ def extraire(phrase: str, checklist: Checklist, cible: Cible | None = None) -> E
     if piece:
         action("piece_courante", nom=_PIECES[piece.group(1)] + (f" {piece.group(2)}" if piece.group(2) else ""))
         texte = texte[: piece.start()] + texte[piece.end():]
+    elif cible and cible.genre == "piece" and cible.champ == "proposee" and _OUI.match(texte.strip(" ,")):
+        action("piece_courante", nom=cible.source)  # « On est dans la cuisine ? » « Oui. »
+        return resultat
     courante = _PIECES[piece.group(1)] if piece else checklist.nom_piece(checklist.piece_courante) if checklist.piece_courante else ""
     if courante and not re.search(r"\b(?:sauf|excepte|a part|hormis)\b", texte):  # « sauf celle de la chambre » : une exception
         texte = _sans_la_piece(texte, courante)
@@ -1068,8 +1083,8 @@ def _decrire_segment(checklist: Checklist, cible: Cible | None, segment: _Segmen
     # 1. « Tous les radiateurs sont électriques », « toutes les fenêtres sont en bois, sauf celle de la chambre qui
     # est en PVC » : une règle, pour les éléments déjà décrits et ceux qui viendront (pour la pièce, ou pour tout le
     # logement si c'est dit ou si une autre pièce est exceptée).
-    if ((tous or exceptions_pieces) and not segment.nombre and not segment.partie_de and not parties and groupes_possibles
-            and TYPES[segment.type].niveau == "piece" and (valeurs or exceptions_pieces)):
+    if ((tous or exceptions_pieces) and not segment.nombre and not segment.partie_de and not parties
+            and (groupes_possibles or segment.type == "mur") and TYPES[segment.type].niveau == "piece" and (valeurs or exceptions_pieces)):
         logement = bool(exceptions_pieces) or bool(_LOGEMENT.search(texte)) or (checklist.piece_courante is None and not lieu)
         action("regle", type=segment.type, valeurs=valeurs, exceptions=exceptions_pieces,
                piece="" if logement else (lieu or checklist.nom_piece(checklist.piece_courante)))
@@ -1166,7 +1181,7 @@ def _sans_la_piece(texte: str, nom: str) -> str:
     """« Il fait chaud dans cette cuisine », dans la cuisine : la pièce où l'on est n'est jamais une valeur (« donne sur
     la cuisine ») ; ces mots sont effacés."""
     base = " ".join(m for m in cle_texte(nom).split() if not m.isdigit())
-    motif = rf"\b(?:dans|de|du|en)\s+(?:la |le |l |cette |ce |cet )?{re.escape(base)}(?:\s+\d+)?\b"
+    motif = rf"\b(?:(?:dans|de|du|en)\s+(?:la |le |l |cette |ce |cet )?|(?:un|une|le|la|l)\s+){re.escape(base)}(?:\s+\d+)?\b"
     return re.sub(motif, lambda m: " " * len(m.group(0)), texte)
 
 
@@ -1578,6 +1593,16 @@ def _reponse_a_la_cible(checklist: Checklist, cible: Cible, texte: str, segments
         if element is not None:
             for champ, valeur in _valeurs(cible.type, texte).items():
                 action("enregistrer_reponse", element_id=element.id, type=cible.type, champ=champ, valeur=valeur)
+        return
+    if cible.genre == "element":
+        # Il continue de décrire l'élément en cours (« et l'isolant, c'est de la laine de verre 30 cm ») : ce qui est dit
+        # le complète, même si la dernière question portait sur autre chose (test de Noah, étape 8).
+        if not any(s.type == cible.type for s in segments):
+            valeurs = _valeurs(cible.type, texte)
+            if "isolation" in valeurs and (detail := _valeur_isolation(texte)):
+                valeurs["isolation"] = detail  # « l'isolant, c'est de la laine de verre 30 cm » : isolant et épaisseur
+            for champ, valeur in valeurs.items():
+                action("enregistrer_reponse", element_id=cible.element_id, type=cible.type, champ=champ, valeur=valeur)
         return
     if cible.genre == "orientation":
         # « Ce mur est orienté nord, sud, est ou ouest ? » « Plein sud. » / « À l'est. » / « La façade est au sud. »

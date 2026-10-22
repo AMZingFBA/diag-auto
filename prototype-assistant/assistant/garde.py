@@ -43,6 +43,8 @@ def champ_rempli(cible: Cible, checklist: Checklist) -> bool:
         except ErreurChecklist:
             return False
         return bool(element.orientation) and (element.orientation_source == "dit" or checklist.correction_cap is not None)
+    if cible.genre == "piece" and cible.champ == "proposee":  # « On est dans la cuisine ? » : déjà dit, ou déjà dedans
+        return checklist.trouver_piece(cible.source) == checklist.piece_courante
     if cible.genre in ("champ", "confirmation"):
         try:
             element = checklist.trouver_element(cible.element_id or "")
