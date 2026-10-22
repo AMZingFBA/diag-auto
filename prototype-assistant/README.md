@@ -11,7 +11,7 @@ Ce prototype correspond à l'étape **V1bis** du plan ([docs/02-capture-video.md
    - envoie au serveur le son et **une image par seconde**.
 2. Le **serveur** (ce PC) :
    - repère la fin de chaque phrase, et attend la suite si elle est coupée (« Il est… ») ;
-   - la transcrit sur place : **la voix ne quitte pas le PC** ;
+   - la transcrit sur place, en 0,05 s : **la voix ne quitte pas le PC** (voir « Étape 5 ») ;
    - **note tout de suite**, sans IA, tout ce qu'il reconnaît dans la phrase (quelques millisecondes) ;
    - **pose aussitôt la question suivante du parcours**, sans attendre l'IA (voir « Parcours de la visite » plus bas).
 3. **Claude** n'intervient qu'en appui :
@@ -107,7 +107,7 @@ Au premier lancement, le modèle de transcription se télécharge (environ 500 M
 1. Ouvrez l'adresse affichée pour le téléphone, dans Chrome (Android) ou Safari (iPhone).
 2. Un avertissement de sécurité s'affiche, parce que le certificat est fait maison. Touchez « Paramètres avancés », puis « Continuer vers le site ». C'est normal pour ce prototype : le HTTPS est obligatoire pour que le téléphone autorise la caméra et le micro.
 3. Branchez une **oreillette**, de préférence. Sans oreillette, la voix de l'assistant passe par le haut-parleur et peut être captée par le micro.
-4. Touchez **Démarrer la visite** et autorisez la caméra et le micro.
+4. Touchez **Démarrer la visite** et autorisez la caméra et le micro. Sur iPhone, autorisez aussi l'accès à l'**orientation** (boussole) : il sert à nommer les murs (« le mur nord »). Si vous refusez, les murs sont nommés autrement.
 5. Filmez en parlant normalement, en décrivant librement :
    - « ici c'est la cuisine » ;
    - « ce mur fait 4 m 50 de long, brique 30 cm, isolé par l'intérieur, il donne dehors » ;
@@ -115,12 +115,13 @@ Au premier lancement, le modèle de transcription se télécharge (environ 500 M
    - en réponse à une question, un seul mot suffit : « extérieur », « basse », « roulants » ;
    - « je ne sais pas » ;
    - « pas de radiateur ici ».
-6. Les boutons :
+6. À côté de chaque question sur un élément, l'écran montre sa **vignette** : l'image filmée quand il a été décrit. Le diagnostiqueur sait ainsi de quel mur on parle.
+7. Les boutons :
    - **Assistant actif / muet** : en mode muet, les questions s'affichent sans être lues.
    - **Terminer** :
      - au 1er appui, l'assistant dit ce qui manque encore ;
      - au 2e appui (« Arrêter vraiment »), la visite s'arrête.
-7. À la fin :
+8. À la fin :
    - **Envoyer la vidéo au serveur** : le fichier original, sans recompression ; **jamais par WhatsApp**.
    - ou **Garder la vidéo sur le téléphone**.
 
@@ -158,6 +159,12 @@ puis, dans un **autre** terminal :
 ```
 cd prototype-assistant
 ..\.venv\Scripts\python -m assistant.rejouer ..\samples\video-001\video.mp4 --serveur http://localhost:8765
+```
+
+Une **visite déjà enregistrée** se rejoue de la même façon, à partir de son dossier (son `audio.wav` et images) :
+
+```
+..\.venv\Scripts\python -m assistant.rejouer sessions\20261022-083308-20ef54 --serveur http://localhost:8765 --piece Séjour
 ```
 
 ## Évaluer sur une pièce complète à 4 murs
@@ -344,18 +351,13 @@ Ce qui est deviné, déduit, confirmé ou dit avec un doute (« je crois que c'e
 
 | Moteur | Temps par phrase | Qualité observée | Licence |
 |---|---|---|---|
-| **Whisper small** (OpenAI), avec le contexte et le garde-fou : **retenu par défaut** | 2,3 s | bon en général ; quelques erreurs (« Blois » pour « Bois », « Ocean » pour « eau chaude ») | MIT |
+| **Whisper small** (OpenAI), avec le contexte et le garde-fou : retenu à l'étape 3, **second avis depuis l'étape 5** | 2,3 s | bon en général ; quelques erreurs (« Blois » pour « Bois », « Ocean » pour « eau chaude ») | MIT |
 | Whisper small français (`bofenghuang/whisper-small-cv11-french`) | 2,4 s | meilleur sur certaines phrases (« Derrière le rideau », « eau chaude ») mais invente davantage sur du silence (« Réalisé par l'Institut… », « Brique, parpaing, basse température. ») ; nombres en lettres | Apache-2.0 (version CTranslate2 publiée par un tiers : à vérifier) |
-| **FastConformer français** (NVIDIA, version ONNX) : **en option** | **0,05 s** | souvent juste (« Je ne t'entends plus », « Derrière le rideau », « Bois ») ; parfois abîmé (« de la' prriix » pour brique, « Euxux chaudes ») ; sur du silence, du charabia mais jamais de valeur métier | CC-BY-4.0 (mention de NVIDIA obligatoire ; version ONNX publiée par OpenVoiceOS : à vérifier avant usage commercial) |
+| **FastConformer français** (NVIDIA, version ONNX) : en option à l'étape 3, **par défaut depuis l'étape 5** | **0,05 s** | souvent juste (« Je ne t'entends plus », « Derrière le rideau », « Bois ») ; parfois abîmé (« de la' prriix » pour brique, « Euxux chaudes ») ; sur du silence, du charabia mais jamais de valeur métier | CC-BY-4.0 (mention de NVIDIA obligatoire ; version ONNX publiée par OpenVoiceOS : à vérifier avant usage commercial) |
 
 Aucun Whisper plus gros ne tient la vitesse sur ce processeur : turbo, medium et les versions françaises « distil » gardent un gros encodeur et prennent 7 à 10 s.
 
-**À essayer avec Noah** : le FastConformer ramènerait la question à **moins de 1 s après la fin de la phrase** (au lieu d'environ 3 s). Ses mots abîmés sont en partie rattrapés par la comparaison phonétique et par Claude. Pour l'essayer :
-
-```
-set DIAGAUTO_TRANSCRIPTION=fastconformer
-..\.venv\Scripts\python -m assistant
-```
+**À essayer avec Noah** : le FastConformer ramènerait la question à **moins de 1 s après la fin de la phrase** (au lieu d'environ 3 s). Ses mots abîmés sont en partie rattrapés par la comparaison phonétique et par Claude. C'est fait à l'étape 5 (mode « rapide », par défaut).
 
 ## Étape 4 : un assistant qui s'adapte (22/10/2026)
 
@@ -412,6 +414,82 @@ Une valeur dite pour un élément l'emporte sur celle reprise d'un groupe ou d'u
 - « Tous les radiateurs sont électriques » vaut pour la pièce. Pour tout le logement, il faut le dire (« du logement », « partout ») ou excepter une autre pièce.
 - Les phrases trop compliquées pour les règles sont confiées à Claude. Il dispose des mêmes outils : séparer un groupe, changer un nombre, poser une règle.
 
+## Étape 5 : le test réel de Noah, rejoué avant et après (22/10/2026)
+
+Retour de Noah sur son test (visite `sessions/20261022-083308-20ef54`) : « trop lent, ne s'adapte pas, je dois répéter, je ne sais pas c'est quel mur 3 / mur 4 ». Le son de cette visite a été **rejoué tel quel** dans le serveur, avant et après les corrections (`python -m assistant.rejouer sessions\20261022-083308-20ef54`). Les deux dialogues complets sont dans [rejeux/20261022-test-reel-noah.md](rejeux/20261022-test-reel-noah.md).
+
+**1. Des noms de murs compréhensibles, jamais « le mur 3 ».**
+- Le mur dont on vient de parler est « ce mur ».
+- Les autres sont nommés par ce qui a été dit ou vu d'eux :
+  - le repère dit : « le mur avec la télé », « le mur du fond » ;
+  - ses fenêtres : « le mur des 3 fenêtres », car une fenêtre citée après un mur est rattachée à ce mur ;
+  - ce sur quoi il donne : « le mur côté voisin », « le mur côté WC », « le mur extérieur » ;
+  - la boussole du téléphone au moment où il a été filmé : « le mur nord ».
+- Sans indice, c'est « le mur affiché ». La page montre la **vignette** de l'élément à côté de chaque question.
+- « Quel mur ? » : l'assistant répond (« Le mur côté garage. ») et repose sa question.
+- Une question de Claude qui dit « mur 3 » ou « le quatrième mur » est refusée.
+
+**2. Les phrases globales sont comprises.**
+- « Cette pièce fait 4 murs » : une fois les 4 murs décrits, plus de « Un autre mur ? ». Avant, l'assistant demande « Il reste un mur : il donne sur quoi ? ».
+- « Il y a juste un mur qui donne sur l'extérieur, le reste donne sur l'intérieur ou les voisins » :
+  - c'est le mur extérieur déjà décrit, pas un mur de plus ;
+  - les autres murs donnent sur un local chauffé, sans aucune question de plus ;
+  - la liste des murs est close.
+- « Pareil pour celui-là » : un nouveau mur avec les valeurs du précédent.
+- « Il te faut quoi d'autre ? » : l'assistant dit ce qui manque pour l'élément en cours, puis repose sa question.
+
+**3. Pas de question inutile.**
+- « Il donne derrière sur des toilettes », « sur la cuisine » : c'est un local chauffé. Le matériau et l'épaisseur ne sont pas demandés (hypothèse déjà en place : paroi non déperditive).
+- Les valeurs libres de Claude (« toilettes ») sont ramenées au vocabulaire du serveur, pour que cette règle s'applique.
+- Un mot mal entendu n'est deviné que dans une réponse courte. Ce n'était pas le cas au test réel :
+  - « Laine de verre de 30 cm » donnait « J'ai compris pierre ? » ;
+  - la question de Noah « Il te faut quoi comme information sur ce mur ? » donnait le matériau « tuffeau ».
+
+**4. Valeurs aberrantes et contradictions.**
+- Une valeur invraisemblable n'est jamais notée : « il fait 30 mètres » de long, pour un mur de séjour, donne « J'ai compris 30 m de long : plutôt 3 m ? ».
+- Les bornes sont larges, à faire valider (hypothèse) :
+  - mur : 0,3 à 15 m de long et 4 à 100 cm d'épaisseur ;
+  - isolant : 1 à 40 cm sur un mur et 1 à 60 cm sur un plafond ;
+  - année : de 1850 à aujourd'hui ;
+  - côté d'une fenêtre : 0,2 à 6 m.
+- « Le plafond est isolé… le plafond est pas isolé », dans la même phrase : le diagnostiqueur se reprend, seule la dernière valeur compte.
+- D'une phrase à l'autre, une contradiction est gardée et signalée (étape 4).
+
+**5. Temps de réponse : la transcription n'est plus le goulot.**
+- Mesuré sur le son de la visite de Noah :
+  - Whisper small prend **environ 2 s par phrase sur ce processeur, quelle que soit sa longueur** (même « 30 cm. ») : le modèle traite toujours 30 s de son ;
+  - réduire sa recherche (`beam 1`) ne gagne que 0,2 s et le fait inventer davantage (« Le choc est un peu trop épuisé… » sur un bruit).
+- Le **FastConformer** de NVIDIA transcrit la même phrase en **0,05 s**. Il a aussi mieux compris Noah :
+  - « Et le mur est en brique » (Whisper : « embrique ») ;
+  - « Le plafond n'est pas isolé » (Whisper : « des pays isolés ») ;
+  - « Il te faut quoi d'autre comme information ? ».
+- Il devient le moteur par défaut (mode « rapide ») :
+  - Whisper, guidé par le vocabulaire métier, ne donne qu'un **second avis**, et seulement pour une phrase que les règles n'ont pas comprise ;
+  - si Whisper n'y entend pas de vraie parole, c'était un bruit, et rien n'est dit ;
+  - Claude n'intervient qu'ensuite.
+- La transcription « en flux, pendant que la personne parle » n'est donc plus utile : une phrase de 15 s est transcrite en 0,2 s.
+
+| Rejeu du son de la visite de Noah | Avant (étape 4) | Après (étape 5) |
+|---|---|---|
+| Transcription, médiane | 2,26 s | **0,07 s** |
+| Fin de phrase détectée → question prête, médiane | 3,12 s | **0,14 s** |
+| Idem, pire 10 % des phrases | 5,51 s | **0,94 s** |
+| Plus le silence de fin de phrase | + 0,7 s | + 0,7 s |
+
+Total entre la fin de la phrase et la question : environ **3,8 s avant, 0,85 s après** (médiane), plus le démarrage de la voix du téléphone. Une phrase incomprise reste plus lente (second avis de Whisper ~2 s, puis Claude ~2 à 3 s).
+
+**6. Mots métier mal transcrits** : corrections ajoutées au lexique, d'après ce rejeu :
+- « combles bleus » et « comblots » → combles perdus, combles ;
+- « y embrique » → est en brique ;
+- « des pays isolés », « DPE isolé », « dépa isolés » → est pas isolé.
+
+**Tests** : `tests/test_visite_reelle.py` (23 tests). Il contient la visite de Noah rejouée en texte, phrase par phrase, avec ce qu'elle doit donner. Le prototype compte maintenant 156 tests.
+
+**Limites de cette étape** :
+- La boussole d'un téléphone est souvent faussée à l'intérieur. Le nom « le mur nord » n'est qu'un repère, et l'orientation reste à confirmer à l'écran de validation.
+- Le FastConformer ne connaît pas le vocabulaire métier. Ses erreurs sont rattrapées par le lexique, la comparaison phonétique, puis le second avis de Whisper. Sa licence (CC-BY-4.0, mention de NVIDIA ; version ONNX publiée par OpenVoiceOS) est à vérifier avant un usage commercial.
+- Le rejeu d'une visite garde les réponses d'origine de Noah, alors que les questions ont changé. Certains échanges ne se répondent donc plus, ce qui est normal.
+
 ## Réglages (variables d'environnement)
 
 | Variable | Défaut | Rôle |
@@ -421,7 +499,7 @@ Une valeur dite pour un élément l'emporte sur celle reprise d'un groupe ou d'u
 | `DIAGAUTO_EFFORT` | `low` | Effort de Claude (`low` à `max`). |
 | `DIAGAUTO_IMAGES` | `message` | `message` (le plus rapide) ou `fichiers` (Claude ouvre les images avec son outil de lecture). |
 | `DIAGAUTO_CLAUDE` | trouvé automatiquement | Chemin de `claude.exe`. |
-| `DIAGAUTO_TRANSCRIPTION` | `auto` | `whisper`, `fastconformer` (option rapide à l'essai, voir « Étape 3 »), `simulation`, ou `auto` (Whisper s'il est installé). |
+| `DIAGAUTO_TRANSCRIPTION` | `auto` | `rapide` (FastConformer, Whisper en second avis : voir « Étape 5 »), `whisper`, `fastconformer`, `simulation`, ou `auto` (`rapide` si les deux moteurs sont installés, sinon Whisper). |
 | `DIAGAUTO_WHISPER_MODELE` | `auto` | `auto` = `large-v3-turbo` avec carte graphique, `small` sinon. |
 | `DIAGAUTO_WHISPER_FAISCEAU` | `5` | Largeur de recherche de Whisper. `1` est un peu plus rapide (−0,2 s) mais se trompe davantage sur les mots courts. |
 | `DIAGAUTO_FIN_SILENCE` | `0.7` | Silence (en secondes) qui termine une phrase. Trop court, l'assistant coupe la parole ; trop long, il paraît lent. |
@@ -444,7 +522,7 @@ Une valeur dite pour un élément l'emporte sur celle reprise d'un groupe ou d'u
 - La vidéo est gardée **dans la mémoire du téléphone** jusqu'à la fin. Cela convient pour des tests de quelques minutes ; en 1080p, environ 60 Mo par minute.
 - La **détection de fin de phrase** se fait sur le volume du son, ce qui est simple. Silero VAD reste à évaluer, une fois sa licence vérifiée.
 - La **voix** est celle du navigateur ; Piper (voix fr_FR-siwis, sur le serveur) viendra ensuite.
-- Les **capteurs** (boussole, gyroscope) ne sont pas encore enregistrés.
+- La **boussole** du téléphone est enregistrée (une valeur par seconde) et sert à nommer les murs. Elle est souvent faussée de 20 à 30° à l'intérieur (métal, électricité) : l'orientation reste « à confirmer ». Le gyroscope n'est pas encore enregistré.
 - **Deux processus Claude Code par visite** : un pour les réponses, un pour la veille, pour que la veille ne retarde jamais une réponse.
 - Différences avec le plan § 3.6 :
   - **Pas d'« outils » au sens de l'API** : Claude répond en JSON (question + actions), et le serveur applique les actions après vérification. Les actions sont `piece_courante`, `signaler_element`, `enregistrer_reponse`, `marquer_sans_objet`, `cloturer`, `copier`, et depuis l'étape 4 `scinder`, `compter`, `regle` et `exception`.
@@ -456,9 +534,11 @@ Une valeur dite pour un élément l'emporte sur celle reprise d'un groupe ou d'u
 |---|---|
 | `assistant/checklist.py` | La checklist DPE et le calcul de ce qui manque ; groupes, parties séparées, règles du logement, contradictions. |
 | `assistant/groupes.py` | Découpage d'une phrase en groupes, quantités et exceptions (« 9 … et 1 … », « dont une », « tous sauf un »). |
+| `assistant/noms.py` | Noms parlants à l'oral : « ce mur », « le mur côté voisin », « le mur nord », jamais « le mur 3 ». |
+| `assistant/plausibilite.py` | Contrôle des valeurs invraisemblables (un mur de 30 m de long) avant de les noter. |
 | `assistant/citations.py`, `assistant/actions.py` | Vérification des citations ; application des actions proposées. |
 | `assistant/lexique.py` | Lexique métier pour la transcription, corrections connues (« parpin » → parpaing). |
-| `assistant/vad.py`, `assistant/transcription.py` | Fin de phrase ; transcription faster-whisper. |
+| `assistant/vad.py`, `assistant/transcription.py` | Fin de phrase ; transcription (FastConformer, Whisper en second avis). |
 | `assistant/extraction.py` | Extraction immédiate, sans IA, de tout ce qui est dit (description libre, réponse courte, mot mal transcrit deviné, « je ne sais pas »). |
 | `assistant/garde.py` | Garde-fous sur les questions : une seule, jamais « répétez », jamais un champ déjà rempli ou déjà demandé. |
 | `assistant/cerveau.py` | Claude via Claude Code : consignes, messages, processus gardé ouvert. |
