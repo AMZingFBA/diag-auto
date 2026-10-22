@@ -23,7 +23,11 @@ TRAME = 480  # 30 ms
 class ReglagesVad:
     fin_silence_s: float = 0.7  # silence qui termine une phrase (docs : 0,5 à 0,8 s)
     debut_s: float = 0.09  # parole continue avant de déclarer un début
-    pre_roll_s: float = 0.3  # son gardé avant le début détecté
+    # Son gardé avant le début détecté et après la fin. Mesuré sur le test de Noah (iPhone, 22/10/2026) :
+    # avec 0,3 s avant et 0,2 s après, Whisper se trompait sur les réponses d'un ou deux mots
+    # (« BESSE » pour « bas », « O, chaudi » pour « eau chaude ») ; avec 1 s et 0,5 s, il les comprend.
+    pre_roll_s: float = 1.0
+    fin_gardee_s: float = 0.5
     duree_min_s: float = 0.35  # en dessous : bruit (toux, porte), ignoré
     duree_max_s: float = 15.0  # au-delà : phrase coupée de force
     marge_db: float = 12.0  # au-dessus du plancher de bruit = parole
@@ -66,6 +70,7 @@ class DetecteurPhrases:
         self._trames_parole = 0
         self._trames_silence = 0
         self._phrase: list[np.ndarray] = []
+        self._trames_avant = 0
         self._t_debut_phrase = 0.0
 
     @staticmethod
@@ -112,6 +117,7 @@ class DetecteurPhrases:
                 self._en_parole = True
                 self._trames_silence = 0
                 self._phrase = list(self._historique)
+                self._trames_avant = len(self._phrase) - self._trames_parole  # pré-roll (sans la parole déjà là)
                 self._t_debut_phrase = t + TRAME / TAUX - len(self._phrase) * TRAME / TAUX
                 self._historique = []
                 evenements.append(Evenement("debut", t))
@@ -129,12 +135,12 @@ class DetecteurPhrases:
         silence_final = self._trames_silence * TRAME
         audio = np.concatenate(self._phrase) if self._phrase else np.zeros(0, dtype=np.float32)
         if silence_final:
-            audio = audio[: max(0, len(audio) - silence_final + int(0.2 * TAUX))]  # garde 0,2 s de fin
+            audio = audio[: max(0, len(audio) - silence_final + min(silence_final, int(r.fin_gardee_s * TAUX)))]
+        parole_s = (len(self._phrase) - self._trames_avant - self._trames_silence) * TRAME / TAUX
         self._en_parole = False
         self._phrase = []
         self._trames_parole = 0
         self._trames_silence = 0
-        parole_s = len(audio) / TAUX - r.pre_roll_s
         if parole_s < r.duree_min_s:
             return [Evenement("fin", t_fin, None)]  # trop court : bruit
         return [Evenement("fin", t_fin, Phrase(audio, self._t_debut_phrase, self._t_debut_phrase + len(audio) / TAUX))]

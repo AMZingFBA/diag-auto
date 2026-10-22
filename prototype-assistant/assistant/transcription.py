@@ -81,6 +81,11 @@ class TranscripteurWhisper:
                 condition_on_previous_text=False,
                 without_timestamps=True,
                 vad_filter=False,  # la détection de phrase est déjà faite
+                # Garde-fous mesurés sur le test de Noah : sans eux, Whisper recommençait plusieurs fois
+                # quand il hésitait (jusqu'à 14 s) ou bouclait (« plafondage, plafondage… »).
+                temperature=0.0,
+                no_repeat_ngram_size=3,
+                max_new_tokens=int(len(audio) / 16_000 * 8) + 8,
             )
             texte = " ".join(s.text.strip() for s in segments)
         return "" if est_hallucination(texte) else corriger(texte)

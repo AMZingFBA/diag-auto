@@ -27,8 +27,8 @@ def test_une_phrase_detectee_avec_ses_instants():
     ev = envoyer(d, son((1.0, 0), (1.5, 6000), (1.2, 0)), t0=10.0)
     assert [e.type for e in ev] == ["debut", "fin"]
     phrase = ev[1].phrase
-    assert abs(phrase.t_debut - 10.7) < 0.1  # 0,3 s de pré-roll avant 11,0 s
-    assert abs(phrase.t_fin - 12.7) < 0.15
+    assert abs(phrase.t_debut - 10.0) < 0.1  # 1 s de son gardé avant la voix (11,0 s)
+    assert abs(phrase.t_fin - 13.0) < 0.15  # 0,5 s gardée après la voix (12,5 s)
     assert ev[1].t - 12.5 < 0.9  # fin déclarée moins de 0,9 s après la fin de la voix
 
 

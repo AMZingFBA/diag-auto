@@ -29,6 +29,11 @@ CORRECTIONS: list[tuple[str, str]] = [
     (r"\bI\.?T\.?I\.?\b", "ITI"),
     (r"\bhygro ?b[ée]\b", "hygro B"),
     (r"\bplacot?\b", "placo"),
+    # Confusions entendues pendant le test de Noah sur iPhone (22/10/2026).
+    (r"\bl'?allaine\b", "la laine"),
+    (r"\bbesse\b", "basse"),
+    (r"\b(?:o|oh|ouh|au|eau)[ ,]+chaud(?:i|ie|e)?\b", "eau chaude"),
+    (r"\bl'?AVMC\b", "la VMC"),
 ]
 
 # Phrases que Whisper invente sur du silence ou du bruit (connu en français).
@@ -39,6 +44,7 @@ HALLUCINATIONS = (
     "merci d'avoir regardé",
     "abonnez-vous",
     "amara.org",
+    "thank you",
 )
 
 

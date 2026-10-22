@@ -25,7 +25,7 @@ class Reglages:
     transcription: str = field(default_factory=lambda: _env("DIAGAUTO_TRANSCRIPTION", "auto"))
     whisper_modele: str = field(default_factory=lambda: _env("DIAGAUTO_WHISPER_MODELE", "auto"))
     whisper_appareil: str = field(default_factory=lambda: _env("DIAGAUTO_WHISPER_APPAREIL", "auto"))
-    whisper_faisceau: int = field(default_factory=lambda: int(_env("DIAGAUTO_WHISPER_FAISCEAU", "1")))
+    whisper_faisceau: int = field(default_factory=lambda: int(_env("DIAGAUTO_WHISPER_FAISCEAU", "5")))
     fin_silence_s: float = field(default_factory=lambda: float(_env("DIAGAUTO_FIN_SILENCE", "0.7")))
     veille_s: float = field(default_factory=lambda: float(_env("DIAGAUTO_VEILLE_S", "10")))
     questions_par_minute: int = field(default_factory=lambda: int(_env("DIAGAUTO_QUESTIONS_MINUTE", "6")))
