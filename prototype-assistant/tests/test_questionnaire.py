@@ -454,3 +454,20 @@ def test_reponses_par_boutons_sans_plafond_de_questions(tmp_path):
 
 def journal_de(session):
     return [json.loads(ligne) for ligne in (session.dossier / "journal.jsonl").read_text(encoding="utf-8").splitlines()]
+
+
+def test_oui_un_autre_mur_appuye_deux_fois_un_seul_mur(tmp_path):
+    # Test du 23/10 : rien ne se passant (question retenue), Noah a appuyé deux fois sur « Oui, un autre ».
+    async def scenario():
+        session, recus = await ouvrir(tmp_path, CerveauScenario(poli()))
+        await session.ouvrir_visite()
+        for valeur in ("local chauffé (voisin)", "oui"):
+            await session.recevoir_controle({"type": "reponse", "cible": session._cible.code, "valeur": valeur, "libelle": valeur})
+        avant = len(recus)
+        await session.recevoir_controle({"type": "reponse", "cible": "suite:mur", "valeur": "oui", "libelle": "Oui, un autre"})
+        await session.terminer()
+        return session, recus, avant
+
+    session, recus, avant = asyncio.run(scenario())
+    assert [m.id for m in session.checklist.enveloppe("mur", interieurs=True)] == ["M1", "M2"]
+    assert "Ce mur donne sur quoi ?" in [m["texte"] for m in recus if m["type"] == "dire"]

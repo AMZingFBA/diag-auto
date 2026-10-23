@@ -1885,6 +1885,11 @@ def _reponse_a_la_cible(checklist: Checklist, cible: Cible, texte: str, segments
                 action("marquer_sans_objet", type=cible.type, champ="presence", element_id="", **sur_le_mur)
             return
         nombre = re.match(r"^(?:oui\s*,?\s*)?(\d+)\b", reponse)
+        vide = next((m for m in checklist.enveloppe("mur", interieurs=True) if m.valeur("donne_sur") is None), None)
+        if cible.genre == "suite" and cible.type == "mur" and _OUI.match(reponse) and not valeurs and vide is not None:
+            # « Oui, un autre » appuyé deux fois (test du 23/10) : le mur annoncé n'est pas encore décrit, pas un de plus.
+            action("signaler_element", element_id=vide.id, type="mur")
+            return
         if _OUI.match(reponse) or nombre or valeurs:
             n = int(nombre.group(1)) if nombre and 1 <= int(nombre.group(1)) <= 50 and cible.type != "mur" else None
             description = _nouvelle_description(checklist, cible.type, n)
