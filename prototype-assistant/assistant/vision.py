@@ -46,6 +46,15 @@ def reduire(image: np.ndarray, cote_max: int = COTE_MAX) -> np.ndarray:
     return image
 
 
+def redresser(couleur: np.ndarray, rotation: float) -> np.ndarray:
+    """L'image d'une vidéo de téléphone telle qu'elle s'affiche. ``rotation`` (PyAV, matrice d'affichage) est l'angle dont
+    l'affichage tourne l'image dans le sens direct : −90 pour un iPhone en portrait, soit un quart de tour dans le sens des
+    aiguilles d'une montre (comme le fait ffmpeg). Avant le 23/10, le sens était inversé : ces vidéos sortaient à l'envers
+    et le cap suivi sur la vidéo tournait à rebours du gyroscope."""
+    k = round(rotation / 90) % 4
+    return np.ascontiguousarray(np.rot90(couleur, k)) if k else couleur
+
+
 def lire_video(chemin: Path, fps_max: float = 10.0) -> tuple[list[Vue], float]:
     """Toutes les images de la vidéo, jusqu'à ``fps_max`` par seconde (suivi continu, pas une photo toutes les n s).
     Renvoie aussi la cadence d'origine."""
@@ -64,10 +73,7 @@ def lire_video(chemin: Path, fps_max: float = 10.0) -> tuple[list[Vue], float]:
             if t + 1e-6 < prochain:
                 continue
             prochain = t + pas * 0.999
-            couleur = image.to_ndarray(format="bgr24")
-            rotation = getattr(image, "rotation", 0) or 0  # vidéo de téléphone : image à redresser (degrés, sens direct)
-            if rotation:
-                couleur = np.ascontiguousarray(np.rot90(couleur, round(-rotation / 90) % 4))
+            couleur = redresser(image.to_ndarray(format="bgr24"), getattr(image, "rotation", 0) or 0)
             gris = cv2.cvtColor(couleur, cv2.COLOR_BGR2GRAY)
             _, jpeg = cv2.imencode(".jpg", reduire(couleur, 320), [cv2.IMWRITE_JPEG_QUALITY, 70])
             vues.append(Vue(round(t, 3), reduire(gris), vignette=jpeg.tobytes()))
