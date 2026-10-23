@@ -1111,7 +1111,14 @@ pour le reste. Il a l'air d'un bouton comme les autres ; un appui ouvre le clavi
 « cm » et « OK ». (Techniquement, c'est une case de saisie déguisée en bouton : sur iPhone, le clavier ne s'ouvre que si
 l'on touche la case elle-même.)
 
-Le prototype compte 321 tests (et le projet, à la racine, 654).
+**« OK » qui ne faisait rien (Noah, 23/10, 8 h 31)** : le bouton « OK » n'était visible que pendant que la case avait la
+main ; sur iPhone, toucher un bouton la lui retire d'abord, et « OK » disparaissait sous le doigt. La case reste
+maintenant ouverte tant qu'elle contient un chiffre, et « OK » envoie la valeur. **Test dans un vrai navigateur**
+(`tests/test_page_navigateur.py`) : la page du téléphone servie par le serveur, ouverte dans Edge sans fenêtre en taille
+de téléphone, touchée au doigt (écran tactile simulé) ; on vérifie ce qui part vers le serveur (bouton, « Autre… », nombre,
+« OK », y compris quand la case perd la main comme sur iPhone). Sauté si Edge manque ; ce n'est pas Safari.
+
+Le prototype compte 325 tests (et le projet, à la racine, 654).
 
 ## Réglages (variables d'environnement)
 

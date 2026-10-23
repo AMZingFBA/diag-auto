@@ -3,7 +3,7 @@
 // (16 kHz) et une image par seconde, et lit à voix haute les questions de l'assistant.
 
 // Version de la page, comparée à celle du serveur (test du 23/10 : l'iPhone gardait l'ancienne page en mémoire).
-const VERSION_PAGE = "2026-10-23-2";
+const VERSION_PAGE = "2026-10-23-3";
 const $ = (id) => document.getElementById(id);
 const TAUX = 16000;
 const TYPE_SON = 1;
@@ -299,22 +299,37 @@ function boutonsReponse(conteneur, options, envoyer) {
 function saisieAutre(o, envoyer) {
   const ligne = Object.assign(document.createElement("form"), { className: "autre" });
   const champ = Object.assign(document.createElement("input"), {
-    type: "text", placeholder: o.libelle, inputMode: "decimal", required: true, pattern: "[0-9]+([,.][0-9]+)?",
-    enterKeyHint: "done", autocomplete: "off" });
+    type: "text", placeholder: o.libelle, inputMode: "decimal", enterKeyHint: "done", autocomplete: "off" });
   const unite = Object.assign(document.createElement("span"), { textContent: o.unite || "" });
-  const ok = Object.assign(document.createElement("button"), { type: "submit", textContent: "OK" });
+  const ok = Object.assign(document.createElement("button"), { type: "button", textContent: "OK" });
   ligne.append(champ, unite, ok);
-  champ.onfocus = () => { champ.placeholder = o.unite ? `en ${o.unite}` : ""; };
-  champ.onblur = () => { if (!champ.value) champ.placeholder = o.libelle; };
-  ligne.onsubmit = (e) => {
-    e.preventDefault();
-    const valeur = champ.value.trim();
-    if (!valeur) return;
+  // Ouverte (case, unité, « OK ») dès qu'on la touche, et tant qu'elle contient un chiffre. Test du 23/10 : « OK »
+  // n'était visible que pendant que la case avait la main ; sur iPhone, toucher « OK » la lui retire d'abord, et le
+  // bouton disparaissait sous le doigt : rien ne partait.
+  const ouvrir = () => ligne.classList.add("ouverte");
+  champ.onfocus = () => { ouvrir(); champ.placeholder = o.unite ? `en ${o.unite}` : ""; };
+  champ.oninput = ouvrir;
+  champ.onblur = () => {
+    if (champ.value.trim()) return;
+    ligne.classList.remove("ouverte");
+    champ.placeholder = o.libelle;
+  };
+  const valider = () => {
+    const valeur = champ.value.trim().replace(/\s+/g, "");
+    if (!/^[0-9]+([,.][0-9]+)?$/.test(valeur)) {
+      $("latence").textContent = "Tapez un nombre (par exemple 23).";
+      return;
+    }
     couperVoix();
     envoyer({ ...o, valeur, libelle: `${valeur}${o.unite ? " " + o.unite : ""}` });
     $("latence").textContent = `✓ Noté : ${valeur}${o.unite ? " " + o.unite : ""}`;
+    champ.value = "";
+    ligne.classList.remove("ouverte");
     champ.blur();
   };
+  ok.addEventListener("pointerdown", (e) => e.preventDefault()); // la case garde la main : le bouton reste sous le doigt
+  ok.onclick = valider;
+  ligne.onsubmit = (e) => { e.preventDefault(); valider(); }; // touche « OK » du clavier
   return ligne;
 }
 

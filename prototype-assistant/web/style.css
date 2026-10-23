@@ -84,11 +84,11 @@ progress { width: 100%; margin-top: 10px; }
                           color: var(--texte); font-weight: 600; border: 2px solid var(--accent); border-radius: 10px; width: auto; }
 .choix form.autre input::placeholder { color: var(--texte); opacity: 1; }
 .choix form.autre span, .choix form.autre button { display: none; }
-.choix form.autre:focus-within { flex-basis: 100%; }
-.choix form.autre:focus-within input { text-align: left; font-size: 1.1rem; }
-.choix form.autre:focus-within input::placeholder { opacity: 0.5; }
-.choix form.autre:focus-within span { display: inline; color: var(--texte); font-weight: 600; }
-.choix form.autre:focus-within button { display: block; flex: 0 0 auto; background: var(--accent); color: #fff; }
+.choix form.autre.ouverte { flex-basis: 100%; }
+.choix form.autre.ouverte input { text-align: left; font-size: 1.1rem; }
+.choix form.autre.ouverte input::placeholder { opacity: 0.5; }
+.choix form.autre.ouverte span { display: inline; color: var(--texte); font-weight: 600; }
+.choix form.autre.ouverte button { display: block; flex: 0 0 auto; background: var(--accent); color: #fff; }
 .fiche { position: absolute; inset: calc(44px + env(safe-area-inset-top)) 0 0 0; background: var(--fond); overflow-y: auto;
          padding: 0 12px calc(16px + env(safe-area-inset-bottom)); }
 .fiche-titre { position: sticky; top: 0; display: flex; align-items: center; gap: 8px; padding: 10px 0; background: var(--fond); font-weight: 700; }
