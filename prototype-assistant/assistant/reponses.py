@@ -32,13 +32,12 @@ SANS_AUTRE = {"donne_sur"}  # ce sur quoi donne une paroi : une catégorie connu
 
 
 def autre(champ: str) -> dict | None:
-    """Le bouton « Autre… » d'une information : ce qu'il faut taper (nombre et unité, ou texte)."""
-    if champ in SANS_AUTRE:
+    """Le bouton « Autre… » : seulement pour une mesure en centimètres (Noah, 23/10 : « uniquement pour ce qui est mesuré
+    en cm, le reste non »). Un appui ouvre le clavier chiffres."""
+    if champ in SANS_AUTRE or champ not in SAISIES or SAISIES[champ][0] != "cm":
         return None
-    if champ in SAISIES:
-        unite, mini, maxi = SAISIES[champ]
-        return {"libelle": "Autre…", "valeur": "", "saisie": "nombre", "unite": unite, "min": mini, "max": maxi}
-    return {"libelle": "Autre…", "valeur": "", "saisie": "texte"}
+    unite, mini, maxi = SAISIES[champ]
+    return {"libelle": "Autre…", "valeur": "", "saisie": "nombre", "unite": unite, "min": mini, "max": maxi}
 
 
 def valeur_tapee(champ: str, texte: str) -> str | None:

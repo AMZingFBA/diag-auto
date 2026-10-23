@@ -3,7 +3,7 @@
 // (16 kHz) et une image par seconde, et lit à voix haute les questions de l'assistant.
 
 // Version de la page, comparée à celle du serveur (test du 23/10 : l'iPhone gardait l'ancienne page en mémoire).
-const VERSION_PAGE = "2026-10-23-1";
+const VERSION_PAGE = "2026-10-23-2";
 const $ = (id) => document.getElementById(id);
 const TAUX = 16000;
 const TYPE_SON = 1;
@@ -293,18 +293,19 @@ function boutonsReponse(conteneur, options, envoyer) {
   conteneur.hidden = !options.length;
 }
 
-// « Autre… » (Noah, 23/10) : une valeur qui n'est pas dans les boutons, tapée (clavier numérique pour une mesure ou une
-// année), puis vérifiée et mise en forme par le serveur (« 23 » → « 23 cm »). La case est là tout de suite : sur iPhone,
-// le clavier ne s'ouvrait pas quand elle apparaissait après un appui sur « Autre… ».
+// « Autre… » (Noah, 23/10) : une mesure en cm qui n'est pas dans les boutons. Il a l'air d'un bouton comme les autres ;
+// un appui ouvre le clavier chiffres (c'est une case de saisie déguisée : sur iPhone, le clavier ne s'ouvre que si l'on
+// touche la case elle-même), puis « OK » envoie la valeur, vérifiée et mise en forme par le serveur (« 23 » → « 23 cm »).
 function saisieAutre(o, envoyer) {
   const ligne = Object.assign(document.createElement("form"), { className: "autre" });
   const champ = Object.assign(document.createElement("input"), {
-    type: "text", placeholder: o.saisie === "nombre" ? "Autre valeur" : "Autre réponse",
-    inputMode: o.saisie === "nombre" ? "decimal" : "text", required: true, enterKeyHint: "done" });
-  if (o.saisie === "nombre") champ.pattern = "[0-9]+([,.][0-9]+)?";
+    type: "text", placeholder: o.libelle, inputMode: "decimal", required: true, pattern: "[0-9]+([,.][0-9]+)?",
+    enterKeyHint: "done", autocomplete: "off" });
   const unite = Object.assign(document.createElement("span"), { textContent: o.unite || "" });
   const ok = Object.assign(document.createElement("button"), { type: "submit", textContent: "OK" });
   ligne.append(champ, unite, ok);
+  champ.onfocus = () => { champ.placeholder = o.unite ? `en ${o.unite}` : ""; };
+  champ.onblur = () => { if (!champ.value) champ.placeholder = o.libelle; };
   ligne.onsubmit = (e) => {
     e.preventDefault();
     const valeur = champ.value.trim();

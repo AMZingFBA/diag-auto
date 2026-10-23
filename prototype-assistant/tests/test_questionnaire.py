@@ -429,8 +429,10 @@ def test_autre_valeur_tapee_enregistree(tmp_path):
     assert [(v.valeur, v.citation) for v in mur.valeurs["epaisseur"]] == [("23 cm", "tapé sur le téléphone : 23 cm")]
     assert dits(apres) == ["Il est isolé ?"]  # la question suivante part aussitôt
     assert mur.valeur("materiau").valeur == "terre"  # ramené au vocabulaire, comme dit à l'oral
-    autre = next(o for o in questions(apres)[0]["options"] if o.get("saisie"))
-    assert autre == {"libelle": "Autre…", "valeur": "", "saisie": "texte"}  # isolation : texte libre (« laine de bois 12 cm »)
+    # « Autre… » seulement pour une mesure en cm (Noah, 23/10) : pas pour l'isolation.
+    assert not [o for o in questions(apres)[0]["options"] if o.get("saisie")]
+    from assistant.reponses import options_par_champ
+    assert [cle for cle, options in options_par_champ().items() if any(o.get("saisie") for o in options)] == ["mur.epaisseur"]
 
 
 def test_reponses_par_boutons_sans_plafond_de_questions(tmp_path):

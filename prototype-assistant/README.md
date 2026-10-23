@@ -1106,7 +1106,12 @@ téléphone », et la question suivante part aussitôt.
   compare sa version à celle du serveur : si elle est ancienne, elle affiche « Nouvelle version de l'assistant :
   rechargez la page » avant de commencer.
 
-Le prototype compte 320 tests (et le projet, à la racine, 654).
+**« Autre… », version finale (Noah, 23/10)** : seulement pour une mesure en centimètres (l'épaisseur d'un mur), plus
+pour le reste. Il a l'air d'un bouton comme les autres ; un appui ouvre le clavier chiffres, la case s'agrandit avec
+« cm » et « OK ». (Techniquement, c'est une case de saisie déguisée en bouton : sur iPhone, le clavier ne s'ouvre que si
+l'on touche la case elle-même.)
+
+Le prototype compte 321 tests (et le projet, à la racine, 654).
 
 ## Réglages (variables d'environnement)
 
