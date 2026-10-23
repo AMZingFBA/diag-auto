@@ -395,7 +395,8 @@ _NOMS_PIECES = "|".join(sorted(_PIECES, key=len, reverse=True))
 # « Ici c'est la cuisine », « on passe au salon ». Pas « c'est les combles » ni « donne dans le garage »,
 # qui décrivent un plafond ou un mur.
 _PIECE = re.compile(
-    r"\b(?:ici c est|ici|on est dans|on entre dans|on passe (?:dans|a|au)|on va (?:dans|a|au)|on arrive dans|nous sommes dans|maintenant"
+    r"\b(?:ici c est|ici|on est dans|on est en|on est|on entre dans|on passe (?:dans|a|au)|on va (?:dans|a|au)|on arrive dans"
+    r"|nous sommes dans|maintenant"
     r"|(?:on )?(?:revient|reviens|revenons|revenir|retourne|retournons|retourner|repasse|repassons)\s+(?:dans|a|au|en)"
     r"|la c est|(?:apres|ensuite|puis)\s*,?\s*(?:la\s*,?\s*)?(?:il y a|c est|on a|on arrive dans))\s+"
     r"(?:la |le |l |les |a la |au |un |une )?(" + _NOMS_PIECES + r")(?:\s+(\d+))?\b"
@@ -1019,7 +1020,12 @@ def extraire(phrase: str, checklist: Checklist, cible: Cible | None = None) -> E
             action("piece_courante", nom=f"{_PIECES[autre.group(3)]} {_ORDINAUX[autre.group(2)]}")
         texte = texte[: autre.start()] + texte[autre.end():]
     elif piece:
-        action("piece_courante", nom=_PIECES[piece.group(1)] + (f" {piece.group(2)}" if piece.group(2) else ""))
+        # Seule une correction explicite (« non, c'est la buanderie », « en fait c'est… ») renomme la pièce reconnue sur
+        # l'image ; « ici c'est le salon » en arrivant au salon est un changement de pièce (test de Noah du 23/10 : la
+        # cuisine d'où il venait avait été renommée « Salon »).
+        corrigee = piece.re is _PIECE_CORRIGEE and bool(re.search(r"^\s*(?:non|en fait)\b|\bpas (?:la |le |l |les )\w+", texte[: piece.end()]))
+        action("piece_courante", nom=_PIECES[piece.group(1)] + (f" {piece.group(2)}" if piece.group(2) else ""),
+               **({"correction": "oui"} if corrigee else {}))
         texte = texte[: piece.start()] + texte[piece.end():]
     elif cible and cible.genre == "piece" and cible.champ == "proposee" and _OUI.match(texte.strip(" ,")):
         action("piece_courante", nom=cible.source)  # « On est dans la cuisine ? » « Oui. »

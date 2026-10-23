@@ -18,8 +18,8 @@ class ClaudeQuiVoitLesPieces:
         self.avis = avis
         self.references: list[list[str]] = []
 
-    async def demarrer(self, propositions=True, pieces=True):
-        self.propositions, self.pieces = propositions, pieces
+    async def demarrer(self, propositions=True, pieces=True, voix=False):
+        self.propositions, self.pieces, self.voix = propositions, pieces, voix
 
     async def fermer(self):
         pass

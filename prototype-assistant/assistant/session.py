@@ -27,11 +27,13 @@ from . import parcours, plausibilite
 from .actions import appliquer
 from .citations import citation_trouvee
 from .cerveau import Contexte, Decision, ImageInstant, phrases_finies
-from .checklist import ORIENTABLES, TOUJOURS_PRESENTS, Checklist, Element, ErreurChecklist, cle_texte, horodatage
+from .checklist import ORIENTABLES, SYNONYMES_PIECES, TOUJOURS_PRESENTS, Checklist, Element, ErreurChecklist, cle_texte, horodatage
 from .extraction import VOCABULAIRE, Cible, confirme_meme, extraire, normaliser, question_posee, valeur_normalisee
 from .boussole import CAP_DU_POINT, MEME_COTE, Boussole, Mesure, Visee, ecart, visee_decalee
 from .croquis import Croquis
+from .plan import construire as construire_plan, vers_dict as plan_vers_dict
 from .tour import DetecteurTour
+from .trajectoire import Trajectoire
 from .vision import image_noire
 from .decor import Decor
 from .repetition import mots_repetes, reformulation
@@ -129,6 +131,9 @@ RELANCE_S = 1.4
 RATTRAPAGE_S = 60.0  # étape 10 : une phrase non remise pendant une coupure est redite si elle a moins d'une minute
 REFERENCES_PAR_PIECE = 3  # images de chaque pièce montrées à Claude pour la reconnaître
 INTERVALLE_PIECES_S = 6.0  # croquis : Claude regarde dans quelle pièce on est toutes les 6 s
+# Une nouvelle pièce suppose d'avoir marché (2 pas comptés) depuis l'entrée dans la pièce où l'on est : une rotation sur
+# place n'est jamais un changement de pièce (Noah, 23/10). Sans pas (accéléromètre refusé), pas de contrôle.
+DEPLACEMENT_MIN_M = 0.6  # un pas compté (le téléphone en manque quand on marche lentement en filmant)
 ATTENTE_NORD_S = 60.0  # gyroscope sans nord (iPhone tenu droit) : orientation demandée à l'oral seulement après 1 min
 # Mission choisie sur le téléphone avant de filmer (Noah, 23/10) : le DPE (ses questions, sans croquis), ou l'amiante et le
 # plomb (le croquis seul, en grand : pièces reconnues sur la vidéo, aucune question du DPE).
@@ -137,6 +142,9 @@ OUVERTURE_CROQUIS = "Je dessine le croquis : entrez dans chaque pièce et faites
 # Amiante, plomb (la conversation Claude n'y tourne pas) : « on fait une pause », « on reprend » compris par les règles.
 _PAUSE = re.compile(r"\b(?:on (?:fait|va faire|prend) une pause|je (?:fais|prends) une pause|pause)\b")
 _REPRISE = re.compile(r"\b(?:on reprend|je reprends|c est reparti|fin de (?:la )?pause|reprise)\b")
+# « Tu m'entends ? », « allô ? » : il vérifie qu'on l'écoute (visites du 22 et du 23/10) ; un silence lui fait croire
+# que non.
+_TU_M_ENTENDS = re.compile(r"\b(?:tu m entends|vous m entendez|tu m ecoutes|tu es la|t es la|allo)\b")
 # « Ce mur, ce mur et ce mur », « un mur ici, un mur ici » : des murs montrés un par un (texte normalisé).
 _DESIGNATION_MUR = re.compile(r"\b(?:(?:ce|cet)\s+mur(?:\s+(?:ici|la))?|un\s+mur\s+(?:ici|la))\b"
                               r"(?!\s+(?:de|du|des|d|en|est|donne|fait|avec|qui)\b)")
@@ -272,6 +280,10 @@ class Session:
         # Tours de pièce (étape 15) : repérés en direct dans les capteurs envoyés par lots ; pas détectés par le téléphone.
         self.detecteur_tours = DetecteurTour()
         self.pas: list[float] = []
+        # Où est le téléphone (pas + gyroscope, repère commun) : le plan se construit sur ce trajet (assistant/plan.py).
+        self.trajectoire = Trajectoire()
+        self._t_entree_piece = 0.0
+        self._taches_tour: set[asyncio.Task] = set()  # pièces reconnues sur les images d'un tour
         self._camera_coupee = False
         self.phrases: list[tuple[float, float, str]] = []
         self.dialogue: list[str] = []
@@ -369,7 +381,7 @@ class Session:
             # Amiante, plomb : seul le regard sert (pièces reconnues sur la vidéo) ; les cerveaux du DPE ne sont pas lancés.
             try:
                 if self.regard is not None:
-                    await self.regard.demarrer(propositions=False, pieces=True)
+                    await self.regard.demarrer(propositions=False, pieces=True, voix=True)
                 self.journaliser("cerveau_pret", duree_s=round(time.perf_counter() - debut, 2), prechauffage={})
             except Exception as e:
                 log.exception("Démarrage du regard")
@@ -396,12 +408,14 @@ class Session:
         if self.termine:
             return self.bilan()
         self.termine = True
-        for tache in [*self._taches, *self._complements, *([self._tache_annonce] if self._tache_annonce else [])]:
+        for tache in [*self._taches, *self._complements, *self._taches_tour, *([self._tache_annonce] if self._tache_annonce else [])]:
             tache.cancel()
         for c in [*self._cerveaux(), *([self.regard] if self.regard is not None else [])]:
             await c.fermer()
         bilan = self.bilan()
-        self._sauver_etat(self.checklist.vers_dict())
+        etat = self.checklist.vers_dict()
+        etat["croquis"] = self._suivre_croquis()  # le croquis (et le plan) de la fin, gardé avec le reste
+        self._sauver_etat(etat)
         (self.dossier / "bilan.json").write_text(json.dumps(bilan, ensure_ascii=False, indent=2), encoding="utf-8")
         self.journaliser("fin", bilan=bilan)
         self._wav.close()
@@ -462,10 +476,18 @@ class Session:
             visee = self.boussole.visee(t - 1.5, t + 0.5)
             self.croquis.entrer(cle, self.checklist.nom_piece(cle), self.checklist.pieces[cle].source, t,
                                 cap=visee.cap if visee else None, lacet=visee.lacet if visee else None)
+            self._t_entree_piece = t
         self._t_passage = None
         ouvertures = [{"piece": e.pieces[0], "cote": e.orientation, "type": e.type, "nombre": e.nombre}
                       for e in self.checklist.enveloppe() if e.type in ("fenetre", "porte") and e.pieces and e.orientation]
-        return self.croquis.vers_dict(self.checklist.correction_cap, ouvertures)
+        croquis = self.croquis.vers_dict(self.checklist.correction_cap, ouvertures)
+        if self.trajectoire.avec_pas() and self.croquis.passages:
+            # Le plan dans un repère commun : les pièces là où l'on a marché, les portes là où l'on est passé.
+            plan = construire_plan(self.trajectoire, [(p.vers, p.t) for p in self.croquis.passages], self.t_video,
+                                   self.checklist.correction_cap, self.croquis.vues)
+            croquis["plan"] = plan_vers_dict(plan, {k: p.nom for k, p in self.croquis.pieces.items()},
+                                             {k: p.source for k, p in self.croquis.pieces.items()}, self.croquis.courante)
+        return croquis
 
     async def envoyer_etat(self) -> None:
         manques = self.checklist.manques_visite()  # étape 13 : ce qui manque au DPE du logement, pas à une pièce
@@ -622,9 +644,13 @@ class Session:
                 fichier.writelines(json.dumps(m) + "\n" for m in mesures)
                 fichier.writelines(json.dumps({"pas": t}) + "\n" for t in pas)
         for mesure in mesures:
+            self.trajectoire.ajouter_mesure(mesure)
             tour = self.detecteur_tours.ajouter(mesure)
             if tour is not None:
+                self.trajectoire.ajouter_tour(tour.t_debut, tour.t_fin)  # ses piétinements ne sont pas une marche
                 await self._tour_vu(tour)
+        for t in pas:  # après les mesures du même lot : la direction de chaque pas est connue
+            self.trajectoire.ajouter_pas(t)
 
     async def _tour_vu(self, tour) -> None:
         if self.en_pause:
@@ -634,6 +660,10 @@ class Session:
         if self.croquis_seul:
             # Le diagnostiqueur entend un bip : le tour est vu, il peut passer à la suite.
             await self._envoyer({"type": "tour", **tour.vers_dict(), "images": len(images)})
+            if self.regard is not None:
+                tache = asyncio.create_task(self._reconnaitre_au_tour(tour))
+                self._taches_tour.add(tache)
+                tache.add_done_callback(self._taches_tour.discard)
 
     # --- Phrases --------------------------------------------------------------------------------
 
@@ -801,6 +831,8 @@ class Session:
             # bip ; jamais de question du DPE ni d'appel au cerveau du DPE. La pause se dit aussi : plus rien n'est
             # reconnu ni annoncé jusqu'à « on reprend » (un appel, un garage filmé en passant).
             normal = normaliser(texte)
+            if _TU_M_ENTENDS.search(normal) and not compris:
+                await self.dire("Oui, je vous entends.", time.monotonic(), forcer=True, question=False)
             if _REPRISE.search(normal) and self.en_pause:
                 self.en_pause = False
                 compris = compris or [{"statut": "accepte"}]
@@ -810,6 +842,9 @@ class Session:
                 compris = compris or [{"statut": "accepte"}]
                 self._annonce_piece = None
                 self.journaliser("pause")
+            if not compris and not _TU_M_ENTENDS.search(normal) and hasattr(self.regard, "comprendre_voix"):
+                # Pas compris par les règles : Claude dit le geste de la phrase (ici, vue, retour, correction…).
+                compris = await self._geste_de_la_phrase(texte, lot[0]["t_debut"], lot[-1]["t_fin"], reference)
             if compris:
                 mesure["bip_s"] = round(time.monotonic() - reference, 3)
                 await self._bip(mesure["bip_s"])
@@ -1431,6 +1466,14 @@ class Session:
             # Amiante, plomb (Noah, 23/10 : « quand on fait l'amiante, ne me parle pas de DPE ») : seules les pièces
             # comptent (« on est dans la cuisine », « non, c'est la buanderie ») ; rien n'est noté pour le DPE.
             actions, invraisemblables = [a for a in actions if a.get("outil") == "piece_courante"], []
+        actuelle = self.checklist.pieces.get(self.checklist.piece_courante or "")
+        if (self.trajectoire.avec_pas() and actuelle is not None and actuelle.source == "image"
+                and self.trajectoire.distance(self._t_entree_piece, lot[-1]["t_fin"]) < DEPLACEMENT_MIN_M):
+            # « Ici c'est le salon » sans avoir marché depuis que la pièce a été reconnue sur l'image : c'est son vrai nom
+            # (une correction) ; après avoir marché, c'est la pièce où l'on vient d'arriver.
+            for a in actions:
+                if a.get("outil") == "piece_courante" and not a.get("nouvelle"):
+                    a["correction"] = "oui"
         resultats = appliquer(self.checklist, actions, contexte.t, self._phrases_recentes(contexte) + [texte])
         if not self.croquis_seul:
             resultats += self._designer_murs(texte, lot, contexte, resultats)
@@ -1848,8 +1891,51 @@ class Session:
             else:
                 await asyncio.sleep(0.5)
 
-    async def _reconnaitre_piece(self) -> None:
-        images = [i for i in self.images if i.t >= self.t_video - 3.0][-2:]
+    async def _geste_de_la_phrase(self, texte: str, t_debut: float, t_fin: float, reference: float) -> list:
+        """Une phrase du croquis comprise par Claude (assistant/voix_croquis.py) et appliquée : ici / retour (on y est),
+        vue / inconnu (montré sans y entrer : posé dans la direction filmée), correction (l'espace affiché change de
+        nom), question (une réponse courte). Son mot est gardé (« salon » reste « salon »)."""
+        cle = self.checklist.piece_courante
+        courante = self.checklist.nom_piece(cle) if cle else None
+        debut = time.perf_counter()
+        geste = await self.regard.comprendre_voix(texte, courante, [p.nom for p in self.checklist.pieces.values()])
+        self.journaliser("geste_voix", texte=texte, geste=geste.__dict__ if geste else None, duree_s=round(time.perf_counter() - debut, 2))
+        if geste is None or geste.geste == "rien":
+            return []
+        if geste.geste in ("ici", "retour"):
+            existante = self.checklist.trouver_piece(geste.nom)
+            self.checklist.definir_piece(self.checklist.nom_piece(existante) if existante else geste.nom, t_debut, citation=texte)
+        elif geste.geste in ("vue", "inconnu"):
+            nom = geste.nom if geste.geste == "vue" else self.checklist.nom_libre(geste.nom or "Local à préciser")
+            existante = self.checklist.trouver_piece(nom)
+            cle_vue = existante or self.checklist.piece_pour(nom, t_debut)
+            self.croquis.voir(cle_vue, self.checklist.nom_piece(cle_vue), "dit", (t_debut + t_fin) / 2)
+        elif geste.geste == "correction" and cle is not None:
+            existante = self.checklist.trouver_piece(geste.nom)
+            try:
+                if existante and existante != cle:
+                    self.checklist.fusionner_pieces(cle, existante)
+                elif not existante:
+                    self.checklist.renommer_piece(cle, geste.nom, "dit")
+            except ErreurChecklist:
+                return []
+        if geste.reponse:
+            await self.dire(geste.reponse, reference, forcer=True, question=False)
+        return [{"statut": "accepte", "geste": geste.geste}] if geste.geste != "question" else []
+
+    async def _reconnaitre_au_tour(self, tour) -> None:
+        """Un tour de la pièce : Claude la reconnaît sur les images du tour (la pièce entière, pas 2 images prises au hasard),
+        et son avis vaut décision (test de Noah du 23/10 : la chambre, vue 10 s avec un tour de 13 images, n'avait eu qu'un
+        coup d'œil « moyen » et n'avait jamais été créée). La fin du tour est laissée de côté : on y sort parfois déjà de la
+        pièce (même test : les deux dernières images du tour montraient le salon)."""
+        await asyncio.sleep(1.0)  # les dernières images du tour arrivent après le son
+        dans = [i for i in self.images if tour.t_debut <= i.t <= tour.t_debut + 0.8 * tour.duree]
+        choisies = dans[:: max(1, len(dans) // 5)][:5]
+        if len(choisies) >= 2:
+            await self._reconnaitre_piece(images=choisies, decisif=True)
+
+    async def _reconnaitre_piece(self, images: list | None = None, decisif: bool = False) -> None:
+        images = images or [i for i in self.images if i.t >= self.t_video - 3.0][-2:]
         if not images or self.en_pause:  # pendant une pause, rien n'est reconnu (un appel, un garage filmé en passant)
             return
         cle = self.checklist.piece_courante
@@ -1872,8 +1958,16 @@ class Session:
             if cle is not None and avis is not None and avis.piece == courante:
                 self._referencer(cle, images[-1])  # d'autres coins de la pièce, pour la reconnaître au retour
             return
+        if cle is not None and self.trajectoire.avec_pas():
+            marche = self.trajectoire.distance(self._t_entree_piece, images[-1].t)
+            if marche < DEPLACEMENT_MIN_M:
+                # Rotation sur place (un tour de la pièce, un regard par une porte) : on n'a pas marché, on y est toujours.
+                self.journaliser("changement_refuse", vers=avis.piece or avis.type, marche_m=round(marche, 2),
+                                 raison="pas de déplacement depuis l'entrée dans la pièce")
+                self._avis_piece = ""
+                return
         cle_avis = avis.piece or f"nouvelle:{avis.type}"
-        if cle is not None and avis.confiance != "forte" and self._avis_piece != cle_avis:
+        if cle is not None and avis.confiance != "forte" and not decisif and self._avis_piece != cle_avis:
             self._avis_piece = cle_avis  # vu une fois : on attend un second avis (une porte filmée n'est pas un passage)
             return
         self._avis_piece = ""
@@ -1899,9 +1993,9 @@ class Session:
     def _meme_type_que(self, cle: str | None, courante: str, type_vu: str) -> bool:
         """« Nouvelle cuisine » vue dans la cuisine : un autre coin de la même pièce. Aussi quand la pièce a été vue sous
         ce type puis renommée (« non, c'est la buanderie ») : Claude peut la revoir comme une cuisine."""
-        vu = f"{cle_texte(type_vu)} "
+        vus = {cle_texte(type_vu)} | ({SYNONYMES_PIECES[cle_texte(type_vu)]} if cle_texte(type_vu) in SYNONYMES_PIECES else set())
         noms = {cle_texte(courante)} | (self._types_vus.get(cle, set()) if cle else set())
-        return any(f"{nom} ".startswith(vu) for nom in noms)
+        return any(f"{nom} ".startswith(f"{vu} ") for nom in noms for vu in vus)
 
     async def _annoncer_piece(self, cle: str, texte: str) -> None:
         """L'annonce d'une nouvelle pièce, jamais par-dessus le diagnostiqueur : tout de suite s'il se tait, sinon au
@@ -1916,7 +2010,10 @@ class Session:
         while self._annonce_piece is not None and not self.termine and time.monotonic() < limite:
             if not self._en_parole and not self.occupe and time.monotonic() - self._fin_parole >= 1.0 and not self.en_pause:
                 (cle, texte), self._annonce_piece = self._annonce_piece, None
-                if cle in self.checklist.pieces and self.checklist.pieces[cle].source == "image":
+                # Périmée si la pièce a été renommée, ou si l'on est déjà ailleurs (test du 23/10 : « Nouvelle pièce :
+                # Cuisine » dit en entrant au salon) : rien n'est dit.
+                if (cle in self.checklist.pieces and self.checklist.pieces[cle].source == "image"
+                        and self.checklist.piece_courante == cle):
                     await self.dire(texte, time.monotonic(), forcer=True, question=False)
                 return
             await asyncio.sleep(0.2)

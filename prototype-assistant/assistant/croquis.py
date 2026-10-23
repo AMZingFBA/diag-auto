@@ -57,6 +57,7 @@ class Croquis:
         self.passages: list[Passage] = []
         self.courante: str | None = None
         self.fixees: dict[str, tuple[int, int]] = {}  # pièces déplacées à la main sur le croquis
+        self.vues: list[tuple[str, float]] = []  # espaces regardés sans y entrer (« au bout du salon, une chambre »)
 
     def entrer(self, cle: str, nom: str, source: str, t: float, cap: float | None = None, lacet: float | None = None) -> None:
         """On est dans la pièce `cle` (nouvelle, ou déjà vue : une revisite ne crée rien)."""
@@ -68,6 +69,12 @@ class Croquis:
             self.passages.append(Passage(self.courante, cle, t, cap, lacet))
             self.courante = cle
 
+    def voir(self, cle: str, nom: str, source: str, t: float) -> None:
+        """Un espace montré sans y entrer : sur le plan dans la direction filmée à l'instant t ; la pièce courante ne change pas."""
+        if cle not in self.pieces:
+            self.pieces[cle] = PieceCroquis(cle, nom, source)
+        self.vues.append((cle, t))
+
     def renommer(self, ancienne: str, nouvelle: str, nom: str, source: str) -> None:
         """« Non, c'est la chambre » : la même pièce, un autre nom (la checklist fait de même)."""
         if ancienne not in self.pieces:
@@ -78,6 +85,7 @@ class Croquis:
             p.de = nouvelle if p.de == ancienne else p.de
             p.vers = nouvelle if p.vers == ancienne else p.vers
         self.courante = nouvelle if self.courante == ancienne else self.courante
+        self.vues = [(nouvelle if c == ancienne else c, t) for c, t in self.vues]
 
     def fusionner(self, cle: str, dans: str) -> None:
         """La pièce `cle` était `dans` (reconnue à tort) : ses passages deviennent ceux de `dans`."""
@@ -88,6 +96,7 @@ class Croquis:
             p.vers = dans if p.vers == cle else p.vers
         self.passages = [p for p in self.passages if p.de != p.vers]
         self.courante = dans if self.courante == cle else self.courante
+        self.vues = [(dans if c == cle else c, t) for c, t in self.vues]
 
     def deplacer(self, cle: str, vers: str, correction: float | None = None) -> None:
         """Déplace une pièce d'une case (ex. deux portes du même côté d'une grande pièce : le croquis ne peut pas le deviner)."""

@@ -81,8 +81,21 @@ async def rejouer(video: Path, serveur: str, code: str, piece: str, mission: str
     capteurs = []  # boussole et gyroscope enregistrés (une mesure par seconde), rejoués à leur instant
     if video.is_dir() and (video / "capteurs.jsonl").exists():
         capteurs = [json.loads(ligne) for ligne in (video / "capteurs.jsonl").read_text(encoding="utf-8").splitlines() if ligne.strip()]
+    # Étape 15 : les mesures à 15 par seconde et les pas (capteurs-lot.jsonl), rejoués par lots de 0,25 s, et la pose de
+    # chaque image (images.jsonl), renvoyée avec elle : la visite se rejoue comme le téléphone l'a envoyée.
+    lots, poses = [], {}
+    if video.is_dir() and (video / "capteurs-lot.jsonl").exists():
+        for ligne in (video / "capteurs-lot.jsonl").read_text(encoding="utf-8").splitlines():
+            m = json.loads(ligne)
+            lots.append((m["pas"], "pas", m["pas"]) if "pas" in m else (m["t"], "mesure", m))
+        lots.sort(key=lambda e: (e[0], e[1] == "pas"))
+    if video.is_dir() and (video / "images.jsonl").exists():
+        for ligne in (video / "images.jsonl").read_text(encoding="utf-8").splitlines():
+            pose = json.loads(ligne)
+            poses[round(float(pose.pop("t")), 2)] = {k: v for k, v in pose.items() if k != "fichier"}
     if duree is not None:  # seulement le début de la visite
         son, images, capteurs = son[: int(duree * TAUX)], [i for i in images if i[0] <= duree], [m for m in capteurs if m["t"] <= duree]
+        lots = [e for e in lots if e[0] <= duree]
     print(f"{video.name} : {len(son) / TAUX:.1f} s de son, {len(images)} images")
     url_ws = serveur.replace("https://", "wss://").replace("http://", "ws://").rstrip("/") + "/ws" + (f"?code={code}" if code else "")
     contexte_ssl = None
@@ -137,14 +150,27 @@ async def rejouer(video: Path, serveur: str, code: str, piece: str, mission: str
         silence = np.zeros(int(4 * TAUX), dtype="<i2")  # 4 s de silence à la fin, pour clore la dernière phrase
         flux = np.concatenate([son, silence])
         debut_envoi = time.monotonic()
-        prochain_capteur = 0
+        prochain_capteur = prochain_lot = 0
         for i in range(0, len(flux), BLOC):
             t = i / TAUX
             while prochain_capteur < len(capteurs) and capteurs[prochain_capteur]["t"] <= t:
                 await ws.send(json.dumps({"type": "capteurs", **capteurs[prochain_capteur]}))
                 prochain_capteur += 1
+            lot = []
+            while prochain_lot < len(lots) and lots[prochain_lot][0] <= t:
+                lot.append(lots[prochain_lot])
+                prochain_lot += 1
+            if lot:
+                await ws.send(json.dumps({"type": "capteurs_lot", "mesures": [e[2] for e in lot if e[1] == "mesure"],
+                                          "pas": [e[2] for e in lot if e[1] == "pas"]}))
             while prochaine_image < len(images) and images[prochaine_image][0] <= t:
-                await ws.send(message_binaire(2, images[prochaine_image][0], images[prochaine_image][1]))
+                t_image, jpeg = images[prochaine_image]
+                pose = poses.get(round(t_image, 2))
+                if pose is not None:  # image avec sa pose (type 3)
+                    entete = json.dumps(pose).encode("utf-8")
+                    await ws.send(bytes([3]) + struct.pack("<d", t_image) + struct.pack("<H", len(entete)) + entete + jpeg)
+                else:
+                    await ws.send(message_binaire(2, t_image, jpeg))
                 prochaine_image += 1
             await ws.send(message_binaire(1, t, flux[i:i + BLOC].tobytes()))
             await asyncio.sleep(max(0.0, debut_envoi + (i + BLOC) / TAUX - time.monotonic()))
@@ -166,6 +192,11 @@ async def rejouer(video: Path, serveur: str, code: str, piece: str, mission: str
         croquis = session["croquis"]
         print("Croquis :", ", ".join(f"{p['nom']} ({p['x']}, {p['y']})" for p in croquis["pieces"]),
               "— portes :", ", ".join(f"{p['a']}→{p['b']} ({p['cote']})" for p in croquis["portes"]))
+        if croquis.get("plan"):  # le plan dans un repère commun (étape 15)
+            plan = croquis["plan"]
+            centre = lambda pts: (round(sum(p[0] for p in pts) / len(pts), 1), round(sum(p[1] for p in pts) / len(pts), 1))  # noqa: E731
+            print("Plan :", ", ".join(f"{p['nom']} {centre(p['polygone'])}" for p in plan["pieces"]),
+                  "— portes :", ", ".join(f"{p['a']}→{p['b']}" for p in plan["portes"]), "— orienté :", plan["oriente"])
     return bilan
 
 

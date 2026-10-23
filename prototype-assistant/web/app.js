@@ -3,7 +3,7 @@
 // (16 kHz) et une image par seconde, et lit à voix haute les questions de l'assistant.
 
 // Version de la page, comparée à celle du serveur (test du 23/10 : l'iPhone gardait l'ancienne page en mémoire).
-const VERSION_PAGE = "2026-10-23-10";
+const VERSION_PAGE = "2026-10-23-11";
 const $ = (id) => document.getElementById(id);
 const TAUX = 16000;
 const TYPE_SON = 1;
@@ -496,6 +496,72 @@ function dessinerCroquis(svg, c, grand) {
 }
 
 // Amiante, plomb : le croquis en grand, toujours visible (vide : ce qu'il faut faire). DPE : pas de croquis.
+// Plan dans un repère commun (assistant/plan.py, Noah 23/10) : les pièces là où l'on a marché, les portes là où l'on est
+// passé, le trajet en pointillés, et « vous êtes ici » avec une flèche qui suit la caméra. Nord en haut quand il est connu.
+function dessinerPlan(svg, plan, grand) {
+  const largeur = svg.clientWidth || 132, hauteur = svg.clientHeight || 132;
+  svg.setAttribute("viewBox", `0 0 ${largeur} ${hauteur}`);
+  svg.replaceChildren();
+  const points = [...plan.pieces.flatMap((p) => p.polygone), ...plan.trajet, plan.position];
+  const xs = points.map((p) => p[0]), ys = points.map((p) => p[1]);
+  const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+  const marge = grand ? 18 : 8;
+  const k = Math.min((largeur - 2 * marge) / Math.max(x1 - x0, 1), (hauteur - 2 * marge) / Math.max(y1 - y0, 1));
+  const ox = (largeur - k * (x1 - x0)) / 2, oy = (hauteur - k * (y1 - y0)) / 2;
+  const P = ([x, y]) => [ox + (x - x0) * k, oy + (y1 - y) * k]; // nord (ou lacet 0) en haut
+  const creer = (nom, attributs, texte) => {
+    const e = document.createElementNS(SVG, nom);
+    for (const [cle, v] of Object.entries(attributs)) e.setAttribute(cle, v);
+    if (texte != null) e.textContent = texte;
+    return e;
+  };
+  const el = (nom, attributs, texte) => svg.appendChild(creer(nom, attributs, texte));
+  for (const p of plan.pieces) {
+    const pts = p.polygone.map(P);
+    el("polygon", { points: pts.map((q) => q.join(",")).join(" "), fill: p.cle === plan.courante ? "#d6ebff" : "#fafafa",
+                    stroke: "#222", "stroke-width": grand ? 3 : 2, "stroke-dasharray": p.source === "image" ? "6 3" : "" });
+    const cx = pts.reduce((s, q) => s + q[0], 0) / pts.length, cy = pts.reduce((s, q) => s + q[1], 0) / pts.length;
+    const petit = Math.min(...pts.map((q) => Math.hypot(q[0] - cx, q[1] - cy))) < 30;
+    el("text", { x: cx, y: cy, "text-anchor": "middle", "dominant-baseline": "middle", "font-weight": "700",
+                 "font-size": grand ? 14 : 10 }, grand || !petit ? p.nom : p.nom.slice(0, 3));
+    if (grand && p.depuis_la_porte) {  // regardée depuis sa porte (pièce occupée…) : à dire dans le repérage
+      el("text", { x: cx, y: cy + 16, "text-anchor": "middle", "font-size": 11, fill: "#555" }, "vue depuis la porte");
+    }
+    if (grand && p.lettres) {
+      pts.forEach((a, i) => {
+        const b = pts[(i + 1) % pts.length];
+        const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+        const d = Math.hypot(cx - mx, cy - my) || 1;
+        el("text", { x: mx + (cx - mx) / d * 12, y: my + (cy - my) / d * 12, "text-anchor": "middle", "dominant-baseline": "middle",
+                     "font-size": 12, fill: "#b00" }, p.lettres[i] || "");
+      });
+    }
+  }
+  for (const d of plan.portes) {
+    const [px, py] = P([d.x, d.y]);
+    el("circle", { cx: px, cy: py, r: grand ? 6 : 3.5, fill: "#c0782a", stroke: "#fff", "stroke-width": 1.5 });
+  }
+  if (plan.trajet.length > 1) {
+    el("polyline", { points: plan.trajet.map(P).map((q) => q.join(",")).join(" "), fill: "none", stroke: "#1a73e8",
+                     "stroke-width": 1.5, "stroke-dasharray": "3 3", opacity: 0.8 });
+  }
+  const [vx, vy] = P(plan.position);
+  const ici = el("g", { class: "vous-ici", "data-x": vx, "data-y": vy, transform: `translate(${vx},${vy})` });
+  ici.append(creer("circle", { r: grand ? 6 : 4.5, fill: "#1a73e8", stroke: "#fff", "stroke-width": 2 }),
+             creer("polygon", { points: grand ? "0,-17 6,-7 -6,-7" : "0,-12 4,-5 -4,-5", fill: "#1a73e8" }));
+  tournerVousIci();
+  if (plan.oriente) el("text", { x: largeur - 10, y: 12, "text-anchor": "end", "font-size": grand ? 14 : 9, fill: "#b00", "font-weight": "700" }, "N ↑");
+}
+
+// La flèche « vous êtes ici » suit la caméra : cap si le plan est orienté au nord, sinon lacet du gyroscope (le repère du plan).
+function tournerVousIci() {
+  const plan = etat.croquis && etat.croquis.plan;
+  const direction = plan && plan.oriente ? capteurs.cap : capteurs.lacet;
+  document.querySelectorAll(".vous-ici").forEach((g) => {
+    g.setAttribute("transform", `translate(${g.dataset.x},${g.dataset.y})${direction != null ? ` rotate(${direction})` : ""}`);
+  });
+}
+
 function afficherCroquis(c) {
   if (c) etat.croquis = c;
   c = etat.croquis;
@@ -510,9 +576,12 @@ function afficherCroquis(c) {
     $("plan-pieces").replaceChildren(Object.assign(document.createElement("p"), { className: "petit", textContent: $("croquis-aide").textContent }));
     return;
   }
-  dessinerCroquis($("croquis-petit"), c, true);
+  const avecPlan = c.plan && c.plan.pieces.length;
+  if (avecPlan) dessinerPlan($("croquis-petit"), c.plan, false);
+  else dessinerCroquis($("croquis-petit"), c, true);
   if ($("plan").hidden) return;
-  dessinerCroquis($("croquis-grand"), c, true);
+  if (avecPlan) dessinerPlan($("croquis-grand"), c.plan, true);
+  else dessinerCroquis($("croquis-grand"), c, true);
   // Corriger une pièce : un autre nom, « c'est la même pièce que… » (reconnue à tort), ou la déplacer d'une case.
   $("plan-pieces").replaceChildren(...c.pieces.map((p) => {
     const bloc = Object.assign(document.createElement("div"), { className: "bloc-piece" });
@@ -526,7 +595,8 @@ function afficherCroquis(c) {
     const meme = document.createElement("select");
     meme.append(new Option("Même pièce que…", ""), ...c.pieces.filter((q) => q.cle !== p.cle).map((q) => new Option(q.nom, q.cle)));
     meme.onchange = () => { if (meme.value) envoyerJson({ type: "fusionner_pieces", cle: p.cle, dans: meme.value }); };
-    outils.append(meme, ...[["←", "ouest"], ["↑", "nord"], ["↓", "sud"], ["→", "est"]].map(([fleche, vers]) => {
+    // Les flèches déplacent une case du croquis en grille ; le plan, lui, suit la trajectoire.
+    outils.append(meme, ...(avecPlan ? [] : [["←", "ouest"], ["↑", "nord"], ["↓", "sud"], ["→", "est"]]).map(([fleche, vers]) => {
       const b = Object.assign(document.createElement("button"), { type: "button", className: "fleche", textContent: fleche,
                                                                  title: `Déplacer ${p.nom}` });
       b.onclick = () => envoyerJson({ type: "deplacer_piece", cle: p.cle, vers });
@@ -874,6 +944,7 @@ function fiabiliteBoussole() {
 }
 
 function afficherBoussole() {
+  tournerVousIci();
   const bloc = $("boussole");
   const fiabilite = fiabiliteBoussole();
   bloc.className = `boussole ${fiabilite}`;

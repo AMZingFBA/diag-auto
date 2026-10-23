@@ -1184,7 +1184,7 @@ image : pièce « U », cuisine, U, chambre, U), un coup d'œil toutes les 8 s :
 du séjour reconnu à tort), `tests/test_page_navigateur.py` (le croquis dessiné dans le coin, agrandi, renommer, réunir,
 déplacer).
 
-Le prototype compte 340 tests (et le projet, à la racine, 654) à cette étape ; 353 avec le choix de la mission ; 393 avec la capture du tour (étape 15).
+Le prototype compte 340 tests (et le projet, à la racine, 654) à cette étape ; 353 avec le choix de la mission ; 393 avec la capture du tour (étape 15) ; 408 avec le plan dans un repère commun.
 
 ## Choix de la mission avant de filmer (23/10/2026)
 
@@ -1277,6 +1277,67 @@ les pas et recollées sur les portes ; un plan par étage (escalier vu, « je mo
 `tests/test_capture_tour.py` (images posées, lots de capteurs, bip du tour, images noires), `tests/test_boussole_js.py`
 (élévation et roulis), `tests/test_liaison_js.py` (images après le son), `tests/test_page_navigateur.py` (images clés
 pendant une rotation, pose interpolée).
+
+## Étape 15 (suite) : un plan dans un repère commun, et la voix d'abord (23/10/2026, après le test de Noah de 11:44)
+
+**Ce que Noah a dit** : « il ne comprend rien du tout, le croquis ne ressemble pas du tout à la maison, revois entièrement
+le système » ; « il ne faut pas regarder image par image, il faut analyser la vidéo » ; puis : « toutes les pièces sont
+ajoutées en ligne droite, même quand je change de direction… je veux un croquis fondé sur une reconstruction spatiale :
+suivre les déplacements du téléphone dans un repère commun, positionner les murs et les portes, puis rattacher les pièces
+à cette géométrie ; une rotation sur place ne doit pas être un déplacement ni un changement de pièce ».
+
+**Ce que montrait le code** (vérifié) : rien ne suivait la position du téléphone. Le croquis était une grille, une case par
+pièce, rejouée dans l'ordre de détection, chaque nouvelle pièce posée à côté de la précédente du côté où visait la caméra
+quand Claude l'avait reconnue (souvent 6 à 12 s après l'entrée, pendant un balayage ou un tour), et plus loin dans la même
+direction si la case était prise : d'où la ligne droite. Ce n'était pas une conversion de coordonnées fausse : il n'y avait
+pas de coordonnées. Une rotation sur place pouvait changer de pièce.
+
+**Ce que montrait la vidéo** (analyse image par image, transcription refaite avec Whisper) : Noah nomme lui-même chaque
+espace en le filmant, souvent sans y entrer (« c'est la cuisine », « petit couloir », « ici c'est le salon », « au bout du
+salon on a une chambre », « la cuisine du début », « ça c'est l'entrée », « t'as mis séjour à la place de cuisine », « ici
+il y a l'escalier ») ; le logiciel n'en comprenait qu'une phrase sur douze, et à contresens (« ici c'est le salon » avait
+renommé la cuisine). Il ne fait pas de tour au milieu des pièces ; il marche, balaie, regarde depuis les portes.
+
+**Ce qui change** :
+- **trajectoire** (`assistant/trajectoire.py`) : la position du téléphone dans un repère commun (celui du gyroscope, tourné
+  vers le nord dès que la boussole est calée) ; chaque pas avance de 0,6 m dans la direction de la caméra ; les pas sont
+  repérés sur le serveur dans l'accélération envoyée avec chaque mesure (seuil 0,6 m/s² : celui du téléphone, 1 m/s², avait
+  manqué tous les pas de 5 à 17 s ; 64 pas trouvés au lieu de 42) ; **un pas compté pendant une rotation rapide ou un tour
+  de pièce n'est pas un déplacement** ;
+- **une rotation sur place ne change plus de pièce** : une nouvelle pièce vue par Claude n'est acceptée qu'après un pas
+  au moins depuis l'entrée dans la pièce où l'on est ; « ici c'est X » après avoir marché est une arrivée (pas une
+  correction) ; sans avoir marché, c'est le vrai nom de la pièce ;
+- **plan** (`assistant/plan.py`) : chaque pièce est posée là où l'on y a marché (tous ses passages), avec sa taille
+  habituelle (séjour, chambre, WC…), alignée sur l'axe du logement ; deux pièces qui se chevauchent sont écartées, deux
+  pièces presque jointives partagent leur mur ; **la porte est là où l'on est passé** ; une pièce **regardée depuis sa
+  porte** est posée devant, dans la direction filmée, et marquée « vue depuis la porte » ; murs A, B, C, D depuis la porte
+  d'entrée de chaque pièce ;
+- **la voix d'abord** (`assistant/voix_croquis.py`) : en amiante et plomb, une phrase que les règles ne comprennent pas va
+  à Claude (Haiku, 1 à 2 s), qui dit son geste : ici, retour, montré sans y entrer, correction, local inconnu, question ;
+  son mot est gardé (« salon » reste « salon », jamais doublé par « Séjour ») ; « tu m'entends ? » reçoit « Oui, je vous
+  entends. » ; une annonce périmée (on est déjà ailleurs) n'est plus dite ; un tour de pièce décide de la pièce sur ses
+  propres images ;
+- **téléphone** : le plan dessiné dans le repère commun, nord en haut, le trajet en pointillés, les portes, et « vous êtes
+  ici » avec une flèche qui suit la caméra ;
+- `python -m assistant.rejouer <visite> --mission amiante` rejoue une visite telle que le téléphone l'a envoyée (mesures à
+  15 par seconde, pas, images avec leur pose).
+
+**Vérifié sur la visite de 11:44** (rejeux sur un serveur d'essai, et plan recalculé avec la vraie suite des espaces) : les
+pièces ne sont plus en ligne ; l'entrée relie le couloir, l'escalier, la cuisine et le salon ; le salon en longueur au
+sud-ouest ; la chambre au bout du salon, vue depuis sa porte ; plus de salon en double ; la rotation sur place ne crée plus
+de pièce.
+
+**Limites, honnêtement** : la position vient des pas (0,6 m chacun, hypothèse) et de la direction de la caméra : 0,5 à
+2 m d'erreur selon la marche ; les formes sont des rectangles de taille habituelle, pas des murs mesurés (la forme mesurée
+viendra des coins vus à l'arrêt, `assistant/geometrie.py`, et de la vidéo complète après la visite) ; la vidéo complète de
+11:44 n'est arrivée qu'à moitié (envoi d'un seul bloc à la fin, coupé quand la page a été quittée) : à envoyer par morceaux
+pendant la visite. Les analyses lourdes ne doivent pas tourner sur le PC pendant un essai de Noah (à 11:55, la transcription
+prenait 10 à 13 s par phrase).
+
+**Tests** : `tests/test_trajectoire.py` (marche avec tournants, rotation sur place, pas dans l'accélération, plan qui suit
+les déplacements, porte sur le mur commun, visite complète avec rotation sur place refusée, pièce décidée sur les images du
+tour), `tests/test_missions.py` (les vraies phrases de Noah, « tu m'entends ? »), `tests/test_voix_croquis.py`,
+`tests/test_page_navigateur.py` (plan dans un repère commun, flèche « vous êtes ici »).
 
 ## Correction : vidéos d'iPhone lues à l'envers après la visite (23/10/2026)
 

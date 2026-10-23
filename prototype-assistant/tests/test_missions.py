@@ -187,3 +187,74 @@ def test_dpe_lance_les_propositions_seules(tmp_path):
 
     asyncio.run(scenario())
     assert claude.propositions is True and claude.pieces is False
+
+
+
+def test_amiante_tu_m_entends(tmp_path):
+    # Visites du 22 et du 23/10 : « Tu m'entends ? Allô ? » restait sans réponse ; il croyait qu'on ne l'écoutait pas.
+    async def scenario():
+        session, recus = await ouvrir(tmp_path, CerveauScenario(poli()), mission="amiante")
+        await parler(session, "Tu m'entends ?")
+        await attendre(session)
+        await session.terminer()
+        return recus
+
+    recus = asyncio.run(scenario())
+    assert "Oui, je vous entends." in [m["texte"] for m in recus if m["type"] == "dire"]
+
+
+def test_amiante_vraies_phrases_de_noah_comprises(tmp_path, monkeypatch):
+    # Test de Noah du 23/10 (11:44) : ses phrases, dans l'ordre. Les règles en comprennent quelques-unes ; les autres vont à
+    # Claude (faux ici), qui dit leur geste. Résultat attendu : ses mots, les espaces montrés sans y entrer, aucune
+    # correction à faire, une réponse quand il demande.
+    from assistant.voix_croquis import GesteVoix
+
+    monkeypatch.setattr(module_session, "INTERVALLE_PIECES_S", 1000.0)
+
+    class ClaudeQuiComprend:
+        def __init__(self):
+            self.phrases = []
+            self.gestes = {
+                "C'est bon, c'est la cuisine.": GesteVoix("ici", "Cuisine"),
+                "Petit couloir.": GesteVoix("ici", "Couloir"),
+                "Ici au bout du salon, on a une chambre.": GesteVoix("vue", "Chambre"),
+                "Ça c'est la cuisine du début.": GesteVoix("retour", "Cuisine"),
+                "Ici, ça c'est l'entrée, ça c'est la cuisine ici.": GesteVoix("vue", "Entrée"),
+                "Ici, il y a l'escalier ?": GesteVoix("vue", "Escalier", reponse="Oui, l'escalier."),
+            }
+
+        async def demarrer(self, **_):
+            pass
+
+        async def fermer(self):
+            pass
+
+        async def reconnaitre(self, images, references, courante):
+            return None
+
+        async def comprendre_voix(self, phrase, courante, pieces):
+            self.phrases.append(phrase)
+            return self.gestes.get(phrase, GesteVoix("rien"))
+
+    claude = ClaudeQuiComprend()
+
+    async def scenario():
+        session, recus = await ouvrir(tmp_path, CerveauScenario(poli()), mission="amiante")
+        session.regard = claude
+        for phrase in ["C'est bon, c'est la cuisine.", "Petit couloir.", "Ici c'est le salon.",
+                       "Ici au bout du salon, on a une chambre.", "Voilà, on retourne dans le salon.",
+                       "Ça c'est la cuisine du début.", "Ici, ça c'est l'entrée, ça c'est la cuisine ici.",
+                       "Ici, il y a l'escalier ?", "Tu m'entends ?"]:
+            await parler(session, phrase)
+            await attendre(session)
+        await session.terminer()
+        return session, recus
+
+    session, recus = asyncio.run(scenario())
+    noms = [p.nom for p in session.checklist.pieces.values()]
+    assert noms == ["Cuisine", "Couloir", "Salon", "Chambre", "Entrée", "Escalier"]  # ses mots, aucun doublon
+    assert session.checklist.nom_piece(session.checklist.piece_courante) == "Cuisine"  # il montrait l'escalier depuis là
+    assert [c for c, _ in session.croquis.vues] == ["chambre", "entree", "escalier"]  # montrés sans y entrer
+    dits = [m["texte"] for m in recus if m["type"] == "dire"]
+    assert "Oui, l'escalier." in dits and "Oui, je vous entends." in dits
+    assert "Ici c'est le salon." not in claude.phrases  # compris par les règles, sans Claude

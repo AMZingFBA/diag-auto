@@ -86,7 +86,8 @@ def appliquer_action(checklist: Checklist, action: dict, t: float, phrases: list
             confirme = bool(citation) and citation_trouvee(citation, phrases)
             nom = _nom_piece(checklist, _texte(action, "nom"))
             actuelle = checklist.pieces.get(checklist.piece_courante or "")
-            correction = confirme and actuelle is not None and actuelle.source == "image" and not _DEPLACEMENT.search(cle_texte(citation))
+            correction = (confirme and _texte(action, "correction") == "oui" and actuelle is not None and actuelle.source == "image"
+                          and not _DEPLACEMENT.search(cle_texte(citation)))
             existante = checklist.trouver_piece(nom)
             if _texte(action, "nouvelle") == "oui":
                 # « C'est une autre chambre » : jamais la chambre déjà vue, une nouvelle (« Chambre 2 »).
@@ -98,7 +99,9 @@ def appliquer_action(checklist: Checklist, action: dict, t: float, phrases: list
                 # « Non, c'est le séjour » : pas une autre pièce, un coin du séjour reconnu à tort (essai du 22/10).
                 checklist.fusionner_pieces(checklist.piece_courante, existante)
             else:
-                checklist.definir_piece(nom, t, citation if confirme else "")
+                # Une pièce déjà vue sous ce nom ou un autre (« le salon » quand Claude l'a appelée « Séjour », « la
+                # chambre » quand il n'y a que « Chambre 1 ») : on y revient, jamais deux pièces pour un même espace.
+                checklist.definir_piece(checklist.nom_piece(existante) if existante else nom, t, citation if confirme else "")
             if not confirme:
                 resultat["raison"] = "pièce déduite de l'image, à confirmer"
         elif outil == "signaler_element":

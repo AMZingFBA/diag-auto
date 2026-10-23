@@ -300,3 +300,29 @@ def test_grand_croquis_au_dessus_du_bas(page):
             f" afficherCroquis({json.dumps(croquis)}); return true; }})()")
     time.sleep(0.3)  # ResizeObserver
     assert page.js("$('croquis').getBoundingClientRect().bottom <= document.querySelector('.bas').getBoundingClientRect().top + 1")
+
+
+def test_plan_dans_un_repere_commun(page):
+    # Noah, 23/10 : les pièces placées là où l'on a marché (plus en ligne droite), la porte au passage, le trajet, et
+    # « vous êtes ici » avec une flèche qui suit la caméra.
+    croquis = {"oriente": True, "courante": "sejour", "portes": [], "ouvertures": [],
+               "pieces": [{"cle": "entree", "nom": "Entrée", "source": "image", "x": 0, "y": 0, "murs": {}},
+                          {"cle": "sejour", "nom": "Séjour", "source": "image", "x": 1, "y": 0, "murs": {}}],
+               "plan": {"oriente": True, "courante": "sejour", "position": [0.0, 4.0],
+                        "pieces": [{"cle": "entree", "nom": "Entrée", "source": "image", "polygone": [[-1.2, -1.2], [1.2, -1.2], [1.2, 1.5], [-1.2, 1.5]],
+                                    "lettres": ["A", "D", "C", "B"]},
+                                   {"cle": "sejour", "nom": "Séjour", "source": "image", "polygone": [[-2, 1.5], [2, 1.5], [2, 5.5], [-2, 5.5]],
+                                    "lettres": ["A", "D", "C", "B"]}],
+                        "portes": [{"a": "entree", "b": "sejour", "x": 0.0, "y": 1.5}],
+                        "trajet": [[0, 0], [0, 1], [0, 2], [0, 3], [0, 4]]}}
+    page.js(f"(() => {{ choisirMission('amiante'); capteurs.cap = 90; afficherCroquis({json.dumps(croquis)}); return true; }})()")
+    assert page.js("$('croquis-petit').querySelectorAll('polygon').length") == 3  # 2 pièces + la flèche
+    assert page.js("$('croquis-petit').querySelectorAll('polyline').length") == 1  # le trajet
+    assert "rotate(90)" in page.js("$('croquis-petit').querySelector('.vous-ici').getAttribute('transform')")
+    # Le séjour (au nord de l'entrée) est dessiné au-dessus d'elle : y plus petit à l'écran.
+    ys = page.js("[...$('croquis-petit').querySelectorAll('polygon')].slice(0, 2).map((p) => p.getBBox().y)")
+    assert ys[1] < ys[0]
+    page.toucher("#croquis")
+    assert "A" in page.js("[...$('croquis-grand').querySelectorAll('text')].map((t) => t.textContent)")
+    assert page.js("$('plan-pieces').querySelectorAll('.fleche').length") == 0  # pas de flèches de case sur le plan
+    page.js("(() => { $('fermer-plan').onclick(); capteurs.cap = null; return true; })()")

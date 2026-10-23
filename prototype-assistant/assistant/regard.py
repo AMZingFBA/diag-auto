@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .cerveau import CerveauClaudeCode, ImageInstant, trouver_claude
+from .voix_croquis import CONSIGNES_VOIX_CROQUIS, GesteVoix, analyser_voix, contenu_voix
 from .extraction import Cible
 
 log = logging.getLogger(__name__)
@@ -158,14 +159,19 @@ class RegardClaude:
         self._cerveau = CerveauClaudeCode(dossier, modele=modele, tours_max=10, delai_s=delai_s, commande=commande)
         pieces = [*commande[: commande.index("--system-prompt") + 1], CONSIGNES_PIECE, *commande[commande.index("--system-prompt") + 2:]]
         self._pieces = CerveauClaudeCode(dossier / "pieces", modele=modele, tours_max=10, delai_s=delai_s, commande=pieces)
+        # Les phrases du croquis (amiante, plomb) : Haiku, rapide (1 à 2 s), sans images.
+        voix = [*commande[: commande.index("--system-prompt") + 1], CONSIGNES_VOIX_CROQUIS, *commande[commande.index("--system-prompt") + 2:]]
+        voix[voix.index("--model") + 1] = "claude-haiku-5-5"
+        self._voix = CerveauClaudeCode(dossier / "voix", modele="claude-haiku-5-5", tours_max=12, delai_s=8.0, commande=voix)
         self.delai_s = delai_s
         self.mesures: dict = {}
 
-    async def demarrer(self, propositions: bool = True, pieces: bool = True) -> None:
+    async def demarrer(self, propositions: bool = True, pieces: bool = True, voix: bool = False) -> None:
         """Seuls les processus utiles sont lancés (un autre partirait à la demande) : amiante et plomb, les pièces seules
         (aucune question, donc rien à proposer ; rejeu du 23/10 : 22 s pour lancer les deux sur un PC chargé) ; DPE, les
         propositions seules (les pièces n'y sont pas regardées)."""
-        await asyncio.gather(*([self._cerveau.demarrer()] if propositions else []), *([self._pieces.demarrer()] if pieces else []))
+        await asyncio.gather(*([self._cerveau.demarrer()] if propositions else []), *([self._pieces.demarrer()] if pieces else []),
+                             *([self._voix.demarrer()] if voix else []))
 
     async def reconnaitre(self, images: list[ImageInstant], references: dict[str, list[bytes]], courante: str | None) -> AvisPiece | None:
         """Dans quelle pièce est-on, d'après les dernières images comparées à une image de chaque pièce déjà vue ?"""
@@ -190,6 +196,17 @@ class RegardClaude:
             return None
         return analyser(texte, options)
 
+    async def comprendre_voix(self, phrase: str, courante: str | None, pieces: list[str]) -> GesteVoix | None:
+        """Le geste d'une phrase dite pendant le croquis (assistant/voix_croquis.py)."""
+        try:
+            processus = await self._voix._processus()
+            texte, _, self.mesures = await processus.demander(contenu_voix(phrase, courante, pieces), None, 8.0)
+        except (RuntimeError, TimeoutError, OSError) as e:
+            log.warning("Phrase du croquis comprise par Claude : %s", e)
+            return None
+        return analyser_voix(texte)
+
     async def fermer(self) -> None:
         await self._cerveau.fermer()
         await self._pieces.fermer()
+        await self._voix.fermer()

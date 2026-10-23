@@ -159,6 +159,12 @@ NOMS: list[tuple[str, str]] = [
 ]
 
 
+# Deux noms d'une même pièce : dits par le diagnostiqueur (« le salon ») ou par Claude (« Séjour »), ils ne doivent jamais
+# donner deux pièces pour un même espace (test de Noah du 23/10).
+SYNONYMES_PIECES = {"salon": "sejour", "sejour": "salon", "salle de sejour": "sejour", "living": "sejour",
+                    "toilettes": "wc", "wc": "toilettes", "salle de bain": "salle de bains", "hall": "entree", "vestibule": "entree"}
+
+
 def cle_texte(texte: str) -> str:
     """Forme comparable d'un texte : minuscules, sans accents ni espaces superflus."""
     sans_accents = unicodedata.normalize("NFKD", texte).encode("ascii", "ignore").decode()
@@ -574,10 +580,14 @@ class Checklist:
         return next(f"{nom} {n}" for n in range(2, 100) if cle_texte(f"{nom} {n}") not in self.pieces)
 
     def trouver_piece(self, nom: str) -> str | None:
-        """« la chambre » → « chambre », ou « chambre 1 » si c'est la seule chambre ; None si inconnue ou ambiguë."""
+        """« la chambre » → « chambre », ou « chambre 1 » si c'est la seule chambre ; « le salon » → « séjour » s'il n'y a
+        que le séjour (mêmes pièces, deux noms) ; None si inconnue ou ambiguë."""
         cle = cle_texte(nom)
         if cle in self.pieces:
             return cle
+        synonyme = SYNONYMES_PIECES.get(cle)
+        if synonyme and synonyme in self.pieces:
+            return synonyme
         proches = [p for p in self.pieces if p.startswith(cle + " ")]
         return proches[0] if len(proches) == 1 else None
 
