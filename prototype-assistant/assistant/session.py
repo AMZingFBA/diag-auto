@@ -30,6 +30,7 @@ from .cerveau import Contexte, Decision, ImageInstant, phrases_finies
 from .checklist import ORIENTABLES, SYNONYMES_PIECES, TOUJOURS_PRESENTS, Checklist, Element, ErreurChecklist, cle_texte, horodatage
 from .extraction import VOCABULAIRE, Cible, confirme_meme, extraire, normaliser, question_posee, valeur_normalisee
 from .boussole import CAP_DU_POINT, MEME_COTE, Boussole, Mesure, Visee, ecart, visee_decalee
+from .coins import CoinVise, DetecteurCoins, Visee as ViseeCoin, coin_vise, ferme, forme as forme_releve
 from .croquis import Croquis
 from .plan import construire as construire_plan, vers_dict as plan_vers_dict
 from .tour import DetecteurTour
@@ -145,6 +146,13 @@ _PAUSE = re.compile(r"\b(?:on (?:fait|va faire|prend) une pause|je (?:fais|prend
 _REPRISE = re.compile(r"\b(?:on reprend|je reprends|c est reparti|fin de (?:la )?pause|reprise)\b")
 # « Tu m'entends ? », « allô ? » : il vérifie qu'on l'écoute (visites du 22 et du 23/10) ; un silence lui fait croire
 # que non.
+# Relevé des murs à la voix (assistant/coins.py) : « les murs », « on relève les murs », « relevé des murs » ; une phrase
+# courte (« les murs sont en brique » n'en est pas un). Pendant le relevé : « annule » efface le dernier coin, « fini » le
+# ferme.
+_LES_MURS = re.compile(r"^\s*(?:(?:on |je )?(?:fait|fais|releve|relever|prend|prends|mesure|mesurer) )?(?:le releve des |les |des )?murs\s*$")
+_ANNULE_COIN = re.compile(r"\b(?:annule|efface|supprime|enleve|retire)\b|\bpas (?:un|ce|le bon) coin\b")
+_FIN_RELEVE = re.compile(r"^\s*(?:c est )?(?:fini|termine)(?: (?:pour )?les murs)?\s*$")
+RELEVE_MAX_S = 45.0  # sans nouveau coin pendant 45 s, le relevé se ferme
 _TU_M_ENTENDS = re.compile(r"\b(?:tu m entends|vous m entendez|tu m ecoutes|tu es la|t es la|allo)\b")
 # « Ce mur, ce mur et ce mur », « un mur ici, un mur ici » : des murs montrés un par un (texte normalisé).
 _DESIGNATION_MUR = re.compile(r"\b(?:(?:ce|cet)\s+mur(?:\s+(?:ici|la))?|un\s+mur\s+(?:ici|la))\b"
@@ -284,6 +292,16 @@ class Session:
         # Où est le téléphone (pas + gyroscope, repère commun) : le plan se construit sur ce trajet (assistant/plan.py).
         self.trajectoire = Trajectoire()
         self._t_entree_piece = 0.0
+        # Relevé des murs (assistant/coins.py) : la pièce dont on vise les coins, ses coins, sa forme.
+        self.detecteur_coins = DetecteurCoins()
+        self.releve: str | None = None
+        self._t_releve = 0.0
+        # Pendant le relevé, on vise sans marcher : tous les coins sont vus d'où l'on était au premier ; les secousses du
+        # téléphone entre deux coins ne sont pas des pas.
+        self._depuis_releve: tuple[float, float] | None = None
+        self._coins_du_releve: tuple[float, float] | None = None  # instants du premier et du dernier coin visés
+        self.releves: dict[str, list[CoinVise]] = {}
+        self._formes: dict[str, object] = {}
         self._taches_tour: set[asyncio.Task] = set()  # pièces reconnues sur les images d'un tour
         self._camera_coupee = False
         self.phrases: list[tuple[float, float, str]] = []
@@ -416,6 +434,7 @@ class Session:
         bilan = self.bilan()
         etat = self.checklist.vers_dict()
         etat["croquis"] = self._suivre_croquis()  # le croquis (et le plan) de la fin, gardé avec le reste
+        etat["releves"] = {cle: [c.vers_dict() for c in coins] for cle, coins in self.releves.items() if coins}
         self._sauver_etat(etat)
         (self.dossier / "bilan.json").write_text(json.dumps(bilan, ensure_ascii=False, indent=2), encoding="utf-8")
         self.journaliser("fin", bilan=bilan)
@@ -470,6 +489,11 @@ class Session:
                 self._references[nouvelle] = (self._references.get(nouvelle, []) + self._references.pop(ancienne))[-REFERENCES_PAR_PIECE:]
             if ancienne in self._types_vus or ancienne != nouvelle:
                 self._types_vus[nouvelle] = self._types_vus.get(nouvelle, set()) | self._types_vus.pop(ancienne, set()) | {ancienne}
+            if ancienne in self.releves and ancienne != nouvelle:  # ses coins relevés la suivent
+                self.releves[nouvelle] = self.releves.get(nouvelle, []) + self.releves.pop(ancienne)
+                self._formes.pop(ancienne, None)
+                self._formes.pop(nouvelle, None)
+            self.releve = nouvelle if self.releve == ancienne else self.releve
         self._renommages_vus = len(self.checklist.renommages)
         cle = self.checklist.piece_courante
         if cle is not None and cle != self.croquis.courante:
@@ -482,10 +506,14 @@ class Session:
         ouvertures = [{"piece": e.pieces[0], "cote": e.orientation, "type": e.type, "nombre": e.nombre}
                       for e in self.checklist.enveloppe() if e.type in ("fenetre", "porte") and e.pieces and e.orientation]
         croquis = self.croquis.vers_dict(self.checklist.correction_cap, ouvertures)
-        if self.trajectoire.avec_pas() and self.croquis.passages:
-            # Le plan dans un repère commun : les pièces là où l'on a marché, les portes là où l'on est passé.
+        releves = {cle: f.sommets for cle in list(self.releves) if cle in self.croquis.pieces and (f := self._forme(cle)) is not None}
+        if (self.trajectoire.avec_pas() and self.croquis.passages) or releves or self.releve is not None:
+            # Le plan dans un repère commun : les pièces là où l'on a marché, les portes là où l'on est passé ; les pièces
+            # relevées avec leur forme exacte.
+            coins = [(c.x, c.y) for c in self.releves.get(self.releve, [])] if self.releve is not None else []
             plan = construire_plan(self.trajectoire, [(p.vers, p.t) for p in self.croquis.passages], self.t_video,
-                                   self.checklist.correction_cap, self.croquis.vues, self.croquis.relations)
+                                   self.checklist.correction_cap, self.croquis.vues, self.croquis.relations,
+                                   releves, coins, self.releve)
             croquis["plan"] = plan_vers_dict(plan, {k: p.nom for k, p in self.croquis.pieces.items()},
                                              {k: p.source for k, p in self.croquis.pieces.items()}, self.croquis.courante)
         return croquis
@@ -494,6 +522,9 @@ class Session:
         manques = self.checklist.manques_visite()  # étape 13 : ce qui manque au DPE du logement, pas à une pièce
         etat = self.checklist.vers_dict()
         etat["croquis"] = self._suivre_croquis()
+        if self.releve is not None and self.releve != self.checklist.piece_courante:
+            await self._fermer_releve("changement de pièce")  # il envoie lui-même l'état à jour
+            return
         self._sauver_etat(etat)
         await self._envoyer({
             "type": "etat",
@@ -601,6 +632,8 @@ class Session:
             self.checklist.attente_boussole = self.boussole.gyroscope and self.checklist.correction_cap is None and mesure.t < ATTENTE_NORD_S
         elif genre == "capteurs_lot" and isinstance(message.get("mesures"), list):
             await self._recevoir_mouvement(message)
+        elif genre == "releve" and self.croquis_seul:  # le bouton « Murs » : ouvrir, ou fermer, le relevé des murs
+            await (self._ouvrir_releve("bouton") if message.get("action") == "debut" else self._fermer_releve("bouton"))
         elif genre == "visibilite":
             self.journaliser("visibilite", cachee=bool(message.get("cachee")))
         elif genre == "deplacer_piece" and message.get("cle") in self.checklist.pieces and message.get("vers") in ("nord", "est", "sud", "ouest"):
@@ -650,8 +683,98 @@ class Session:
             if tour is not None:
                 self.trajectoire.ajouter_tour(tour.t_debut, tour.t_fin)  # ses piétinements ne sont pas une marche
                 await self._tour_vu(tour)
+            if self.releve is not None:
+                visee = self.detecteur_coins.ajouter(mesure)
+                if visee is not None:
+                    await self._coin_vu(visee)
+                elif mesure["t"] - self._t_releve > RELEVE_MAX_S:
+                    await self._fermer_releve("plus de coin")
         for t in pas:  # après les mesures du même lot : la direction de chaque pas est connue
             self.trajectoire.ajouter_pas(t)
+
+    # --- Relevé des murs (assistant/coins.py) ---------------------------------------------------------------------
+
+    async def _ouvrir_releve(self, source: str = "bouton") -> None:
+        """Le bouton « Murs » (ou « les murs » à la voix) : on vise maintenant chaque coin de la pièce où l'on est. Une
+        pièce déjà fermée se relève de nouveau (on recommence). Pas encore de pièce : une pièce à nommer (« ici c'est la
+        cuisine », dit sans bouger, la renomme)."""
+        if self.releve is not None:
+            await self._fermer_releve("nouveau relevé")
+        cle = self.checklist.piece_courante
+        if cle is None:
+            self.checklist.definir_piece(self.checklist.nom_libre("Pièce"), self.t_video, citation="relevé des murs")
+            cle = self.checklist.piece_courante
+            self.checklist.pieces[cle].source = "image"
+            await self.envoyer_etat()  # la pièce entre au croquis avant ses coins
+        if self.releves.get(cle) and self._forme(cle) is not None:
+            self.releves[cle] = []  # elle a déjà sa forme : on recommence
+        self.releves.setdefault(cle, [])
+        self._formes.pop(cle, None)
+        self.releve, self._t_releve = cle, self.t_video
+        self._depuis_releve = self._coins_du_releve = None
+        self.detecteur_coins.reprendre()
+        self.journaliser("releve_ouvert", piece=cle, source=source)
+        await self._envoyer({"type": "releve", "etat": "ouvert", "piece": self.checklist.nom_piece(cle), "coins": len(self.releves[cle])})
+        await self.envoyer_etat()
+
+    async def _fermer_releve(self, raison: str) -> None:
+        cle, self.releve = self.releve, None
+        if cle is None:
+            return
+        if self._coins_du_releve is not None:  # les « pas » comptés en visant n'étaient que des secousses du téléphone
+            self.trajectoire.ajouter_tour(self._coins_du_releve[0] - 1.0, self._coins_du_releve[1])
+        f = self._forme(cle)
+        nom = self.checklist.nom_piece(cle)
+        self.journaliser("releve_ferme", piece=cle, raison=raison, coins=len(self.releves.get(cle, [])),
+                         murs=[round(m.longueur, 2) for m in f.murs] if f is not None else None)
+        await self._envoyer({"type": "releve", "etat": "ferme", "piece": nom, "murs": len(f.murs) if f is not None else 0})
+        if raison != "nouveau relevé" and self.releves.get(cle):
+            texte = f"{nom} : {len(f.murs)} murs." if f is not None else f"{nom} : pas de forme, visez de nouveau chaque coin."
+            await self.dire(texte, time.monotonic(), forcer=True, question=False)
+        await self.envoyer_etat()
+
+    async def _coin_vu(self, visee: ViseeCoin) -> None:
+        """La croix s'est arrêtée sur un coin : il est relevé (un bip). Revenir sur le premier coin ferme la pièce."""
+        if len(self.checklist.renommages) > self._renommages_vus:
+            self._suivre_croquis()  # la pièce vient d'être renommée : son relevé la suit
+        cle = self.releve
+        if cle is None or self.en_pause:
+            return
+        if cle != self.checklist.piece_courante or cle not in self.checklist.pieces:
+            await self._fermer_releve("changement de pièce")  # on est passé dans une autre pièce : ce relevé est fini
+            return
+        coins = self.releves.setdefault(cle, [])
+        if ferme(coins, visee):
+            self._coins_du_releve = (self._coins_du_releve[0], visee.t) if self._coins_du_releve else None
+            await self._fermer_releve("premier coin")
+            return
+        if self._depuis_releve is None:
+            self._depuis_releve = self.trajectoire.position(visee.t - 1.2)
+            self._coins_du_releve = (visee.t, visee.t)
+        self._coins_du_releve = (self._coins_du_releve[0], visee.t)
+        coins.append(coin_vise(visee, self._depuis_releve))
+        self._formes.pop(cle, None)
+        self._t_releve = visee.t
+        self.journaliser("coin", piece=cle, **coins[-1].vers_dict())
+        await self._envoyer({"type": "coin", "piece": self.checklist.nom_piece(cle), "n": len(coins), "plafond": visee.plafond})
+        await self.envoyer_etat()
+
+    async def _annuler_coin(self) -> bool:
+        """« Annule » pendant le relevé : le dernier coin est effacé (une visée ratée)."""
+        coins = self.releves.get(self.releve or "", [])
+        if not coins:
+            return False
+        coins.pop()
+        self._formes.pop(self.releve, None)
+        self.journaliser("coin_annule", piece=self.releve, coins=len(coins))
+        await self._envoyer({"type": "coin", "piece": self.checklist.nom_piece(self.releve), "n": len(coins), "annule": True})
+        return True
+
+    def _forme(self, cle: str):
+        """La forme relevée d'une pièce (assistant/coins.py), calculée une fois par nouveau coin."""
+        if cle not in self._formes:
+            self._formes[cle] = forme_releve(self.releves.get(cle, []))
+        return self._formes[cle]
 
     async def _tour_vu(self, tour) -> None:
         if self.en_pause:
@@ -843,6 +966,15 @@ class Session:
                 compris = compris or [{"statut": "accepte"}]
                 self._annonce_piece = None
                 self.journaliser("pause")
+            court = " ".join(re.sub(r"[^a-z0-9]+", " ", normal).split())  # sans ponctuation : « les murs , » → « les murs »
+            if not compris and _LES_MURS.search(court):
+                await self._ouvrir_releve("voix")
+                compris = [{"statut": "accepte"}]
+            elif not compris and self.releve is not None and _FIN_RELEVE.search(court):
+                await self._fermer_releve("voix")
+                compris = [{"statut": "accepte"}]
+            elif not compris and self.releve is not None and _ANNULE_COIN.search(court) and await self._annuler_coin():
+                compris = [{"statut": "accepte"}]
             if not compris and not _TU_M_ENTENDS.search(normal) and hasattr(self.regard, "comprendre_voix"):
                 # Pas compris par les règles : Claude dit le geste de la phrase (ici, vue, retour, correction…).
                 compris = await self._geste_de_la_phrase(texte, lot[0]["t_debut"], lot[-1]["t_fin"], reference)
@@ -1468,8 +1600,7 @@ class Session:
             # comptent (« on est dans la cuisine », « non, c'est la buanderie ») ; rien n'est noté pour le DPE.
             actions, invraisemblables = [a for a in actions if a.get("outil") == "piece_courante"], []
         devinee = self._devinee_a_l_entree(self.checklist.piece_courante)
-        if (self.trajectoire.avec_pas() and devinee
-                and self.trajectoire.distance(self._t_entree_piece, lot[-1]["t_fin"]) < DEPLACEMENT_MIN_M):
+        if devinee and self._sans_bouger(self.checklist.piece_courante, lot[-1]["t_fin"]):
             # « Ici c'est le salon » sans avoir marché depuis que la pièce a été reconnue sur l'image : c'est son vrai nom
             # (une correction) ; après avoir marché, c'est la pièce où l'on vient d'arriver.
             for a in actions:
@@ -1918,8 +2049,7 @@ class Session:
                 geste.geste = "vue"
         if geste.geste in ("ici", "retour"):
             existante = self.checklist.trouver_piece(geste.nom)
-            if (existante != cle and self._devinee_a_l_entree(cle) and self.trajectoire.avec_pas()
-                    and self.trajectoire.distance(self._t_entree_piece, t_fin) < DEPLACEMENT_MIN_M):
+            if existante != cle and self._devinee_a_l_entree(cle) and self._sans_bouger(cle, t_fin):
                 # Comme pour les règles (_noter) : « j'y suis, je suis dans le couloir » sans avoir marché depuis que Claude
                 # a vu le séjour par la porte (rejeu du 23/10 : le séjour, vu 1 s plus tôt, restait sur le trajet) : la pièce
                 # devinée sur l'image était celle-là.
@@ -2001,6 +2131,20 @@ class Session:
             # « Nouvelle cuisine » juste après être entré dans la cuisine (essai sur la visite du 22/10 : « Cuisine 2 ») :
             # un autre coin de la même pièce.
             avis = type(avis)(courante, "", avis.confiance)
+        if avis is not None and avis.piece is None and avis.type and avis.confiance != "faible" and self._piece_a_nommer(cle):
+            # La pièce ouverte par le bouton « Murs » avant d'avoir un nom : Claude la nomme (elle garde ses coins).
+            try:
+                self.checklist.renommer_piece(cle, self.checklist.nom_libre(avis.type), "image")
+            except ErreurChecklist:
+                return
+            self.journaliser("piece_reconnue", nom=self.checklist.nom_piece(self.checklist.piece_courante), nouvelle=True)
+            await self.envoyer_etat()
+            await self._annoncer_piece(self.checklist.piece_courante, f"Nouvelle pièce : {self.checklist.nom_piece(self.checklist.piece_courante)}.")
+            return
+        if self.releve is not None:
+            # Pendant le relevé des murs, on ne change pas de pièce sur l'image (une pièce voisine vue par la porte).
+            self._avis_piece = ""
+            return
         if avis is not None and avis.piece is None and avis.type:
             vue = self._piece_nommee_du_type(avis.type, cle)
             if vue is not None:
@@ -2057,6 +2201,17 @@ class Session:
             return False
         passages = sum(1 for p in self.croquis.passages if p.vers == cle)
         return (passages - 1 if self.croquis.courante == cle else passages) <= 0
+
+    def _piece_a_nommer(self, cle: str | None) -> bool:
+        """La pièce ouverte par le bouton « Murs » avant d'avoir un nom (« Pièce », « Pièce 2 »)."""
+        return cle is not None and re.fullmatch(r"piece(?: \d+)?", cle) is not None and self._devinee_a_l_entree(cle)
+
+    def _sans_bouger(self, cle: str | None, t: float) -> bool:
+        """Pas marché depuis l'entrée dans la pièce. Sans podomètre (ou avant le premier pas) : vrai seulement pour une pièce
+        encore à nommer (« ici c'est la cuisine », dit pendant le relevé de ses murs, la nomme)."""
+        if self.trajectoire.avec_pas():
+            return self.trajectoire.distance(self._t_entree_piece, t) < DEPLACEMENT_MIN_M
+        return self._piece_a_nommer(cle)
 
     def _devinee_a_l_entree(self, cle: str | None) -> bool:
         """La pièce où l'on est n'a été que devinée sur l'image, à cette entrée-ci : une correction peut la renommer ou la

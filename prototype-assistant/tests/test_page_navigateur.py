@@ -343,3 +343,36 @@ def test_plan_dans_le_sens_de_la_marche(page):
     assert ys[1] < ys[0]  # le séjour, au sud, devant lui : en haut
     assert "rotate(0)" in page.js("$('croquis-petit').querySelector('.vous-ici').getAttribute('transform')")  # il regarde devant
     page.js("(() => { capteurs.cap = null; return true; })()")
+
+
+def test_releve_des_murs_croix_coins_et_longueurs(page):
+    # Noah (23/10) : « suivre les murs de la maison ». Le bouton « Murs » (amiante, plomb) ouvre le relevé : la croix au
+    # centre de l'écran (le point que vise la caméra), le croquis réduit dans le coin ; chaque coin fait un bip ; la pièce
+    # fermée a la longueur de ses murs sur le plan.
+    assert page.js("$('murs').hidden") is True  # DPE : pas de relevé
+    page.js("(() => { choisirMission('amiante'); window.envoyes = []; return true; })()")
+    assert page.js("$('murs').hidden") is False
+    page.toucher("#murs")
+    assert page.js("window.envoyes") == [{"type": "releve", "action": "debut"}]
+    page.js("recevoir({type: 'releve', etat: 'ouvert', piece: 'Chambre', coins: 0})")
+    assert page.js("$('viseur').hidden") is False and page.js("document.body.classList.contains('releve')") is True
+    centre = page.js("(() => { const r = $('viseur').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()")
+    assert abs(centre[0] - 195) < 2 and abs(centre[1] - 422) < 2  # au centre de l'écran de 390 × 844
+    assert page.js("$('croquis').getBoundingClientRect().width") < 140  # réduit dans le coin : la croix reste visible
+    page.js("recevoir({type: 'coin', piece: 'Chambre', n: 2})")
+    assert "2 coins" in page.js("$('releve').textContent")
+    page.toucher("#murs")
+    assert page.js("window.envoyes")[-1] == {"type": "releve", "action": "fin"}
+    page.js("recevoir({type: 'releve', etat: 'ferme', piece: 'Chambre', murs: 4})")
+    assert page.js("$('viseur').hidden") is True and "4 murs" in page.js("$('releve').textContent")
+    plan = {"oriente": False, "courante": "chambre", "position": [1.2, 1.0], "sens_marche": None, "sens_entree": None,
+            "pieces": [{"cle": "chambre", "nom": "Chambre", "source": "image", "mesuree": True, "murs": [4.02, 3.0, 4.02, 3.0],
+                        "polygone": [[0, 0], [4.02, 0], [4.02, 3], [0, 3]], "lettres": ["A", "D", "C", "B"]}],
+            "portes": [], "trajet": [], "coins": [[0.1, 0.1]]}
+    croquis = {"oriente": False, "courante": "chambre", "portes": [], "ouvertures": [], "plan": plan,
+               "pieces": [{"cle": "chambre", "nom": "Chambre", "source": "image", "x": 0, "y": 0, "murs": {}}]}
+    page.js(f"(() => {{ $('plan').hidden = false; afficherCroquis({json.dumps(croquis)}); return true; }})()")
+    assert page.js("[...$('croquis-grand').querySelectorAll('.longueur')].map((t) => t.textContent)") == ["4,02 m", "3,00 m", "4,02 m", "3,00 m"]
+    assert page.js("$('croquis-grand').querySelector(':scope > polygon').getAttribute('stroke-dasharray')") == ""  # relevée
+    assert page.js("$('croquis-petit').querySelectorAll('.coin').length") == 1
+    page.js("(() => { $('plan').hidden = true; choisirMission('dpe'); return true; })()")

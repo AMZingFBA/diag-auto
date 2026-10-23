@@ -93,9 +93,20 @@ async def rejouer(video: Path, serveur: str, code: str, piece: str, mission: str
         for ligne in (video / "images.jsonl").read_text(encoding="utf-8").splitlines():
             pose = json.loads(ligne)
             poses[round(float(pose.pop("t")), 2)] = {k: v for k, v in pose.items() if k != "fichier"}
+    # Relevé des murs : les appuis sur le bouton « Murs » (journal de la visite), rejoués à leur instant ; ceux dits à la
+    # voix se rejouent avec le son.
+    boutons = []
+    if video.is_dir() and (video / "journal.jsonl").exists():
+        for ligne in (video / "journal.jsonl").read_text(encoding="utf-8").splitlines():
+            e = json.loads(ligne)
+            if e.get("evenement") == "releve_ouvert" and e.get("source") == "bouton":
+                boutons.append((e["t"], "debut"))
+            elif e.get("evenement") == "releve_ferme" and e.get("raison") == "bouton":
+                boutons.append((e["t"], "fin"))
     if duree is not None:  # seulement le début de la visite
         son, images, capteurs = son[: int(duree * TAUX)], [i for i in images if i[0] <= duree], [m for m in capteurs if m["t"] <= duree]
         lots = [e for e in lots if e[0] <= duree]
+        boutons = [b for b in boutons if b[0] <= duree]
     print(f"{video.name} : {len(son) / TAUX:.1f} s de son, {len(images)} images")
     url_ws = serveur.replace("https://", "wss://").replace("http://", "ws://").rstrip("/") + "/ws" + (f"?code={code}" if code else "")
     contexte_ssl = None
@@ -138,6 +149,10 @@ async def rejouer(video: Path, serveur: str, code: str, piece: str, mission: str
                     print(f"{horloge()}    (bip : noté {m.get('latence_s')} s après la fin de phrase détectée)")
                 elif m["type"] == "erreur":
                     print(f"{horloge()} ERREUR : {m['message']}")
+                elif m["type"] == "coin":
+                    print(f"{horloge()}    coin {m['n']} ({m['piece']}){' effacé' if m.get('annule') else ''}")
+                elif m["type"] == "releve":
+                    print(f"{horloge()} MURS de {m['piece']} : {'ouvert' if m['etat'] == 'ouvert' else str(m.get('murs')) + ' murs'}")
                 elif m["type"] == "piece_reconnue":
                     print(f"{horloge()} PIÈCE : {m['nom']}{' (nouvelle)' if m.get('nouvelle') else ''}")
                 elif m["type"] == "etat" and (m.get("checklist") or {}).get("croquis"):
@@ -150,9 +165,12 @@ async def rejouer(video: Path, serveur: str, code: str, piece: str, mission: str
         silence = np.zeros(int(4 * TAUX), dtype="<i2")  # 4 s de silence à la fin, pour clore la dernière phrase
         flux = np.concatenate([son, silence])
         debut_envoi = time.monotonic()
-        prochain_capteur = prochain_lot = 0
+        prochain_capteur = prochain_lot = prochain_bouton = 0
         for i in range(0, len(flux), BLOC):
             t = i / TAUX
+            while prochain_bouton < len(boutons) and boutons[prochain_bouton][0] <= t:
+                await ws.send(json.dumps({"type": "releve", "action": boutons[prochain_bouton][1]}))
+                prochain_bouton += 1
             while prochain_capteur < len(capteurs) and capteurs[prochain_capteur]["t"] <= t:
                 await ws.send(json.dumps({"type": "capteurs", **capteurs[prochain_capteur]}))
                 prochain_capteur += 1
@@ -195,7 +213,8 @@ async def rejouer(video: Path, serveur: str, code: str, piece: str, mission: str
         if croquis.get("plan"):  # le plan dans un repère commun (étape 15)
             plan = croquis["plan"]
             centre = lambda pts: (round(sum(p[0] for p in pts) / len(pts), 1), round(sum(p[1] for p in pts) / len(pts), 1))  # noqa: E731
-            print("Plan :", ", ".join(f"{p['nom']} {centre(p['polygone'])}" for p in plan["pieces"]),
+            print("Plan :", ", ".join(f"{p['nom']} {centre(p['polygone'])}" + (f" murs {p['murs']}" if p.get("murs") else "")
+                                      for p in plan["pieces"]),
                   "— portes :", ", ".join(f"{p['a']}→{p['b']}" for p in plan["portes"]), "— orienté :", plan["oriente"])
     return bilan
 

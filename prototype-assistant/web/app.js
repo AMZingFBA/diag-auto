@@ -3,7 +3,7 @@
 // (16 kHz) et une image par seconde, et lit à voix haute les questions de l'assistant.
 
 // Version de la page, comparée à celle du serveur (test du 23/10 : l'iPhone gardait l'ancienne page en mémoire).
-const VERSION_PAGE = "2026-10-23-12";
+const VERSION_PAGE = "2026-10-23-13";
 const $ = (id) => document.getElementById(id);
 const TAUX = 16000;
 const TYPE_SON = 1;
@@ -47,6 +47,8 @@ const etat = {
   // Seuils de la boussole (boussole.toml) ; remplacés par ceux du serveur au chargement.
   reglagesBoussole: { precision: { bonne: 15, faible: 30 }, dispersion: { bonne: 12, faible: 25 }, iphone: { inclinaison_calibrage: 60 } },
   mission: null, // choisie sur l'accueil : « dpe », « amiante » ou « plomb »
+  releve: false, // relevé des murs ouvert (bouton « Murs ») : la croix est affichée
+  finReleve: null,
 };
 
 // Mouvement du téléphone (étape 15 : « un tour de 3 s par pièce ») : orientation complète à chaque événement, rotation
@@ -96,6 +98,19 @@ function choisirMission(mission) {
   document.body.dataset.mission = mission; // style.css : le croquis en grand pour l'amiante et le plomb
   $("voir-fiche").textContent = croquisSeul() ? "🗺️ Plan" : "📋 Fiche";
   $("manques-bloc").hidden = croquisSeul();
+  $("murs").hidden = !croquisSeul();
+}
+
+// Relevé des murs (assistant/coins.py) : ouvert, la croix s'affiche et chaque coin visé une seconde fait un bip.
+function afficherReleve(texte, ouvert) {
+  etat.releve = ouvert;
+  document.body.classList.toggle("releve", ouvert);
+  $("viseur").hidden = !ouvert;
+  $("murs").textContent = ouvert ? "✓ Fin des murs" : "📐 Murs";
+  $("releve").textContent = texte;
+  $("releve").hidden = !texte;
+  clearTimeout(etat.finReleve);
+  if (!ouvert && texte) etat.finReleve = setTimeout(() => { $("releve").hidden = true; }, 5000);
 }
 
 // Le message d'ouverture de la liaison (et de chaque reconnexion) : la mission part avec lui.
@@ -328,6 +343,19 @@ function recevoir(m) {
     case "piece_reconnue":
       $("latence").textContent = `📷 Pièce : ${m.nom}${m.nouvelle ? " (nouvelle)" : ""}. Touchez le croquis pour corriger.`;
       break;
+    case "releve":
+      if (m.etat === "ouvert") {
+        afficherReleve(`📐 Murs de ${m.piece} : visez chaque coin au ras du sol, 1 seconde (bip). Revenez sur le premier coin pour finir.`, true);
+      } else {
+        bip();
+        setTimeout(bip, 180);
+        afficherReleve(m.murs ? `✓ ${m.piece} : ${m.murs} murs relevés` : `✗ ${m.piece} : pas de forme, rouvrez « Murs » et visez chaque coin`, false);
+      }
+      break;
+    case "coin":
+      if (!m.annule) bip();
+      afficherReleve(`📐 ${m.piece} : ${m.n} coin${m.n > 1 ? "s" : ""}${m.annule ? " (dernier effacé)" : m.plafond ? " (au plafond)" : ""}. Revenez sur le premier coin pour finir.`, true);
+      break;
     case "tour":
       // Le serveur a vu un tour de la pièce complet (assistant/tour.py) : un bip dans l'oreillette, sans regarder l'écran.
       bip();
@@ -509,9 +537,9 @@ function dessinerPlan(svg, plan, grand) {
   const r = (-sens * Math.PI) / 180;
   const tourne = ([x, y]) => [x * Math.cos(r) + y * Math.sin(r), -x * Math.sin(r) + y * Math.cos(r)];
   plan = { ...plan, pieces: plan.pieces.map((p) => ({ ...p, polygone: p.polygone.map(tourne) })),
-           trajet: plan.trajet.map(tourne), position: tourne(plan.position),
+           trajet: plan.trajet.map(tourne), position: tourne(plan.position), coins: (plan.coins || []).map(tourne),
            portes: plan.portes.map((d) => { const [x, y] = tourne([d.x, d.y]); return { ...d, x, y }; }) };
-  const points = [...plan.pieces.flatMap((p) => p.polygone), ...plan.trajet, plan.position];
+  const points = [...plan.pieces.flatMap((p) => p.polygone), ...plan.trajet, plan.position, ...plan.coins];
   const xs = points.map((p) => p[0]), ys = points.map((p) => p[1]);
   const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
   const marge = grand ? 18 : 8;
@@ -525,14 +553,21 @@ function dessinerPlan(svg, plan, grand) {
     return e;
   };
   const el = (nom, attributs, texte) => svg.appendChild(creer(nom, attributs, texte));
+  for (const p of plan.pieces) {  // les pièces d'abord, leurs textes ensuite : un fond ne cache jamais un texte voisin
+    el("polygon", { points: p.polygone.map(P).map((q) => q.join(",")).join(" "), fill: p.cle === plan.courante ? "#d6ebff" : "#fafafa",
+                    stroke: "#222", "stroke-width": grand ? 3 : 2, "stroke-dasharray": p.source === "image" && !p.mesuree ? "6 3" : "" });
+  }
   for (const p of plan.pieces) {
     const pts = p.polygone.map(P);
-    el("polygon", { points: pts.map((q) => q.join(",")).join(" "), fill: p.cle === plan.courante ? "#d6ebff" : "#fafafa",
-                    stroke: "#222", "stroke-width": grand ? 3 : 2, "stroke-dasharray": p.source === "image" ? "6 3" : "" });
     const cx = pts.reduce((s, q) => s + q[0], 0) / pts.length, cy = pts.reduce((s, q) => s + q[1], 0) / pts.length;
     const petit = Math.min(...pts.map((q) => Math.hypot(q[0] - cx, q[1] - cy))) < 30;
+    // Pièce étroite (couloir) : son nom écrit dans sa longueur.
+    const largeurP = Math.max(...pts.map((q) => q[0])) - Math.min(...pts.map((q) => q[0]));
+    const hauteurP = Math.max(...pts.map((q) => q[1])) - Math.min(...pts.map((q) => q[1]));
+    const debout = largeurP < 70 && hauteurP > 1.6 * largeurP;
     el("text", { x: cx, y: cy, "text-anchor": "middle", "dominant-baseline": "middle", "font-weight": "700",
-                 "font-size": grand ? 14 : 10 }, grand || !petit ? p.nom : p.nom.slice(0, 3));
+                 "font-size": grand ? 14 : 10, ...(debout ? { transform: `rotate(-90 ${cx.toFixed(1)} ${cy.toFixed(1)})` } : {}) },
+       grand || !petit ? p.nom : p.nom.slice(0, 3));
     if (grand && p.depuis_la_porte) {  // regardée depuis sa porte (pièce occupée…) : à dire dans le repérage
       el("text", { x: cx, y: cy + 16, "text-anchor": "middle", "font-size": 11, fill: "#555" }, "vue depuis la porte");
     }
@@ -543,12 +578,27 @@ function dessinerPlan(svg, plan, grand) {
         const d = Math.hypot(cx - mx, cy - my) || 1;
         el("text", { x: mx + (cx - mx) / d * 12, y: my + (cy - my) / d * 12, "text-anchor": "middle", "dominant-baseline": "middle",
                      "font-size": 12, fill: "#b00" }, p.lettres[i] || "");
+        // Murs relevés : leur longueur (estimée ; le Carrez reste au laser), le long du mur, à l'intérieur de la pièce.
+        if (p.murs && p.murs[i] != null) {
+          let angle = (Math.atan2(b[1] - a[1], b[0] - a[0]) * 180) / Math.PI;
+          if (angle > 90) angle -= 180;
+          if (angle < -90) angle += 180;
+          const recul = d > 45 ? 25 : -10; // pièce étroite : la longueur à l'extérieur, le nom garde la place
+          const lx = mx + (cx - mx) / d * recul, ly = my + (cy - my) / d * recul;
+          el("text", { x: lx, y: ly, "text-anchor": "middle", "dominant-baseline": "middle", "font-size": 10, fill: "#333",
+                       class: "longueur", transform: `rotate(${angle.toFixed(1)} ${lx.toFixed(1)} ${ly.toFixed(1)})` },
+             `${p.murs[i].toFixed(2).replace(".", ",")} m`);
+        }
       });
     }
   }
   for (const d of plan.portes) {
     const [px, py] = P([d.x, d.y]);
     el("circle", { cx: px, cy: py, r: grand ? 6 : 3.5, fill: "#c0782a", stroke: "#fff", "stroke-width": 1.5 });
+  }
+  for (const c of plan.coins) {  // les coins du relevé en cours, au fur et à mesure
+    const [qx, qy] = P(c);
+    el("circle", { class: "coin", cx: qx, cy: qy, r: grand ? 5 : 3, fill: "#ff8f00", stroke: "#fff", "stroke-width": 1.5 });
   }
   if (plan.trajet.length > 1) {
     el("polyline", { points: plan.trajet.map(P).map((q) => q.join(",")).join(" "), fill: "none", stroke: "#1a73e8",
@@ -1153,6 +1203,8 @@ if (window.ResizeObserver) {
 }
 for (const b of $("missions").querySelectorAll("button")) b.onclick = () => choisirMission(b.dataset.mission);
 // Amiante, plomb : le bouton ouvre le plan (croquis en grand, corrections) ; DPE : la fiche du logement.
+$("murs").onclick = () => envoyerJson({ type: "releve", action: etat.releve ? "fin" : "debut" });
+
 $("voir-fiche").onclick = () => {
   if (croquisSeul()) { $("plan").hidden = false; afficherCroquis(etat.croquis); return; }
   $("fiche").hidden = false;

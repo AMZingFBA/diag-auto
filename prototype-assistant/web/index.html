@@ -44,6 +44,9 @@
   <!-- Pendant la visite -->
   <section id="visite" class="ecran" hidden>
     <video id="camera" playsinline muted></video>
+    <!-- Relevé des murs (Noah, 23/10 : « suivre les murs de la maison ») : la croix est le point que vise la caméra ; on
+         l'arrête une seconde sur chaque coin, au ras du sol. -->
+    <div id="viseur" class="viseur" hidden aria-hidden="true"></div>
     <header class="bandeau">
       <span id="connexion" class="pastille" title="Connexion"></span>
       <span id="piece-courante">DPE du logement</span>
@@ -60,6 +63,7 @@
          l'agrandit, et permet de renommer une pièce mal reconnue. -->
     <div id="croquis" class="croquis" hidden><svg id="croquis-petit"></svg>
       <p id="croquis-aide" class="croquis-aide" hidden>Le croquis se dessine ici : entrez dans une pièce et faites-en le tour.</p></div>
+    <div id="releve" class="releve-info" hidden></div>
     <div id="alerte" class="alerte" hidden></div>
     <div class="bas">
       <div class="ligne-question">
@@ -84,6 +88,7 @@
         <p id="infos" class="petit"></p>
       </details>
       <div class="boutons">
+        <button id="murs" hidden>📐 Murs</button>
         <button id="voir-fiche">📋 Fiche</button>
         <button id="silence">🔈 Assistant actif</button>
         <button id="terminer" class="danger">Terminer</button>

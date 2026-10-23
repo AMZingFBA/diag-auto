@@ -68,6 +68,15 @@ body[data-mission="amiante"] .choix, body[data-mission="plomb"] .choix { display
 #plan-pieces .fleche { width: 44px; margin: 0; padding: 8px 0; font-size: 1.1rem; }
 .jauge { position: absolute; top: calc(44px + env(safe-area-inset-top)); left: 0; right: 0; height: 6px; background: rgba(255,255,255,0.25); }
 #taux { height: 100%; width: 0; background: #3ddc84; transition: width 0.4s; }
+/* Relevé des murs : la croix au centre de la vidéo (le point que vise la caméra) ; le croquis se réduit dans le coin pour
+   la laisser voir. */
+.viseur { position: absolute; left: 50%; top: 50%; width: 76px; height: 76px; transform: translate(-50%, -50%); pointer-events: none; }
+.viseur::before, .viseur::after { content: ""; position: absolute; background: #ffd400; box-shadow: 0 0 0 1px rgba(0,0,0,0.65); }
+.viseur::before { left: calc(50% - 1.5px); top: 0; bottom: 0; width: 3px; }
+.viseur::after { top: calc(50% - 1.5px); left: 0; right: 0; height: 3px; }
+.releve-info { position: absolute; top: calc(196px + env(safe-area-inset-top)); left: 12px; right: 12px; padding: 8px 10px;
+  border-radius: 8px; background: rgba(20, 33, 61, 0.88); color: #fff; font-weight: 600; }
+body.releve .croquis { right: auto; bottom: auto; width: 132px; height: 132px; min-height: 0; }
 .alerte { position: absolute; top: calc(58px + env(safe-area-inset-top)); left: 16px; right: 16px; padding: 10px; border-radius: 8px; background: var(--danger); color: #fff; }
 .bas { position: absolute; left: 0; right: 0; bottom: 0; padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 8px; max-height: 70%; overflow-y: auto; }
 .question { background: var(--carte); border-radius: 12px; padding: 14px; font-size: 1.25rem; font-weight: 700; box-shadow: 0 4px 16px rgba(0,0,0,0.3); }

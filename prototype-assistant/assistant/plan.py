@@ -7,8 +7,11 @@ de sa taille habituelle (séjour, chambre, WC…), agrandi si l'on y a marché p
 (direction dominante des marches, à 90° près) ; deux pièces qui se chevauchent sont écartées sans changer de taille, deux
 pièces presque jointives partagent leur mur ; la porte entre deux pièces est là où l'on est passé de l'une à l'autre,
 posée sur leur mur commun. Pas de cotes : des
-proportions approximatives, à la mesure des pas (0,6 m par pas, hypothèse). Une pièce dont le tour donne la forme
-(assistant/geometrie.py) pourra remplacer son rectangle.
+proportions approximatives, à la mesure des pas (0,6 m par pas, hypothèse).
+
+Une pièce dont les murs ont été relevés (assistant/coins.py : chaque coin visé) garde sa forme exacte et ses longueurs :
+elle est seulement déplacée (jamais déformée) pour ne pas chevaucher ses voisines et partager leur mur ; ses murs donnent
+l'axe du logement, plus sûr que la direction des marches.
 """
 
 from __future__ import annotations
@@ -46,6 +49,7 @@ class Rectangle:
     v0: float
     u1: float
     v1: float
+    mesure: bool = False  # murs relevés : la pièce se déplace, sa taille ne change jamais
 
     @property
     def centre(self) -> tuple[float, float]:
@@ -68,6 +72,9 @@ class Plan:
     sens_entree: float | None = None  # celui de la première marche (le plan d'ensemble, entrée en bas)
     axe: float = 0.0
     oriente: bool = False
+    mesurees: set[str] = field(default_factory=set)  # pièces dont les murs ont été relevés (forme exacte)
+    murs: dict[str, list[float]] = field(default_factory=dict)  # longueur de chaque mur relevé, dans l'ordre des sommets
+    coins: list[tuple[float, float]] = field(default_factory=list)  # coins du relevé en cours (repère d'affichage)
 
 
 def axe_du_logement(directions: list[float]) -> float:
@@ -79,6 +86,31 @@ def axe_du_logement(directions: list[float]) -> float:
     if math.hypot(s, c) < 0.25 * len(directions):
         return 0.0  # pas de direction nette
     return (math.degrees(math.atan2(s, c)) / 4.0) % 90.0
+
+
+def axe_des_releves(releves: dict[str, list[tuple[float, float]]]) -> float:
+    """L'axe du logement donné par les murs relevés (à 90° près) : moyenne circulaire de 4θ, pondérée par la longueur."""
+    s = c = 0.0
+    for poly in releves.values():
+        for (x1, y1), (x2, y2) in zip(poly, poly[1:] + poly[:1]):
+            angle = math.radians(4.0 * math.degrees(math.atan2(x2 - x1, y2 - y1)))
+            s, c = s + math.dist((x1, y1), (x2, y2)) * math.sin(angle), c + math.dist((x1, y1), (x2, y2)) * math.cos(angle)
+    return (math.degrees(math.atan2(s, c)) / 4.0) % 90.0 if math.hypot(s, c) > 1e-9 else 0.0
+
+
+def _aire(poly: list[tuple[float, float]]) -> float:
+    """Aire signée : positive si les sommets tournent dans le sens inverse des aiguilles d'une montre."""
+    return sum(x1 * y2 - x2 * y1 for (x1, y1), (x2, y2) in zip(poly, poly[1:] + poly[:1])) / 2.0
+
+
+def _biais(poly: list[tuple[float, float]]) -> float:
+    """De combien les murs d'un polygone s'écartent des axes (−45 à 45°)."""
+    s = c = 0.0
+    for (x1, y1), (x2, y2) in zip(poly, poly[1:] + poly[:1]):
+        angle = math.radians(4.0 * math.degrees(math.atan2(x2 - x1, y2 - y1)))
+        s, c = s + math.dist((x1, y1), (x2, y2)) * math.sin(angle), c + math.dist((x1, y1), (x2, y2)) * math.cos(angle)
+    biais = math.degrees(math.atan2(s, c)) / 4.0 if math.hypot(s, c) > 1e-9 else 0.0
+    return (biais + 45.0) % 90.0 - 45.0
 
 
 def entrees(trajectoire: Trajectoire, changements: list[tuple[str, float]]) -> list[Sejour]:
@@ -102,13 +134,17 @@ def entrees(trajectoire: Trajectoire, changements: list[tuple[str, float]]) -> l
 
 def construire(trajectoire: Trajectoire, changements: list[tuple[str, float]], t_actuel: float,
                correction: float | None = None, vues: list[tuple[str, float]] | None = None,
-               relations: list[tuple[str, tuple[str, ...]]] | None = None) -> Plan:
-    """Le plan : pièces (rectangles), portes, trajet et position, dans le repère d'affichage (nord en haut si la correction
-    boussole − gyroscope est connue, ou si la trajectoire est déjà en caps)."""
+               relations: list[tuple[str, tuple[str, ...]]] | None = None,
+               releves: dict[str, list[tuple[float, float]]] | None = None,
+               coins: list[tuple[float, float]] | None = None, piece_des_coins: str | None = None) -> Plan:
+    """Le plan : pièces (rectangles, ou forme relevée), portes, trajet et position, dans le repère d'affichage (nord en haut
+    si la correction boussole − gyroscope est connue, ou si la trajectoire est déjà en caps). `releves` : les contours
+    relevés (repère de la trajectoire) ; `coins` : ceux du relevé en cours dans la pièce `piece_des_coins`."""
     sejours = entrees(trajectoire, changements)
     positions = trajectoire.positions()
+    releves = {cle: poly for cle, poly in (releves or {}).items() if len(poly) >= 3}
     directions = [p.direction for p in trajectoire.pas if p.compte and p.direction is not None]
-    axe = axe_du_logement(directions)
+    axe = axe_des_releves(releves) if releves else axe_du_logement(directions)
 
     def vers_axe(x: float, y: float) -> tuple[float, float]:
         return tourner(x, y, -axe)  # les murs alignés sur les axes u, v
@@ -147,7 +183,21 @@ def construire(trajectoire: Trajectoire, changements: list[tuple[str, float]], t
         ici = next((s.cle for s in reversed(sejours) if s.t_entree <= t), sejours[0].cle if sejours else None)
         if ici is not None and ici != cle:
             portes_vues.append((ici, cle, (x, y)))
-    rectangles = {cle: _rectangle(cle, pts) for cle, pts in points.items()}
+    formes: dict[str, list[tuple[float, float]]] = {}
+    for cle, poly in releves.items():
+        uv = [vers_axe(x, y) for x, y in poly]
+        if _aire(uv) < 0:
+            uv = uv[::-1]  # dans le sens inverse des aiguilles d'une montre, comme les rectangles (lettres A, B, C…)
+        biais = _biais(uv)
+        if abs(biais) <= 12.0:  # le gyroscope a un peu dérivé depuis la pièce d'avant : remise d'équerre avec le logement
+            cu, cv = sum(u for u, _ in uv) / len(uv), sum(v for _, v in uv) / len(uv)
+            uv = [(cu + du, cv + dv) for du, dv in (tourner(u - cu, v - cv, -biais) for u, v in uv)]
+        formes[cle] = uv
+    rectangles = {cle: _rectangle(cle, pts) for cle, pts in points.items() if cle not in formes}
+    for cle, uv in formes.items():
+        rectangles[cle] = Rectangle(min(u for u, _ in uv), min(v for _, v in uv), max(u for u, _ in uv),
+                                    max(v for _, v in uv), mesure=True)
+    depart = {cle: r.centre for cle, r in rectangles.items()}
     _ecarter(rectangles)
     for x, avec in relations or []:  # « la salle de bain est dans le couloir » : elle le touche
         for y in avec:
@@ -157,7 +207,8 @@ def construire(trajectoire: Trajectoire, changements: list[tuple[str, float]], t
     _accoler(rectangles)
 
     plan = Plan(axe=axe)
-    plan.depuis_la_porte = {cle for cle in points if cle not in marchees and (not sejours or cle != sejours[0].cle)}
+    plan.depuis_la_porte = {cle for cle in points if cle not in marchees and cle not in formes
+                            and (not sejours or cle != sejours[0].cle)}
     plan.oriente = correction is not None or trajectoire.repere == "cap"
     vers_affichage = correction if (correction is not None and trajectoire.repere == "lacet") else 0.0
 
@@ -165,8 +216,21 @@ def construire(trajectoire: Trajectoire, changements: list[tuple[str, float]], t
         x, y = tourner(u, v, axe)  # retour au repère de la trajectoire
         return tourner(x, y, vers_affichage)
 
+    def decalage(cle: str) -> tuple[float, float]:
+        (u0, v0), (u1, v1) = depart[cle], rectangles[cle].centre
+        return u1 - u0, v1 - v0
+
     for cle, r in rectangles.items():
-        plan.pieces[cle] = [afficher(r.u0, r.v0), afficher(r.u1, r.v0), afficher(r.u1, r.v1), afficher(r.u0, r.v1)]
+        if cle in formes:  # la forme relevée, déplacée comme son rectangle (jamais déformée)
+            du, dv = decalage(cle)
+            sommets = [(u + du, v + dv) for u, v in formes[cle]]
+            plan.pieces[cle] = [afficher(u, v) for u, v in sommets]
+            plan.murs[cle] = [math.dist(a, b) for a, b in zip(sommets, sommets[1:] + sommets[:1])]
+            plan.mesurees.add(cle)
+        else:
+            plan.pieces[cle] = [afficher(r.u0, r.v0), afficher(r.u1, r.v0), afficher(r.u1, r.v1), afficher(r.u0, r.v1)]
+    du, dv = decalage(piece_des_coins) if piece_des_coins in rectangles else (0.0, 0.0)
+    plan.coins = [afficher(u + du, v + dv) for u, v in (vers_axe(x, y) for x, y in coins or [])]
     passages = [(sejours[k - 1].cle, sejours[k].cle, sejours[k].porte) for k in range(1, len(sejours))] + portes_vues
     for a, b, porte in passages:
         if porte is None or a == b or a not in rectangles or b not in rectangles:
@@ -265,14 +329,24 @@ def _accoler(rectangles: dict[str, Rectangle], ecart_max: float = 0.8) -> None:
                 gauche, droite = (ra, rb) if ra.u0 < rb.u0 else (rb, ra)
                 ecart = droite.u0 - gauche.u1
                 if 0 < ecart < ecart_max:
-                    milieu = (gauche.u1 + droite.u0) / 2
-                    gauche.u1, droite.u0 = milieu, milieu
+                    if gauche.mesure and droite.mesure:  # deux pièces relevées : la seconde vient contre la première
+                        droite.u0, droite.u1 = droite.u0 - ecart, droite.u1 - ecart
+                    elif gauche.mesure or droite.mesure:  # seule la pièce estimée s'étend jusqu'au mur relevé
+                        gauche.u1, droite.u0 = (gauche.u1, gauche.u1) if gauche.mesure else (droite.u0, droite.u0)
+                    else:
+                        milieu = (gauche.u1 + droite.u0) / 2
+                        gauche.u1, droite.u0 = milieu, milieu
             elif face_u:
                 bas, haut = (ra, rb) if ra.v0 < rb.v0 else (rb, ra)
                 ecart = haut.v0 - bas.v1
                 if 0 < ecart < ecart_max:
-                    milieu = (bas.v1 + haut.v0) / 2
-                    bas.v1, haut.v0 = milieu, milieu
+                    if bas.mesure and haut.mesure:
+                        haut.v0, haut.v1 = haut.v0 - ecart, haut.v1 - ecart
+                    elif bas.mesure or haut.mesure:
+                        bas.v1, haut.v0 = (bas.v1, bas.v1) if bas.mesure else (haut.v0, haut.v0)
+                    else:
+                        milieu = (bas.v1 + haut.v0) / 2
+                        bas.v1, haut.v0 = milieu, milieu
 
 
 def _sur_le_mur_commun(ra: Rectangle, rb: Rectangle, porte: tuple[float, float]) -> tuple[float, float]:
@@ -334,11 +408,13 @@ def vers_dict(plan: Plan, noms: dict[str, str], sources: dict[str, str], courant
         "courante": courante,
         "pieces": [{"cle": cle, "nom": noms.get(cle, cle), "source": sources.get(cle, ""), "polygone": [arrondi(p) for p in sommets],
                     "lettres": lettres(sommets, entrees_par_piece.get(cle, depart if k == 0 else None)),
-                    "depuis_la_porte": cle in plan.depuis_la_porte}
+                    "depuis_la_porte": cle in plan.depuis_la_porte, "mesuree": cle in plan.mesurees,
+                    "murs": [round(m, 2) for m in plan.murs.get(cle, [])]}
                    for k, (cle, sommets) in enumerate(plan.pieces.items())],
         "portes": [{"a": a, "b": b, "x": round(x, 2), "y": round(y, 2)} for a, b, x, y in plan.portes],
         "trajet": [arrondi(p) for p in plan.trajet],
         "position": arrondi(plan.position),
+        "coins": [arrondi(p) for p in plan.coins],
         "sens_marche": None if plan.sens_marche is None else round(plan.sens_marche, 1),
         "sens_entree": None if plan.sens_entree is None else round(plan.sens_entree, 1),
     }

@@ -1184,7 +1184,7 @@ image : pièce « U », cuisine, U, chambre, U), un coup d'œil toutes les 8 s :
 du séjour reconnu à tort), `tests/test_page_navigateur.py` (le croquis dessiné dans le coin, agrandi, renommer, réunir,
 déplacer).
 
-Le prototype compte 340 tests (et le projet, à la racine, 654) à cette étape ; 353 avec le choix de la mission ; 393 avec la capture du tour (étape 15) ; 408 avec le plan dans un repère commun ; 411 avec le plan dans le sens de la marche ; 416 avec les gardes de la voix (rien d'inventé, rien d'effacé).
+Le prototype compte 340 tests (et le projet, à la racine, 654) à cette étape ; 353 avec le choix de la mission ; 393 avec la capture du tour (étape 15) ; 408 avec le plan dans un repère commun ; 411 avec le plan dans le sens de la marche ; 416 avec les gardes de la voix (rien d'inventé, rien d'effacé) ; 429 avec le relevé des murs.
 
 ## Choix de la mission avant de filmer (23/10/2026)
 
@@ -1398,6 +1398,50 @@ pas), et en fin de visite 1 à 3 questions sur ce qui reste douteux, avec dépla
 doublon, espace montré qui est celui où l'on est, nom inventé refusé, pièce devinée par la porte puis dite, correction qui
 n'efface jamais une pièce déjà vécue), `tests/test_voix_croquis.py` (nom entendu même mal transcrit),
 `tests/test_page_navigateur.py` (plan dans le sens de la marche, flèche du nord, « vous êtes ici »).
+
+## Étape 16 : le relevé des murs (23/10/2026, après le test de Noah de 15:06)
+
+**Ce que Noah a dit** : « ça marche toujours pas ; je pense que le plus safe, ce serait d'ajouter de suivre les murs de la
+maison, tu en penses quoi ? c'est le plus safe ».
+
+**Ce que montrait l'essai de 15:06** : le logiciel affichait « Séjour » alors que Noah était au fond du couloir (la caméra
+voyait le séjour par la porte) ; il l'a corrigé trois fois (« le séjour est la mauvaise pièce »). Deviner les pièces et
+leur place à partir des images et des pas reste fragile.
+
+**Ce qui change : la forme des pièces par la géométrie, sans IA** (`assistant/coins.py`) :
+- dans chaque pièce, bouton « 📐 Murs » (ou dire « les murs ») : une croix jaune apparaît au centre de l'écran (le point
+  que vise la caméra) et le croquis se réduit dans le coin ;
+- viser chaque coin de la pièce au ras du sol et s'y arrêter une seconde : un bip par coin ; un coin caché par un meuble se
+  vise au plafond ; revenir sur le premier coin ferme la pièce (ou « ✓ Fin des murs », ou « c'est fini ») ; « annule »
+  efface le dernier coin ; le téléphone dit « Chambre : 4 murs. » ;
+- le téléphone donne la direction de la caméra (gyroscope) et son inclinaison (pesanteur) : le coin est à
+  h / tan(inclinaison) devant, h étant la hauteur du téléphone (1,40 m, hypothèse) ; les coins donnent le contour d'équerre
+  (rectangle, L, couloir ; `assistant/geometrie.py`) ; trois coins d'un rectangle suffisent ; une visée ratée est écartée ;
+- sur le plan : la forme exacte en trait plein, la longueur de chaque mur (estimée : le Carrez reste au laser), les coins du
+  relevé en cours en orange ; une pièce relevée n'est jamais déformée, seulement déplacée pour toucher ses voisines ; les
+  murs relevés donnent l'axe du logement (plus sûr que la direction des marches) ;
+- pas encore de pièce : « Murs » en ouvre une à nommer (« ici c'est la cuisine », dit sans bouger, la nomme ; sinon Claude
+  la nomme sur l'image) ;
+- `python -m assistant.rejouer` rejoue aussi les appuis sur « Murs ».
+
+**Pourquoi un bouton, et pas des coins pris à chaque arrêt** : mesuré sur les visites de 11:44, 12:46 et 15:06, la caméra
+s'arrête 11 à 17 fois par visite en regardant le sol (téléphone tenu à −22° en marchant, arrêts pour parler) : ce seraient
+autant de faux coins.
+
+**Précision (simulation)** : main qui tremble de 1°, téléphone 5 cm plus bas que supposé : la forme exacte (rectangle, L,
+couloir), les murs à 2 à 5 % près (pièce de 4 × 3 m : de 3,96 à 4,18 m sur 2,87 à 3,15 m) ; une erreur sur la hauteur du
+téléphone agrandit ou rétrécit la pièce entière sans la déformer. À vérifier sur le téléphone de Noah, avec un mur mesuré au
+laser.
+
+**Limites** : la place des pièces les unes par rapport aux autres vient encore des pas (0,6 m par pas, hypothèse) ; deux
+pièces relevées à moins de 0,8 m l'une de l'autre sont collées mur contre mur ; la hauteur du téléphone (1,40 m) est une
+hypothèse, à caler plus tard sur une mesure laser ou sur la hauteur sous plafond.
+
+**Tests** : `tests/test_coins.py` (un arrêt par coin ; pas de faux coin en balayant lentement, à l'horizon ou en regardant
+ses pieds ; formes rectangle et L, coin visé au plafond, trois coins, visée ratée écartée ; retour au premier coin),
+`tests/test_releve.py` (bouton, voix, pièce à nommer, « annule », « c'est fini », pas de coin sans relevé ouvert, deux
+pièces relevées posées mur contre mur), `tests/test_page_navigateur.py` (croix au centre de l'écran, croquis réduit, bip,
+longueurs des murs, coins en cours).
 
 ## Correction : vidéos d'iPhone lues à l'envers après la visite (23/10/2026)
 
