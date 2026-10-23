@@ -1069,7 +1069,14 @@ plus parlé. Maintenant :
   peut avoir cinq murs ou plus. Il montre le mur à la caméra, la boussole donne son côté. La question revient après chaque
   mur de plus ; seul « Non, c'est tout » ferme la liste.
 
-Le prototype compte 312 tests (et le projet, à la racine, 654).
+**« Autre… » (Noah, 23/10)** : chaque question à boutons (sauf « donne sur ») a un bouton **« Autre… »** qui ouvre une case
+pour taper la valeur, à l'écran de la question comme dans la fiche. Une épaisseur, une longueur ou une année se tapent au
+clavier numérique : le serveur la vérifie (épaisseur de 3 à 150 cm, longueur de 0,2 à 100 m, année de 1800 à 2030) et la
+met en forme (« 23 » → « 23 cm ») ; une valeur impossible n'est pas notée et c'est dit à l'écran. Le reste (matériau,
+isolation…) se tape en texte, ramené au vocabulaire comme une réponse dite. La valeur est notée « tapé sur le
+téléphone », et la question suivante part aussitôt.
+
+Le prototype compte 313 tests (et le projet, à la racine, 654).
 
 ## Réglages (variables d'environnement)
 

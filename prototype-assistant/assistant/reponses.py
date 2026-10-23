@@ -25,6 +25,39 @@ ISOLATION = [("Non isolé", "non isolé"), ("Isolé par l'intérieur", "ITI"), (
 ANNEES = [("Avant 1990", "avant 1990"), ("1990 à 2000", "1990-2000"), ("2000 à 2010", "2000-2010"),
           ("2010 à 2015", "2010-2015"), ("Après 2015", "après 2015"), NE_SAIT_PAS]
 
+# « Autre… » : une valeur tapée sur le téléphone, quand elle n'est pas dans les boutons (Noah, 23/10 : une épaisseur de
+# 23 cm). Les mesures et les années se tapent au clavier numérique, dans ces limites ; le reste en texte libre.
+SAISIES = {"epaisseur": ("cm", 3, 150), "longueur": ("m", 0.2, 100), "annee": ("", 1800, 2030)}
+SANS_AUTRE = {"donne_sur"}  # ce sur quoi donne une paroi : une catégorie connue, ou dit à l'oral
+
+
+def autre(champ: str) -> dict | None:
+    """Le bouton « Autre… » d'une information : ce qu'il faut taper (nombre et unité, ou texte)."""
+    if champ in SANS_AUTRE:
+        return None
+    if champ in SAISIES:
+        unite, mini, maxi = SAISIES[champ]
+        return {"libelle": "Autre…", "valeur": "", "saisie": "nombre", "unite": unite, "min": mini, "max": maxi}
+    return {"libelle": "Autre…", "valeur": "", "saisie": "texte"}
+
+
+def valeur_tapee(champ: str, texte: str) -> str | None:
+    """La valeur tapée après « Autre… », mise en forme (« 23 » → « 23 cm ») ; None si elle est impossible."""
+    texte = " ".join(str(texte).split())
+    if champ not in SAISIES:
+        return texte or None
+    unite, mini, maxi = SAISIES[champ]
+    try:
+        nombre = float(texte.replace(",", ".").replace(unite, "").strip()) if texte else None
+    except ValueError:
+        return None
+    if nombre is None or not mini <= nombre <= maxi:
+        return None
+    if champ == "annee":
+        return str(int(nombre))
+    return f"{nombre:g}".replace(".", ",") + f" {unite}"
+
+
 # Boutons par information (libellé, valeur) : les réponses les plus fréquentes d'abord ; le reste se dit à l'oral.
 OPTIONS: dict[tuple[str, str], list[tuple[str, str]]] = {
     ("mur", "donne_sur"): [("Extérieur", "extérieur"), ("Voisin chauffé", "local chauffé (voisin)"),
@@ -105,6 +138,8 @@ def options_pour(cible: Cible | None) -> list[dict]:
             paires.append(EN_PARTIE)
         if cible.genre == "confirmation":
             paires = [("Oui, c'est ça", "oui"), ("Non", "non")]
+        elif (bouton := autre(cible.champ)) is not None:
+            return [{"libelle": libelle, "valeur": valeur} for libelle, valeur in paires] + [bouton]
     elif cible.genre == "presence":
         paires = PRESENCES.get(cible.type, [])
     elif cible.genre == "cote":
@@ -128,8 +163,8 @@ def options_pour(cible: Cible | None) -> list[dict]:
 
 def options_par_champ() -> dict[str, list[dict]]:
     """Toutes les réponses en boutons, par « type.champ » : la fiche de la pièce, sur le téléphone, s'en sert."""
-    return {f"{t}.{c}": [{"libelle": l, "valeur": v} for l, v in paires] for (t, c), paires in OPTIONS.items()
-            if t in TYPES and any(ch.cle == c for ch in TYPES[t].champs)}
+    return {f"{t}.{c}": [{"libelle": l, "valeur": v} for l, v in paires] + ([b] if (b := autre(c)) else [])
+            for (t, c), paires in OPTIONS.items() if t in TYPES and any(ch.cle == c for ch in TYPES[t].champs)}
 
 
 # --- Réponses courtes à l'oral -----------------------------------------------------------------------------------

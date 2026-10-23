@@ -32,7 +32,7 @@ from .extraction import VOCABULAIRE, Cible, confirme_meme, extraire, normaliser,
 from .boussole import CAP_DU_POINT, MEME_COTE, Boussole, Mesure, Visee, ecart, visee_decalee
 from .decor import Decor
 from .repetition import mots_repetes, reformulation
-from .reponses import options_pour, suspecte
+from .reponses import SAISIES, options_pour, suspecte, valeur_tapee
 from .garde import Questions, champ_rempli, demande_de_repeter, nom_abstrait
 from .simulation import CerveauSimulation
 from .reglages import Reglages
@@ -1554,9 +1554,17 @@ class Session:
             cible = Cible.depuis_code(str(message.get("cible") or ""), self.checklist)
         if cible is None:
             return
+        if message.get("saisie") and cible.champ:
+            # « Autre… » : tapé sur le téléphone (Noah, 23/10) ; une valeur impossible n'est pas notée, c'est dit.
+            tapee = valeur_tapee(cible.champ, valeur)
+            if tapee is None:
+                await self._envoyer({"type": "erreur", "message": f"Valeur impossible pour « {cible.champ} » : {valeur}"})
+                return
+            valeur = valeur_normalisee(cible.type, cible.champ, tapee) if cible.champ not in SAISIES else tapee
+            libelle = valeur
         reference = time.monotonic()
         t = self.t_video
-        citation = f"coché sur le téléphone : {libelle}"
+        citation = f"{'tapé' if message.get('saisie') else 'coché'} sur le téléphone : {libelle}"
         self._interrompue = None  # la question coupée a eu sa réponse : rien à redire
         if cible.genre in ("champ", "secondaire") and cible.element_id and not valeur.startswith("en partie"):
             actions = [{"outil": "enregistrer_reponse", "element_id": cible.element_id, "type": cible.type, "champ": cible.champ,

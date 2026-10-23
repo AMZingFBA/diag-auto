@@ -276,6 +276,7 @@ function boutonsReponse(conteneur, options, envoyer) {
   conteneur.replaceChildren(...options.map((o) => {
     const bouton = Object.assign(document.createElement("button"), { type: "button", textContent: o.libelle });
     bouton.onclick = () => {
+      if (o.saisie) return saisieAutre(conteneur, o, envoyer);
       conteneur.querySelectorAll("button").forEach((b) => b.classList.toggle("choisi", b === bouton));
       couperVoix(); // il a répondu : la question en cours n'est plus lue
       envoyer(o);
@@ -286,8 +287,33 @@ function boutonsReponse(conteneur, options, envoyer) {
   conteneur.hidden = !options.length;
 }
 
+// « Autre… » (Noah, 23/10) : une valeur qui n'est pas dans les boutons, tapée (clavier numérique pour une mesure ou une
+// année), puis vérifiée et mise en forme par le serveur (« 23 » → « 23 cm »).
+function saisieAutre(conteneur, o, envoyer) {
+  const ligne = Object.assign(document.createElement("form"), { className: "autre" });
+  const champ = Object.assign(document.createElement("input"), {
+    type: o.saisie === "nombre" ? "number" : "text", placeholder: o.saisie === "nombre" ? "Valeur" : "Votre réponse",
+    inputMode: o.saisie === "nombre" ? "decimal" : "text", required: true });
+  if (o.saisie === "nombre") Object.assign(champ, { min: o.min, max: o.max, step: "any" });
+  const unite = Object.assign(document.createElement("span"), { textContent: o.unite || "" });
+  const ok = Object.assign(document.createElement("button"), { type: "submit", textContent: "OK" });
+  ligne.append(champ, unite, ok);
+  ligne.onsubmit = (e) => {
+    e.preventDefault();
+    const valeur = champ.value.trim();
+    if (!valeur) return;
+    couperVoix();
+    envoyer({ ...o, valeur, libelle: `${valeur}${o.unite ? " " + o.unite : ""}` });
+    $("latence").textContent = `✓ Noté : ${valeur}${o.unite ? " " + o.unite : ""}`;
+    ligne.remove();
+  };
+  conteneur.querySelectorAll("form.autre").forEach((f) => f.remove());
+  conteneur.append(ligne);
+  champ.focus();
+}
+
 function afficherChoix(cible, options) {
-  boutonsReponse($("choix"), options, (o) => envoyerJson({ type: "reponse", cible, valeur: o.valeur, libelle: o.libelle, t: maintenant() }));
+  boutonsReponse($("choix"), options, (o) => envoyerJson({ type: "reponse", cible, valeur: o.valeur, libelle: o.libelle, saisie: o.saisie, t: maintenant() }));
 }
 
 function afficherFiche() {
@@ -313,7 +339,7 @@ function afficherFiche() {
         const options = etat.options[`${e.type}.${champ}`] || [];
         ligne.onclick = () => {
           if (!options.length) return;
-          boutonsReponse(choix, options, (o) => envoyerJson({ type: "reponse", element: e.id, champ, valeur: o.valeur, libelle: o.libelle, t: maintenant() }));
+          boutonsReponse(choix, options, (o) => envoyerJson({ type: "reponse", element: e.id, champ, valeur: o.valeur, libelle: o.libelle, saisie: o.saisie, t: maintenant() }));
         };
         blocs.push(ligne, choix);
       }

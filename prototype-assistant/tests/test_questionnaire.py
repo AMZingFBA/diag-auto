@@ -142,7 +142,8 @@ def test_statut_du_serveur_donne_les_reponses_par_information(tmp_path):
         options = client.get("/api/statut").json()["options"]
     assert {"libelle": "PVC", "valeur": "PVC"} in options["fenetre.menuiserie"]
     assert {"libelle": "Non isolé", "valeur": "non isolé"} in options["mur.isolation"]
-    assert all(set(o) == {"libelle", "valeur"} for liste in options.values() for o in liste)
+    assert all(set(o) == {"libelle", "valeur"} or o.get("saisie") for liste in options.values() for o in liste)
+    assert options["mur.epaisseur"][-1] == {"libelle": "Autre…", "valeur": "", "saisie": "nombre", "unite": "cm", "min": 3, "max": 150}
 
 
 def test_boutons_selon_la_question():
@@ -401,3 +402,32 @@ def test_reponse_courte_comprise_pas_reecoutee(tmp_path):
     session = asyncio.run(scenario())
     assert transcripteur.reecoutes == 0  # comprise telle quelle : aucune seconde perdue
     assert [e.valeur("energie").valeur for e in session.checklist.elements_de(None) if e.type == "chauffage"] == ["gaz"]
+
+
+def test_autre_valeur_tapee_enregistree(tmp_path):
+    # Noah, 23/10 : « quand il demande une mesure, il faut une option Autre pour mettre un chiffre personnalisé ».
+    async def scenario():
+        session, recus = await ouvrir(tmp_path, CerveauScenario(poli()))
+        await parler(session, "Ici c'est le séjour.")
+        await attendre(session)
+        await parler(session, "Ce mur donne dehors, en brique.")
+        await attendre(session)
+        debut = len(recus)
+        await session.recevoir_controle({"type": "reponse", "cible": "M1.epaisseur", "valeur": "2", "libelle": "2 cm", "saisie": "nombre"})
+        refus = recus[debut:]
+        debut = len(recus)
+        await session.recevoir_controle({"type": "reponse", "cible": "M1.epaisseur", "valeur": "23", "libelle": "23 cm", "saisie": "nombre"})
+        apres = recus[debut:]
+        await session.recevoir_controle({"type": "reponse", "element": "M1", "champ": "materiau", "valeur": "pisé", "libelle": "pisé",
+                                         "saisie": "texte"})
+        await session.terminer()
+        return session, refus, apres
+
+    session, refus, apres = asyncio.run(scenario())
+    assert [m["message"] for m in refus if m["type"] == "erreur"] == ["Valeur impossible pour « epaisseur » : 2"]
+    mur = session.checklist.trouver_element("M1")
+    assert [(v.valeur, v.citation) for v in mur.valeurs["epaisseur"]] == [("23 cm", "tapé sur le téléphone : 23 cm")]
+    assert dits(apres) == ["Il est isolé ?"]  # la question suivante part aussitôt
+    assert mur.valeur("materiau").valeur == "terre"  # ramené au vocabulaire, comme dit à l'oral
+    autre = next(o for o in questions(apres)[0]["options"] if o.get("saisie"))
+    assert autre == {"libelle": "Autre…", "valeur": "", "saisie": "texte"}  # isolation : texte libre (« laine de bois 12 cm »)
