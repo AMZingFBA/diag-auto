@@ -1558,7 +1558,7 @@ class Session:
         t = self.t_video
         citation = f"coché sur le téléphone : {libelle}"
         self._interrompue = None  # la question coupée a eu sa réponse : rien à redire
-        if cible.genre in ("champ", "secondaire") and cible.element_id:
+        if cible.genre in ("champ", "secondaire") and cible.element_id and not valeur.startswith("en partie"):
             actions = [{"outil": "enregistrer_reponse", "element_id": cible.element_id, "type": cible.type, "champ": cible.champ,
                         "valeur": valeur, "citation": citation}]
             resultats = appliquer(self.checklist, actions, t, [citation])

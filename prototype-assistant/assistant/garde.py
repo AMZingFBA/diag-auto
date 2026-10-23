@@ -42,10 +42,10 @@ def champ_rempli(cible: Cible, checklist: Checklist) -> bool:
         absences = (piece.absences if piece else {}) if niveau_piece else checklist.absences_logement
         lieu = checklist.piece_courante if niveau_piece else None
         return cible.type in absences or any(e.type == cible.type for e in checklist.elements_de(lieu))
+    if cible.genre == "cote":  # « Et le mur sud, il donne sur quoi ? » : un mur de ce côté est décrit
+        return "mur" in checklist.clos or any(m.orientation == cible.source for m in checklist.enveloppe("mur"))
     if cible.genre == "suite":
-        if cible.type == "mur":  # les côtés du logement : tous décrits, ou « pas d'autre mur »
-            return "mur" in checklist.clos or not checklist.orientations_manquantes()
-        return cible.type in checklist.clos
+        return cible.type in checklist.clos  # « Un autre mur ? » : « non, c'est tout »
     if cible.genre == "pareil":
         element = checklist.element_de_piece(cible.type)
         return element is not None and element.est_rempli("donne_sur")

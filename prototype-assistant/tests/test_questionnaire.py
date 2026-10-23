@@ -115,7 +115,7 @@ def test_oui_non_piece_et_fiche_cochees(tmp_path):
 
     session, apres_fenetres, apres_murs, apres_fiche = asyncio.run(scenario())
     c = session.checklist
-    assert "fenetre" in c.trouver_element("M1").absences and apres_fenetres == ["Les autres côtés du logement donnent sur quoi ?"]
+    assert "fenetre" in c.trouver_element("M1").absences and apres_fenetres == ["Un autre mur autour du logement, à me montrer ?"]
     assert "mur" in c.clos and apres_murs == ["Au-dessus du logement : combles, terrasse ou un autre logement ?"]
     assert c.trouver_element("M1").valeur("materiau").valeur == "parpaing" and apres_fiche == []
 
@@ -153,7 +153,8 @@ def test_boutons_selon_la_question():
         return [o["libelle"] for o in options_pour(Cible.depuis_code(code, c))]
 
     assert libelles("presence:fenetre") == ["Oui", "Non"]
-    assert libelles("suite:mur") == ["Des voisins", "Non, c'est tout"]  # « Et côtés nord et sud… ? » (étape 13)
+    assert libelles("suite:mur") == ["Oui, un autre", "Non, c'est tout"]  # « Un autre mur autour du logement… ? »
+    assert libelles("cote:sud")[-1] == "En partie voisin, en partie dehors"  # « Et le mur sud, il donne sur quoi ? »
     assert libelles("suite:fenetre") == ["Oui, un autre", "Non, c'est tout"]
     assert "VMC simple flux" in libelles("presence:ventilation") and "Aucune" in libelles("presence:ventilation")
     assert libelles("piece:suivante")[:2] == ["Séjour", "Cuisine"]

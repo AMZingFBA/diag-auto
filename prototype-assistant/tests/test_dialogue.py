@@ -60,25 +60,30 @@ def test_visite_par_cotes_sans_piece(tmp_path):
     assert not [q for q in toutes if "pièce" in q.lower()]
     assert list(c.pieces) == ["chambre"]
     assert not [e for p in c.vers_dict()["pieces"] for e in p["elements"]]  # rien n'est rangé par pièce
-    # L'enveloppe du logement, par côté : un mur par côté, décrit une fois ; le mur ouest en deux parties.
-    assert [(m.id, m.orientation) for m in c.enveloppe("mur")] == [("M1", "ouest"), ("M2", "nord"), ("M3", "est"), ("M4", "sud"),
-                                                                     ("M5", "ouest")]
+    # L'enveloppe du logement, mur par mur : chaque côté décrit une fois ; le mur est en deux parties (cage d'escalier,
+    # voisin) ; un cinquième mur, montré à la caméra (au sud, sur le garage) ; le mur ouest en deux parties (chambre).
+    assert [(m.id, m.orientation, m.parent) for m in c.enveloppe("mur")] == [
+        ("M1", "ouest", ""), ("M2", "nord", ""), ("M3", "sud", ""), ("M4", "est", ""), ("M5", "est", "M4"), ("M6", "sud", ""),
+        ("M7", "ouest", "")]
     assert valeurs["M1"] == {"donne_sur": "extérieur", "materiau": "brique", "epaisseur": "30 cm", "isolation": "ITI"}
     assert valeurs["M2"] == {"donne_sur": "local chauffé (voisin)"}  # un voisin : rien d'autre demandé
-    assert valeurs["M3"] == {"donne_sur": "local non chauffé : parties communes", "materiau": "parpaing", "epaisseur": "20 cm",
+    assert valeurs["M3"] == {"donne_sur": "extérieur", "materiau": "brique", "epaisseur": "30 cm", "isolation": "ITI"}
+    assert valeurs["M4"] == {"donne_sur": "local non chauffé : parties communes", "materiau": "parpaing", "epaisseur": "20 cm",
                              "isolation": "non isolé"}
-    assert valeurs["M4"] == {"donne_sur": "extérieur", "materiau": "brique", "epaisseur": "30 cm", "isolation": "ITI"}
+    assert valeurs["M5"] == {"donne_sur": "local chauffé (voisin)"}
+    assert valeurs["M6"] == {"donne_sur": "local non chauffé : garage", "materiau": "parpaing", "epaisseur": "20 cm",
+                             "isolation": "non isolé"}
     # Fenêtres et portes sur leur mur, mur par mur ; la porte sur la cage d'escalier donne sur le palier (déduit).
     assert [(o.id, o.support, o.orientation) for o in c.enveloppe() if o.type in ("fenetre", "porte")] == [
-        ("F1", "M1", "ouest"), ("PO1", "M3", "est"), ("F2", "M4", "sud"), ("F3", "M4", "sud")]
+        ("F1", "M1", "ouest"), ("F2", "M3", "sud"), ("PO1", "M4", "est"), ("F3", "M3", "sud")]
     assert c.trouver_element("F1").nombre == 3 and valeurs["F1"] == {"menuiserie": "PVC", "vitrage": "double", "volets": "roulants"}
     assert valeurs["PO1"] == {"type": "bois", "donne_sur": "palier (local non chauffé)"}
-    assert c.trouver_element("PO1").valeur("donne_sur").note == "déduit : sur le mur est"
+    assert c.trouver_element("PO1").valeur("donne_sur").note.startswith("déduit : sur le mur est")
     assert valeurs["F2"] == {"menuiserie": "alu", "vitrage": "double", "volets": "aucun"}
     # Dans la chambre : rien n'est redemandé. Face au nord, « le mur de gauche » est le mur ouest, ici sur le voisin : une
     # autre partie du mur ouest. La fenêtre filmée face au sud va sur le mur sud.
-    assert valeurs["M5"] == {"donne_sur": "local chauffé (voisin)"} and c.trouver_element("M5").pieces == ["chambre"]
-    assert c.nom(c.trouver_element("M5"), demonstratif=False) == "le mur ouest côté voisin"
+    assert valeurs["M7"] == {"donne_sur": "local chauffé (voisin)"} and c.trouver_element("M7").pieces == ["chambre"]
+    assert c.nom(c.trouver_element("M7"), demonstratif=False) == "le mur ouest côté voisin"
     assert valeurs["F3"] == {"menuiserie": "bois", "vitrage": "simple", "volets": "aucun"}
     assert valeurs["PL1"] == {"donne_sur": "combles perdus", "isolation": "isolé laine de verre 30 cm"}
     assert valeurs["PB1"] == {"donne_sur": "terre-plein", "isolation": "non isolé"}
@@ -112,7 +117,7 @@ def test_mise_en_place_de_la_conversation_comprise_par_les_regles_seules(tmp_pat
     for phrase, posees in zip(MISE_EN_PLACE, questions_apres):
         assert len(posees) <= 1 and not [q for q in posees if "pièce" in q.lower()], f"après « {phrase} » : {posees}"
     assert questions_apres[:3] == [["Ce mur donne sur quoi ?"], ["Les 2 fenêtres : des volets ?"],
-                                   ["Les autres côtés du logement donnent sur quoi ?"]]  # sans boussole : on ne sait pas lesquels
+                                   ["Un autre mur autour du logement, à me montrer ?"]]  # sans boussole : pas de côté à nommer
     assert questions_apres[-1] == ["Des fenêtres ou une porte sur ce mur ?"]
     c = session.checklist
     assert "mur" in c.clos and c.trouver_element("F1").valeur("volets").valeur == "roulants"
@@ -122,7 +127,7 @@ def test_mise_en_place_de_la_conversation_comprise_par_les_regles_seules(tmp_pat
 def test_plafond_et_plancher_du_logement_et_partie_differente(tmp_path):
     # Étape 13 : le plafond et le plancher sont ceux du logement, jamais redemandés ; une pièce nommée où le plancher est
     # différent en a sa propre partie, sans contradiction.
-    echanges = [(phrase, cap) for phrase, cap, _ in VISITE_PAR_COTES[:15]] + [
+    echanges = [(phrase, cap) for phrase, cap, attendue in VISITE_PAR_COTES[:20]] + [
         ("On passe dans la chambre.", 0), ("Ici le plancher donne sur une cave, pas isolé.", 0)]
     session, questions_apres, _ = asyncio.run(visite(tmp_path, echanges))
     assert questions_apres[-2:] == [[], []]  # rien à demander : la nouvelle partie est entièrement dite
@@ -217,3 +222,27 @@ def test_question_des_fenetres_retenue_par_mur():
     assert q.filtrer("Des fenêtres ou une porte sur ce mur ?", "fenetres:M2", c, 30)[2] == ""  # un autre mur : on peut demander
     c.marquer_sans_objet(type_element="fenetre", champ="presence", citation="pas de fenêtre", t=40, support="M2")
     assert q.filtrer("Des fenêtres ou une porte sur ce mur ?", "fenetres:M2", c, 50)[2] == "fenetres:M2 déjà renseigné"
+
+
+def test_mur_par_mur_deux_sur_le_voisin_un_en_partie_sur_la_rue(tmp_path):
+    # Retour de Noah du 22/10 au soir : une seule question pour trois côtés (« des voisins » ou « non ») ne convenait pas à
+    # deux murs sur le voisin et un sur la rue ; « non » avait fermé la liste des murs. Maintenant, mur par mur, et un mur
+    # peut être en partie sur le voisin, en partie sur la rue (sa fenêtre va sur la partie qui donne dehors).
+    echanges = [
+        (("On commence.", None), "Ce mur donne sur quoi ?"),
+        (("Dehors, brique 30 cm, isolé par l'intérieur.", 0), "Des fenêtres ou une porte sur ce mur ?"),
+        (("Non.", 0), "Et le mur sud, il donne sur quoi ?"),
+        (("Le voisin.", 180), "Et le mur est, il donne sur quoi ?"),
+        (("Le voisin aussi.", 90), "Et le mur ouest, il donne sur quoi ?"),
+        (("En partie sur le voisin, en partie sur la rue.", 270), "Le mur ouest extérieur est en quoi ?"),
+        (("Brique 30 cm, pas isolé.", 270), "Des fenêtres ou une porte sur ce mur ?"),
+        (("Une fenêtre en bois, double vitrage, volets battants.", 270), "Un autre mur autour du logement, à me montrer ?"),
+    ]
+    session, questions_apres, _ = asyncio.run(visite(tmp_path, [e for e, _ in echanges]))
+    for ((phrase, _), attendue), posees in zip(echanges, questions_apres):
+        assert posees == [attendue], f"après « {phrase} » : {posees}"
+    c = session.checklist
+    assert [(m.orientation, m.valeur("donne_sur").valeur) for m in c.enveloppe("mur")] == [
+        ("nord", "extérieur"), ("sud", "local chauffé (voisin)"), ("est", "local chauffé (voisin)"),
+        ("ouest", "local chauffé (voisin)"), ("ouest", "extérieur")]
+    assert c.trouver_element("F1").support == "M5" and "mur" not in c.clos

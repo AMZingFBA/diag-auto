@@ -37,14 +37,21 @@ VISITE_PAR_COTES = [
     ("On commence.", None, "Ce mur donne sur quoi ?"),  # « ce mur donne sur quoi ? », jamais « dans quelle pièce ? »
     ("Sur la rue, brique 30 cm, isolé par l'intérieur.", 272, "Des fenêtres ou une porte sur ce mur ?"),
     ("Oui, trois fenêtres PVC double vitrage.", 272, "Les 3 fenêtres : des volets ?"),
-    ("Volets roulants.", 272, "Et côtés nord, est et sud, le logement donne sur quoi ?"),
-    ("Au nord le voisin, à l'est la cage d'escalier.", 0, "Le mur est, il est en quoi ?"),  # un voisin : rien d'autre
-    ("Parpaing de 20, pas isolé.", 0, "Le mur est : des fenêtres ou une porte ?"),
-    # Sur un mur qui donne sur les parties communes, la porte donne sur le palier : déduit, pas demandé.
-    ("La porte d'entrée, en bois.", 90, "Et côté sud, le logement donne sur quoi ?"),
-    ("Au sud la cour, brique 30 cm, isolé par l'intérieur, avec une porte-fenêtre alu double vitrage.", 180,
+    # Mur par mur (retour de Noah du 22/10 au soir) : chaque côté a sa question, et il est fini avant le suivant.
+    ("Volets roulants.", 272, "Et le mur nord, il donne sur quoi ?"),
+    ("Le voisin.", 0, "Et le mur sud, il donne sur quoi ?"),  # un voisin : rien d'autre
+    ("La cour, brique 30 cm, isolé par l'intérieur, avec une porte-fenêtre alu double vitrage.", 180,
      "Cette porte-fenêtre : des volets ?"),
-    ("Aucun.", 180, "Au-dessus du logement : combles, terrasse ou un autre logement ?"),
+    ("Aucun.", 180, "Et le mur est, il donne sur quoi ?"),
+    # Un mur en partie sur la cage d'escalier, en partie sur le voisin : deux parties du même côté.
+    ("En partie sur la cage d'escalier, en partie sur le voisin.", 90, "Le mur est côté parties communes est en quoi ?"),
+    ("Parpaing de 20, pas isolé.", 90, "Des fenêtres ou une porte sur ce mur ?"),
+    # Sur un mur qui donne sur les parties communes, la porte donne sur le palier : déduit, pas demandé.
+    ("La porte d'entrée, en bois.", 90, "Un autre mur autour du logement, à me montrer ?"),
+    # Une maison peut avoir plus de quatre murs : il le montre à la caméra, qui donne son côté.
+    ("Oui, celui-ci donne sur le garage, parpaing 20, pas isolé.", 200, "Des fenêtres ou une porte sur ce mur ?"),
+    ("Non.", 200, "Un autre mur autour du logement, à me montrer ?"),
+    ("Non, c'est tout.", None, "Au-dessus du logement : combles, terrasse ou un autre logement ?"),
     ("Des combles perdus, isolés avec 30 cm de laine de verre.", 270,
      "Sous le logement : terre-plein, vide sanitaire, cave ou un autre logement ?"),
     ("Terre-plein, pas isolé.", 270, "Quel est le chauffage principal ?"),

@@ -533,6 +533,8 @@ class Cible:
             return cls("presence", reste, "presence")
         if prefixe == "suite" and reste in TYPES:
             return cls("suite", reste)
+        if prefixe == "cote" and reste in ("nord", "sud", "est", "ouest"):
+            return cls("cote", "mur", "donne_sur", source=reste)  # « Et le mur sud, il donne sur quoi ? »
         if prefixe == "pareil":
             type_element, _, source = reste.partition(":")
             return cls("pareil", type_element, source=source) if type_element in TYPES and source in checklist.pieces else None
@@ -1693,6 +1695,7 @@ _TOUS_LES_COTES = re.compile(r"\b(?:les (?:deux|2|trois|3|quatre|4|autres)|tous|
 _PART = re.compile(
     r"\b(?:(?P<pc>\d{1,3})(?:\s+pour\s+100|\s+pourcent)?(?=\s+(?:sur|vers|cote|donne|dehors|a l exterieur|mitoyen|contre)\b)"
     r"|(?P<reste>le reste|l autre partie|l autre moitie|le restant)"
+    r"|(?P<partie>(?:en|une|pour une|d une)\s+partie)"
     r"|(?P<moitie>(?:la|a|une|pour)\s+moitie)"
     r"|(?P<tiers>(?:un|1|deux|2)\s+tiers)"
     r"|(?P<long>\d+(?:\.\d+)?)\s*(?:m|metres?)\b)")
@@ -1717,6 +1720,8 @@ def _parties_du_mur(texte: str) -> list[dict[str, str]]:
             partie["part"] = "33 %" if m.group("tiers").split()[0] in ("un", "1") else "67 %"
         elif m.group("long"):
             partie["longueur"] = f"{m.group('long').replace('.', ',')} m"
+        elif m.group("partie"):
+            pass  # « en partie sur le voisin, en partie dehors » : part non dite
         else:
             partie["part"] = "reste"
         parties.append(partie)
@@ -1791,6 +1796,18 @@ def _cotes(checklist: Checklist, cible: Cible | None, texte: str, action) -> tup
                                      {"ref": range_[1]})
     if rangees:
         return texte[: rangees[0].start()], crees
+    if cible is not None and cible.genre == "cote":
+        # « Et le mur sud, il donne sur quoi ? » « Le voisin. » / « En partie sur le voisin, en partie dehors. » / « La
+        # rue, brique 30, avec deux fenêtres. » : c'est le mur de ce côté.
+        mot = _MOTS.search(texte)
+        coupure = _AVANT_ELEMENT.search(texte[: mot.start()]).start() if mot else len(texte)
+        if (range_ := _ranger_cote(checklist, action, cible.source, texte[:coupure], crees)) is not None:
+            if dessus := texte[coupure:]:
+                for segment in _segments(dessus, None)[1]:
+                    if segment.type in ("fenetre", "porte"):
+                        _decrire_segment(checklist, None, segment, None, dessus, action, set(), {"mur": crees + range_[0]},
+                                         set(), [], {"ref": range_[1]})
+            return "", crees + range_[0]
     manquants = checklist.orientations_manquantes()
     if (cible is not None and cible.genre == "suite" and cible.type == "mur" and manquants and not _MOTS.search(texte)
             and any(e.orientation for e in checklist.enveloppe("mur")) and (len(manquants) == 1 or _TOUS_LES_COTES.search(texte))):
@@ -1871,8 +1888,12 @@ def _reponse_a_la_cible(checklist: Checklist, cible: Cible, texte: str, segments
             n = int(nombre.group(1)) if nombre and 1 <= int(nombre.group(1)) <= 50 and cible.type != "mur" else None
             description = _nouvelle_description(checklist, cible.type, n)
             action("signaler_element", type=cible.type, description=description, nombre=n or 1, source="voix", **sur_le_mur)
+            parties = _parties_du_mur(texte) if cible.type == "mur" else []
             for champ, valeur in valeurs.items():
-                action("enregistrer_reponse", element_id="", type=cible.type, champ=champ, valeur=valeur, description=description)
+                if not (parties and champ == "donne_sur"):
+                    action("enregistrer_reponse", element_id="", type=cible.type, champ=champ, valeur=valeur, description=description)
+            if parties:  # « Ce mur donne sur quoi ? » « En partie sur le voisin, en partie dehors. »
+                _emettre_parties_mur(checklist, action, {"element_id": "", "description": description}, parties, 0)
         return
     if cible.genre == "pareil":
         if _OUI.match(reponse):
@@ -1901,6 +1922,13 @@ def _reponse_a_la_cible(checklist: Checklist, cible: Cible, texte: str, segments
         return
     if cible.genre == "champ" and cible.element_id:
         element = checklist.trouver_element(cible.element_id)
+        if element.type == "mur" and cible.champ == "donne_sur" and (parties := _parties_du_mur(texte)):
+            # « En partie sur le voisin, en partie dehors » : deux parties du même mur (étape 13). Ce qui en était déjà dit
+            # (« dehors ») reste sur lui : l'autre partie est la nouvelle.
+            if (deja := element.valeur("donne_sur")) is not None:
+                parties.sort(key=lambda p: cle_texte(p["donne_sur"]) != cle_texte(deja.valeur))
+            _emettre_parties_mur(checklist, action, {"element_id": element.id, "description": ""}, parties, 0)
+            return
         if element.type not in PAROIS:
             # Question sur un groupe : « 2 en PVC et une en bois », « tous à eau sauf un », « l'une d'elles est en bois ».
             decoupage = decouper(texte)

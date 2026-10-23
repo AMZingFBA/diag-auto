@@ -413,7 +413,7 @@ def test_dialogue_qui_s_adapte(tmp_path):
         ("Oui, trois, double vitrage.", "Les 3 fenêtres : PVC, bois ou alu ?"),
         ("Deux en PVC et une en bois.", "Les 2 fenêtres en PVC : des volets ?"),
         ("Volets roulants.", "La fenêtre en bois : des volets ?"),
-        ("Pareil.", "Les autres côtés du logement donnent sur quoi ?"),
+        ("Pareil.", "Un autre mur autour du logement, à me montrer ?"),
         ("Les autres côtés donnent sur des voisins.", "Au-dessus du logement : combles, terrasse ou un autre logement ?"),
         # Correction tardive : gardée, signalée, puis la question restée en attente est reposée.
         ("Le premier mur, en fait c'est du béton.", "Je remplace brique. Au-dessus du logement : combles, terrasse ou un autre logement ?"),

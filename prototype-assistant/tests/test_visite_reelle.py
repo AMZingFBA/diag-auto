@@ -128,7 +128,7 @@ def test_la_piece_fait_quatre_murs():
     dire(c, "En fait, cette pièce fait quatre murs.")
     assert c.pieces["sejour"].nombre_murs.valeur == "4"
     assert not [q for q in questions(c) if "reste" in q or "pièce" in q]
-    assert "Les autres côtés du logement donnent sur quoi ?" in questions(c)
+    assert "Un autre mur autour du logement, à me montrer ?" in questions(c)
 
 
 def test_pareil_pour_celui_la():
@@ -337,4 +337,4 @@ def test_visite_reelle_de_noah(tmp_path):
     # pour des volets : une confirmation est demandée, rien n'est noté.
     assert questions_apres[8] == ["Pour le mur des 3 fenêtres, j'ai tout. Des volets ?"]
     assert c.trouver_element("F1").valeur("volets") is None
-    assert questions_apres[13] == ["Je parle du plancher. Sous le logement : terre-plein, vide sanitaire, cave ou un autre logement ?"]
+    assert questions_apres[13] == ["Un mur qu'on n'a pas encore décrit. Un autre mur autour du logement, à me montrer ?"]

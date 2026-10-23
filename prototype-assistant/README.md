@@ -1056,7 +1056,20 @@ murs de la vraie visite sont reconnus et nommés comme avant (« le mur des 3 fe
   bruit continu). Sur le son de cette visite, « C'est là ? Que tu m'entends ? » est détecté seul, de 10,0 à 13,2 s, au
   lieu d'un bloc de 0 à 15 s.
 
-Le prototype compte 311 tests (et le projet, à la racine, 654).
+**Retour de Noah le 23/10 : les murs un par un.** Après le premier mur, l'assistant demandait « Et côtés nord, est et
+sud, le logement donne sur quoi ? », avec deux boutons : « Des voisins » ou « Non, c'est tout ». Chez lui, deux murs
+donnaient sur le voisin et un sur la rue : il a répondu « non », ce qui a fermé la liste des murs, et l'assistant n'en a
+plus parlé. Maintenant :
+- **mur par mur** : « Et le mur sud, il donne sur quoi ? », puis l'est, puis l'ouest (nord, sud, est, ouest, dans cet
+  ordre, seulement ceux dont rien n'est dit) ; chaque mur est fini (matériau, isolation, fenêtres) avant le suivant ;
+- les boutons de ces questions sont ceux de « donne sur » (extérieur, voisin, parties communes, garage…), plus **« En
+  partie voisin, en partie dehors »** : deux parties du même mur, la fenêtre sur la partie qui donne dehors. Il peut aussi
+  le dire (« en partie sur le voisin, en partie sur la rue », « 60 % sur le voisin, le reste dehors ») ;
+- ensuite, **« Un autre mur autour du logement, à me montrer ? »** (« Oui, un autre » / « Non, c'est tout ») : une maison
+  peut avoir cinq murs ou plus. Il montre le mur à la caméra, la boussole donne son côté. La question revient après chaque
+  mur de plus ; seul « Non, c'est tout » ferme la liste.
+
+Le prototype compte 312 tests (et le projet, à la racine, 654).
 
 ## Réglages (variables d'environnement)
 

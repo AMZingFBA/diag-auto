@@ -11,7 +11,9 @@ Ordre :
    d'abord) : « donne sur », puis matériau, épaisseur, isolation s'il donne dehors ou sur un local non chauffé, puis
    « Des fenêtres ou une porte sur ce mur ? » et leurs menuiserie, vitrage, volets ;
 2. si la boussole est absente ou perturbée, l'orientation d'un mur, une fois (étape 6) : c'est elle qui le range du bon
-   côté ; puis les côtés du logement dont rien n'est dit : « Et côtés nord et sud, le logement donne sur quoi ? » ;
+   côté ; puis, mur par mur, les côtés du logement dont rien n'est dit : « Et le mur sud, il donne sur quoi ? » (nord,
+   sud, est, ouest : chacun fini avant le suivant) ; enfin « Un autre mur autour du logement, à me montrer ? » (une maison
+   peut en avoir plus de quatre) ;
 3. le plafond, puis le plancher du logement (une partie différente, dite dans une pièce, a ses propres questions) ;
 4. une seule fois pour le logement : chauffage, émetteurs (leur type), eau chaude, ventilation, puis la date du ballon ;
 5. « C'est complet pour le DPE. »
@@ -45,11 +47,13 @@ def _capitale(texte: str) -> str:
     return texte[:1].upper() + texte[1:]
 
 
-def texte_cotes(cotes: list[str]) -> str:
-    """« Et côté nord, le logement donne sur quoi ? », « Et côtés nord et sud, le logement donne sur quoi ? »."""
-    if len(cotes) == 1:
-        return f"Et côté {cotes[0]}, le logement donne sur quoi ?"
-    return f"Et côtés {', '.join(cotes[:-1])} et {cotes[-1]}, le logement donne sur quoi ?"
+ORDRE_COTES = ("nord", "sud", "est", "ouest")  # Noah : « le mur nord, puis le sud, puis l'est et l'ouest »
+
+
+def texte_cote(cote: str) -> str:
+    """« Et le mur sud, il donne sur quoi ? » : un côté à la fois (retour de Noah du 22/10 au soir : une question pour
+    trois côtés, avec « des voisins » ou « non », ne convenait pas à deux murs sur le voisin et un sur la rue)."""
+    return f"Et le mur {cote}, il donne sur quoi ?"
 
 
 def texte_champ(element: Element, champ: str, meme_element: bool, nom: str = "") -> str:
@@ -125,9 +129,9 @@ QUESTIONS_PRESENCE = {
     "ventilation": "Ventilation : VMC ou naturelle ?",
 }
 QUESTIONS_SUITE = {
-    # Sans boussole, on ne sait pas quels côtés manquent : une question générale, une fois par pièce. Avec la boussole, ce
-    # sont les côtés manquants qui sont nommés (`texte_cotes`).
-    "mur": "Les autres côtés du logement donnent sur quoi ?",
+    # Les côtés manquants sont demandés un par un (`texte_cote`) ; ensuite, ou sans boussole, un mur de plus : une maison
+    # peut avoir plus de quatre murs autour d'elle. Il le montre à la caméra, qui donne son côté.
+    "mur": "Un autre mur autour du logement, à me montrer ?",
     "fenetre": "D'autres fenêtres, ou une porte vers l'extérieur ?",
 }
 # Date et température des radiateurs : jamais demandées (Noah, étape 4), mais notées dès qu'elles sont dites.
@@ -155,7 +159,7 @@ def cle_suite(checklist: Checklist, type_element: str) -> str:
     autre clé, 10 fois). Pour les murs, elle ne change qu'avec les côtés du logement qui restent à décrire (étape 13) ;
     pour les fenêtres, avec une fenêtre de plus."""
     if type_element == "mur":
-        return "suite:mur#" + ("-".join(checklist.orientations_manquantes()) or "aucun")
+        return f"suite:mur#{len(checklist.enveloppe('mur', interieurs=True))}"  # reposée après chaque mur de plus
     return f"suite:{type_element}#{len([e for e in checklist.elements if e.type in OUVERTURES])}"
 
 
@@ -189,12 +193,11 @@ def questions(checklist: Checklist, dernier_id: str | None = None) -> Iterator[Q
         cle = "orientation@visite" if checklist.boussole_gyroscope else f"orientation:{mur.id}"
         nom = _capitale(checklist.nom(mur))
         yield QuestionPlan(f"orientation:{mur.id}", f"{nom}{',' if ',' in nom else ''} est orienté nord, sud, est ou ouest ?", cle)
-    if "mur" not in checklist.clos:
-        cotes = checklist.orientations_manquantes()
-        if murs and not any(m.orientation for m in murs):  # sans boussole : on ne sait pas lesquels manquent
-            yield QuestionPlan("suite:mur", QUESTIONS_SUITE["mur"], cle_suite(checklist, "mur"))
-        elif cotes and murs:  # aucun mur encore : « Ce mur donne sur quoi ? » suffit
-            yield QuestionPlan("suite:mur", texte_cotes(cotes), cle_suite(checklist, "mur"))
+    if "mur" not in checklist.clos and murs:  # aucun mur encore : « Ce mur donne sur quoi ? » suffit
+        if any(m.orientation for m in murs):  # avec un côté connu : les autres, un par un
+            for cote in (c for c in ORDRE_COTES if c in checklist.orientations_manquantes()):
+                yield QuestionPlan(f"cote:{cote}", texte_cote(cote), f"cote:{cote}")
+        yield QuestionPlan("suite:mur", QUESTIONS_SUITE["mur"], cle_suite(checklist, "mur"))
 
     # 3. Le plafond, puis le plancher du logement (et une partie propre à une pièce, si elle a été dite).
     for type_element in TOUJOURS_PRESENTS:
