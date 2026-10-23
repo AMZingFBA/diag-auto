@@ -690,6 +690,12 @@ class Session:
             self.journaliser("trace_ouvert" if self.trace_ouvert else "trace_ferme", source=message.get("source", "bouton"))
         elif action == "point" and nombre(message.get("x")) and nombre(message.get("y")):
             cle = await self._piece_du_trace()
+            for autre, trace in self.traces.items():
+                # Un coin dans une autre pièce : celle d'avant est finie (essai de Noah du 23/10, 17:30 : toute la maison
+                # tracée d'un seul contour, « il m'a dit une pièce »).
+                if autre != cle and not trace["ferme"] and len(trace["points"]) >= 3:
+                    trace["ferme"] = True
+                    self.journaliser("trace_ferme_piece", piece=autre, points=len(trace["points"]), raison="pièce suivante")
             t = float(message["t"]) if nombre(message.get("t")) else self.t_video
             self.traces.setdefault(cle, {"points": [], "ferme": False})["points"].append([float(message["x"]), float(message["y"]), t])
             self.journaliser("trace_point", piece=cle, x=message["x"], y=message["y"], t=t,
@@ -707,8 +713,17 @@ class Session:
             cle, trace = self._trace_en_cours()
             if trace is None or trace["ferme"] or len(trace["points"]) < 3:
                 return
+            ecart = message.get("ecart")
+            if isinstance(ecart, list) and len(ecart) == 2 and all(nombre(v) for v in ecart):
+                # Le premier coin visé de nouveau : la dérive du suivi depuis le début de la pièce. Chaque coin en reçoit
+                # la part de son instant (le premier rien, le dernier presque tout) : le contour se referme juste.
+                t0 = trace["points"][0][2]
+                t1 = max(float(message["t"]) if nombre(message.get("t")) else self.t_video, trace["points"][-1][2], t0 + 1e-6)
+                for point in trace["points"]:
+                    k = min(1.0, max(0.0, (point[2] - t0) / (t1 - t0)))
+                    point[0], point[1] = point[0] - k * ecart[0], point[1] - k * ecart[1]
             trace["ferme"] = True
-            self.journaliser("trace_ferme_piece", piece=cle, points=len(trace["points"]))
+            self.journaliser("trace_ferme_piece", piece=cle, points=len(trace["points"]), ecart=ecart)
             await self.dire(f"{self.checklist.nom_piece(cle)} : {len(trace['points'])} murs.", time.monotonic(), forcer=True, question=False)
         elif action == "deplacer" and nombre(message.get("x")) and nombre(message.get("y")):
             trace = self.traces.get(str(message.get("cle")))
@@ -2115,10 +2130,6 @@ class Session:
             self.journaliser("piece_reconnue", nom=self.checklist.nom_piece(self.checklist.piece_courante), nouvelle=True)
             await self.envoyer_etat()
             await self._annoncer_piece(self.checklist.piece_courante, f"Nouvelle pièce : {self.checklist.nom_piece(self.checklist.piece_courante)}.")
-            return
-        if self.trace_ouvert:
-            # Pendant le tracé, on ne change pas de pièce sur l'image (une pièce voisine vue par la porte).
-            self._avis_piece = ""
             return
         if avis is not None and avis.piece is None and avis.type:
             vue = self._piece_nommee_du_type(avis.type, cle)

@@ -31,7 +31,7 @@ const odo = new O.Odometrie({ hauteur: %(hauteur)s, champ: %(champ)s });
 const sortie = [];
 for (let k = 0; k < n; k++) {
   const data = new Uint8Array(brut.buffer, brut.byteOffset + 12 + k * l * h, l * h);
-  const r = odo.image({ data, largeur: l, hauteur: h }, B.matrice(...poses[k]));
+  const r = odo.image({ data, largeur: l, hauteur: h }, B.matrice(...poses[k]), k / 12);  // 12 images par seconde
   sortie.push([r.C[0], r.C[1], r.details, r.perdu]);
 }
 console.log(JSON.stringify(sortie));

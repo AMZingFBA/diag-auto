@@ -1184,7 +1184,7 @@ image : pièce « U », cuisine, U, chambre, U), un coup d'œil toutes les 8 s :
 du séjour reconnu à tort), `tests/test_page_navigateur.py` (le croquis dessiné dans le coin, agrandi, renommer, réunir,
 déplacer).
 
-Le prototype compte 340 tests (et le projet, à la racine, 654) à cette étape ; 353 avec le choix de la mission ; 393 avec la capture du tour (étape 15) ; 408 avec le plan dans un repère commun ; 411 avec le plan dans le sens de la marche ; 416 avec les gardes de la voix (rien d'inventé, rien d'effacé) ; 429 avec le relevé des murs ; 432 avec le tracé guidé du plan (qui remplace le relevé).
+Le prototype compte 340 tests (et le projet, à la racine, 654) à cette étape ; 353 avec le choix de la mission ; 393 avec la capture du tour (étape 15) ; 408 avec le plan dans un repère commun ; 411 avec le plan dans le sens de la marche ; 416 avec les gardes de la voix (rien d'inventé, rien d'effacé) ; 429 avec le relevé des murs ; 432 avec le tracé guidé du plan (qui remplace le relevé) ; 435 avec le tracé qui tient en place.
 
 ## Choix de la mission avant de filmer (23/10/2026)
 
@@ -1398,6 +1398,46 @@ pas), et en fin de visite 1 à 3 questions sur ce qui reste douteux, avec dépla
 doublon, espace montré qui est celui où l'on est, nom inventé refusé, pièce devinée par la porte puis dite, correction qui
 n'efface jamais une pièce déjà vécue), `tests/test_voix_croquis.py` (nom entendu même mal transcrit),
 `tests/test_page_navigateur.py` (plan dans le sens de la marche, flèche du nord, « vous êtes ici »).
+
+## Étape 18 : un tracé qui tient en place (23/10/2026, après l'essai de Noah de 17:30)
+
+**Ce que Noah a dit** : « j'ai fait un vrai croquis ; il m'a dit une pièce alors que j'ai toute la maison ; je suis arrivé au
+point d'entrée et les traits bougent trop ; à améliorer nettement, ce n'est pas du tout encore pro ».
+
+**Ce que montrait l'essai** (vidéo, journal et mesures de la visite 20261023-173006) :
+- toute la maison tracée d'un seul contour, en marchant jusqu'à chaque coin et en visant le sol à ses pieds (60 à 87° sous
+  l'horizon) ; jamais fermé : une seule pièce ;
+- le suivi a tourné sur le téléphone (27 ms par image, ~50 détails suivis, perdu 7 % du temps), mais revenu au miroir de
+  l'entrée (90 s), il le plaçait à 4,4 m de son vrai point de départ : le dessin avait glissé d'autant ;
+- causes (rejeu de la visite sur le PC, `python -m assistant.rejouer_suivi`, qui reproduit le trajet du téléphone à ~1 m
+  près) : le suivi suppose que tout ce qui est sous l'horizon est du sol ; or la caméra montrait souvent les chaussures et
+  le pantalon (qui bougent avec le téléphone), des meubles de près, ou une image floue de marche : des sauts impossibles
+  d'une image à l'autre (96 m de trajet calculé pour ~50 m marchés).
+
+**Ce qui change** :
+- **suivi** (`web/odometrie.js`) : pas de détail pris dans le sol à moins de 60 cm (sous les pieds) ; pas plus vite qu'une
+  marche rapide (1,6 m/s) d'une image à l'autre, et pas de nouveau détail placé au sol depuis une position douteuse. Sur la
+  visite de 17:30 rejouée : retour au miroir à 0,3 m du départ au lieu de 4,4 m (0,5 à 2 m selon les réglages : la mesure
+  sur une seule visite est bruitée), trajet calculé 75 m au lieu de 96 ;
+- **le dessin figé à l'arrêt** (`web/app.js`, `positionStable`) : sans pas depuis 1,2 s et sans déplacement net, la position
+  ne suit plus les petites erreurs du sol filmé ; seul le gyroscope (très juste) fait tourner le dessin ; en marchant, il
+  suit, sans saut ; la ligne d'aide le dit (« Vous marchez : arrêtez-vous pour viser ») ;
+- **recaler** : fermer la pièce en visant de nouveau son premier coin mesure la dérive depuis le début de la pièce ; le
+  dessin se recale sur ce coin, et le serveur répartit l'écart sur les coins (chacun la part de son instant) ; à tout
+  moment, toucher un coin puis « ⇄ Recaler » remet tout le dessin sur lui (« ✓ Placer ici » corrige seulement ce coin) ;
+- **une pièce à la fois** (`assistant/session.py`) : le premier coin d'une autre pièce ferme la précédente ; pendant le
+  tracé, une pièce peut changer à la voix (« ici c'est la chambre ») ou d'après l'image après une vraie marche ;
+- **la consigne** à l'écran : « Placez-vous au milieu de la pièce. Visez un coin au ras du sol (pas vos pieds) » ; viser
+  depuis un même endroit est la façon sûre : le dessin ne dépend alors que du gyroscope.
+
+**Limite, honnêtement** : tracer en marchant d'un coin à l'autre fera toujours glisser un peu le dessin dans une page web
+(sans les outils de réalité augmentée d'Apple, ARKit, réservés aux applications installées). Pour un tracé « pro » en
+marchant, comme magicplan : une application avec ARKit (iPhone) et ARCore (Android), à décider avec Noah (compte
+développeur Apple, installation par TestFlight).
+
+**Tests** : `tests/test_trace_visite.py` (écart réparti à la fermeture, pièce suivante qui ferme la précédente),
+`tests/test_page_navigateur.py` (dessin figé à l'arrêt puis qui suit sans saut, « ⇄ Recaler »), `tests/test_odometrie_js.py`
+(avec la limite de vitesse).
 
 ## Étape 17 : le tracé guidé du plan sur la caméra (23/10/2026)
 

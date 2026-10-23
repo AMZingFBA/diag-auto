@@ -179,7 +179,7 @@
 
   // Position C et correction de l'orientation w qui font le mieux retomber les détails du sol (places P connues) sur
   // leurs points de l'image (xy, pixels) : Gauss-Newton, pondération robuste de Huber (un détail mal suivi pèse peu).
-  function affiner(vus, R, C, w, h, f, largeur, hauteur) {
+  function affiner(vus, R, C, w, h, f, largeur, hauteur, retenue = 2, lacetSeul = false) {
     const ecarts = (p) => {
       const Rc = tourner([p[2], p[3], p[4]], R), r = [];
       for (const { P, xy } of vus) {
@@ -205,7 +205,8 @@
           }
         }
       });
-      for (let j = 2; j < 5; j++) A[j][j] += 2 * f * f; // la correction ne bouge que si l'image l'exige (comme 2 détails)
+      for (let j = 2; j < 5; j++) A[j][j] += retenue * f * f; // la correction ne bouge que si l'image l'exige
+      if (lacetSeul) for (const j of [2, 3]) { A[j] = A[j].map((_, k) => (k === j ? 1 : 0)); b[j] = 0; }
       const delta = resoudre(A, b);
       if (!delta) return null;
       p = p.map((v, j) => v + delta[j]);
@@ -219,6 +220,16 @@
     this.hauteur = options.hauteur || 1.4; // hauteur du téléphone au-dessus du sol (hypothèse)
     this.champ = options.champ || 45; // champ horizontal de l'image (degrés)
     this.maxDetails = options.maxDetails || 60;
+    // Le sol à moins de 60 cm du téléphone est sous les pieds : les chaussures et le pantalon y sont souvent dans l'image et
+    // bougent avec le téléphone (visite de Noah du 23/10, 17:30, caméra tournée vers ses pieds) : on n'y prend pas de détail.
+    this.piedsM = options.piedsM != null ? options.piedsM : 0.6;
+    this.affinage = options.affinage != null ? options.affinage : true; // position et orientation affinées ensemble
+    this.retenue = options.retenue != null ? options.retenue : 2; // retenue de la correction d'orientation (en « détails »)
+    this.lacetSeul = !!options.lacetSeul; // ne corriger que le cap (pas l'inclinaison ni le roulis)
+    // Pas plus vite qu'une marche rapide : d'une image à l'autre, un saut plus grand est une erreur du suivi (image floue,
+    // meuble pris pour le sol), pas un déplacement (visite de Noah du 23/10 : 96 m de trajet calculé pour ~50 m marchés).
+    this.vitesseMax = options.vitesseMax != null ? options.vitesseMax : 1.6;
+    this.t = null;
     this.C = [0, 0];
     this.w = [0, 0, 0]; // correction de l'orientation du gyroscope, apprise sur l'image (radians, axes du monde)
     this.details = []; // { xy (pixels de l'image), P (place au sol, mètres) }
@@ -228,11 +239,12 @@
 
   // Une image (niveaux de gris, réduite : ~240 pixels de large) et l'orientation R du téléphone à l'instant de sa prise.
   // Renvoie { C, details, perdu }.
-  Odometrie.prototype.image = function (img, R) {
+  Odometrie.prototype.image = function (img, R, t = null) {
     const f = img.largeur / 2 / Math.tan((this.champ / 2) * RAD);
     let Rc = tourner(this.w, R);
     const direction = (xy) => Trace.rayon(Rc, (xy[0] - img.largeur / 2) / f, (img.hauteur / 2 - xy[1]) / f);
     const pyr = pyramide(img);
+    this.douteux = false;
     if (this.precedente && this.precedente[0].largeur === img.largeur && this.details.length) {
       const suivis = suivreVerifie(this.precedente, pyr, this.details.map((d) => d.xy));
       this.details = this.details.map((d, i) => ({ ...d, xy: suivis[i] })).filter((d) => d.xy);
@@ -248,13 +260,23 @@
         };
         const sol = vus.filter((v) => { const e = accord(v); return e != null && e < ECART_MAX_M; });
         let C = C0, residus = null;
-        const affine = sol.length >= 12 ? affiner(sol, R, C0, this.w, this.hauteur, f, img.largeur, img.hauteur) : null;
+        const affine = this.affinage && sol.length >= 12
+          ? affiner(sol, R, C0, this.w, this.hauteur, f, img.largeur, img.hauteur, this.retenue, this.lacetSeul) : null;
         if (affine && Math.hypot(affine.C[0] - C0[0], affine.C[1] - C0[1]) < 0.3 && Math.hypot(...affine.w) < 0.1) {
           C = affine.C;
           this.w = affine.w;
           Rc = tourner(this.w, R);
           residus = new Map(sol.map((v, i) => [v.detail, affine.residus[i]]));
         }
+        let douteux = false;
+        if (t != null && this.t != null && this.vitesseMax > 0) {
+          const dmax = this.vitesseMax * Math.max(0.02, t - this.t) + 0.02, d = Math.hypot(C[0] - this.C[0], C[1] - this.C[1]);
+          if (d > dmax) {  // trop loin pour une image : on n'avance que de ce qu'une marche permet
+            C = [this.C[0] + ((C[0] - this.C[0]) * dmax) / d, this.C[1] + ((C[1] - this.C[1]) * dmax) / d];
+            douteux = true;
+          }
+        }
+        this.douteux = douteux; // position incertaine : pas de nouveau détail placé au sol à partir d'elle
         this.C = C;
         this.perdu = false;
         // Un détail qui ne s'accorde pas avec les autres n'est pas au sol (un meuble, un mur), ou il est mal suivi : oublié.
@@ -267,8 +289,12 @@
         this.perdu = true;
       }
     }
-    if (this.details.length < 0.6 * this.maxDetails) {
-      const garder = (x, y) => direction([x, y])[2] < -SOL_NOUVEAU;
+    if (t != null) this.t = t;
+    if (this.details.length < 0.6 * this.maxDetails && !this.douteux) {
+      const garder = (x, y) => {
+        const d = direction([x, y]);
+        return d[2] < -SOL_NOUVEAU && (this.hauteur / -d[2]) * Math.hypot(d[0], d[1]) >= this.piedsM;
+      };
       for (const xy of detecter(img, garder, this.details.map((d) => d.xy), this.maxDetails - this.details.length)) {
         const P = Trace.auSol(this.C, this.hauteur, direction(xy), 6);
         if (P) this.details.push({ xy, P });

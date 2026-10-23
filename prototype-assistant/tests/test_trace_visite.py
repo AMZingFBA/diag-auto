@@ -178,3 +178,45 @@ def test_position_suivie_par_le_telephone(tmp_path, monkeypatch):
     t = session.trajectoire
     assert t.avec_pas() and abs(t.position(10.0)[0] - 1.5) < 0.1 and abs(t.distance(0.0, 10.0) - 1.5) < 0.11
     assert [round(p.direction) for p in t.pas] == [90, 90]  # deux pas déduits (0,6 m chacun), vers l'est
+
+
+def test_fermer_au_premier_coin_repartit_la_derive(tmp_path, monkeypatch):
+    # En visant de nouveau le premier coin pour fermer, le téléphone mesure la dérive du suivi depuis le début de la pièce
+    # (50 cm vers l'est ici) : chaque coin en reçoit la part de son instant, et le contour se referme juste.
+    monkeypatch.setattr(module_session, "INTERVALLE_PIECES_S", 1000.0)
+
+    async def scenario():
+        session, recus = await ouvrir(tmp_path, CerveauScenario(poli()), mission="amiante")
+        session.regard = ClaudeQuiVoitLesPieces({1.0: AvisPiece(None, "Chambre", "forte")})
+        await filmer(session, 1.0, 0.0)
+        await tracer(session, CHAMBRE, fermer=False, t0=5.0)  # coins à 5, 6, 7 et 8 s
+        await session.recevoir_controle({"type": "trace", "action": "fermer", "t": 9.0, "ecart": [0.5, 0.0]})
+        await session.terminer()
+        return session
+
+    session = asyncio.run(scenario())
+    points = [(round(x, 3), round(y, 3)) for x, y, _ in session.traces["chambre"]["points"]]
+    assert session.traces["chambre"]["ferme"]
+    assert points == [(1.0, 2.0), (5.0 - 0.125, 2.0), (5.0 - 0.25, 5.0), (1.0 - 0.375, 5.0)]
+
+
+def test_une_piece_puis_la_suivante_sans_fermer(tmp_path, monkeypatch):
+    # Essai de Noah du 23/10 (17:30) : toute la maison tracée d'un seul contour (« il m'a dit une pièce »). Une fois dans la
+    # pièce suivante, son premier coin ferme la pièce d'avant.
+    monkeypatch.setattr(module_session, "INTERVALLE_PIECES_S", 1000.0)
+
+    async def scenario():
+        session, recus = await ouvrir(tmp_path, CerveauScenario(poli()), mission="amiante")
+        session.regard = ClaudeQuiVoitLesPieces({})
+        await parler(session, "Ici c'est la cuisine.")
+        await attendre(session)
+        await tracer(session, BIAIS, fermer=False)
+        await parler(session, "Ici c'est la chambre.")
+        await attendre(session)
+        await session.recevoir_controle({"type": "trace", "action": "point", "x": 5.0, "y": 0.0, "t": 30.0})
+        await session.terminer()
+        return session
+
+    session = asyncio.run(scenario())
+    assert session.traces["cuisine"]["ferme"] and len(session.traces["cuisine"]["points"]) == 4
+    assert not session.traces["chambre"]["ferme"] and len(session.traces["chambre"]["points"]) == 1

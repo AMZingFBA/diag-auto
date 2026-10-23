@@ -78,6 +78,7 @@ body[data-mission="amiante"] .choix, body[data-mission="plomb"] .choix { display
 .trace-info { position: absolute; top: calc(196px + env(safe-area-inset-top)); left: 12px; right: 12px; padding: 8px 10px;
   border-radius: 8px; background: rgba(20, 33, 61, 0.88); color: #fff; font-weight: 600; }
 body.trace .croquis { right: auto; bottom: auto; width: 132px; height: 132px; min-height: 0; }
+.trace-info.marche::after { content: " — Vous marchez : arrêtez-vous pour viser, le dessin reste alors en place."; color: #ffd400; }
 .outils-trace { display: flex; gap: 10px; }
 .outils-trace button { margin: 0; flex: 1; }
 .outils-trace #trace-point { flex: 2; font-size: 1.25rem; }

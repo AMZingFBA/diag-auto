@@ -3,7 +3,7 @@
 // (16 kHz) et une image par seconde, et lit à voix haute les questions de l'assistant.
 
 // Version de la page, comparée à celle du serveur (test du 23/10 : l'iPhone gardait l'ancienne page en mémoire).
-const VERSION_PAGE = "2026-10-23-14";
+const VERSION_PAGE = "2026-10-23-15";
 const $ = (id) => document.getElementById(id);
 const TAUX = 16000;
 const TYPE_SON = 1;
@@ -120,6 +120,15 @@ const traceur = {
   ecran: [], // les coins dessinés (pour les toucher) : { cle, index, x, y }
   pres: false, // la croix est revenue près du premier coin : on peut fermer
   dureeMs: 0, // temps de calcul du suivi par image (moyenne glissante), envoyé avec les mesures pour le diagnostic
+  // Tracé figé à l'arrêt (essai de Noah du 23/10, 17:30 : « les traits bougent trop ») : debout, seul le gyroscope compte
+  // (très juste), la position ne bouge pas ; elle ne suit le sol filmé que quand on marche. Recaler (au premier coin en
+  // fermant la pièce, ou sur un coin touché) décale tout le dessin d'un coup.
+  fige: false,
+  Cfige: null,
+  decalage: [0, 0], // position affichée = position suivie − décalage
+  historique: [], // positions suivies de la dernière seconde : { quand, C }
+  secousse: -1e9, // dernier pic d'accélération (secondes de la visite) : un pas, même lent
+  marche: false,
 };
 const PRES_DU_PREMIER_M = 0.3;
 
@@ -142,10 +151,38 @@ function majInfoTrace(texte) {
   const info = $("trace-info");
   if (!traceur.actif) { info.hidden = true; return; }
   const c = contourEnCours();
-  info.textContent = texte || (traceur.selection ? "Coin choisi : visez sa vraie place, puis « ✓ Placer ici »."
-    : !c ? "Visez un coin de la pièce au ras du sol, puis « ＋ Coin »."
-    : `${c.nom} : ${c.points.length} coin${c.points.length > 1 ? "s" : ""}. Visez le coin suivant ; revenez au premier pour fermer.`);
+  info.textContent = texte || (traceur.selection
+    ? "Coin choisi : visez sa vraie place. « ✓ Placer ici » corrige ce coin ; « ⇄ Recaler » remet tout le dessin sur lui."
+    : !c ? "Placez-vous au milieu de la pièce. Visez un coin au ras du sol (pas vos pieds), puis « ＋ Coin »."
+    : `${c.nom} : ${c.points.length} coin${c.points.length > 1 ? "s" : ""}. Sans marcher, visez le coin suivant ; revenez au premier pour fermer.`);
   info.hidden = false;
+}
+
+// La position du téléphone pour le tracé : celle du sol filmé quand on marche, figée quand on est arrêté (pas de pas depuis
+// 1,2 s, et moins de 25 cm d'après le sol filmé en une seconde). Le passage de l'une à l'autre ne fait pas de saut.
+function positionStable(Csuivi) {
+  const quand = performance.now();
+  traceur.historique.push({ quand, C: [...Csuivi] });
+  while (traceur.historique.length && quand - traceur.historique[0].quand > 1000) traceur.historique.shift();
+  const avant = traceur.historique[0].C;
+  traceur.marche = Math.hypot(Csuivi[0] - avant[0], Csuivi[1] - avant[1]) > 0.25 || maintenant() - traceur.secousse < 1.2;
+  if (!traceur.marche && !traceur.fige) {
+    traceur.fige = true;
+    traceur.Cfige = [Csuivi[0] - traceur.decalage[0], Csuivi[1] - traceur.decalage[1]];
+  } else if (traceur.marche && traceur.fige) {
+    traceur.fige = false;
+    traceur.decalage = [Csuivi[0] - traceur.Cfige[0], Csuivi[1] - traceur.Cfige[1]];
+  }
+  return traceur.fige ? [...traceur.Cfige] : [Csuivi[0] - traceur.decalage[0], Csuivi[1] - traceur.decalage[1]];
+}
+
+// Recaler : le point du sol visé est en vrai le coin P (on le vise de nouveau) : tout le dessin se décale d'autant.
+function recaler(P, vise) {
+  const d = [P[0] - vise[0], P[1] - vise[1]];
+  if (traceur.fige) traceur.Cfige = [traceur.Cfige[0] + d[0], traceur.Cfige[1] + d[1]];
+  traceur.decalage = [traceur.decalage[0] - d[0], traceur.decalage[1] - d[1]];
+  if (traceur.pose) traceur.pose.C = [traceur.pose.C[0] + d[0], traceur.pose.C[1] + d[1]];
+  return d;
 }
 
 function noterOrientation(e) {
@@ -180,11 +217,11 @@ function suivrePosition(meta) {
     const ctx = toile.getContext("2d", { willReadFrequently: true });
     ctx.drawImage(video, 0, 0, l, h);
     traceur.odo = traceur.odo || new Odometrie.Odometrie({ hauteur: traceur.hauteur, champ: champHorizontal() });
-    traceur.odo.image(Odometrie.gris(ctx.getImageData(0, 0, l, h).data, l, h), R);
+    traceur.odo.image(Odometrie.gris(ctx.getImageData(0, 0, l, h).data, l, h), R, quand / 1000);
     traceur.dureeMs += 0.2 * (performance.now() - quand - traceur.dureeMs);
   }
   if (!traceur.odo) return;
-  traceur.pose = { R: traceur.odo.orientation(R), C: traceur.odo.C };
+  traceur.pose = { R: traceur.odo.orientation(R), C: positionStable(traceur.odo.C) };
   if (traceur.actif) dessinerTrace();
 }
 
@@ -270,21 +307,42 @@ function rondTrace(ctx, x, y, r, couleur) {
 }
 
 function majBoutonCoin() {
-  const b = $("trace-point");
+  const b = $("trace-point"), f = $("trace-fermer");
   const texte = traceur.selection ? "✓ Placer ici" : traceur.pres ? "⟲ Fermer la pièce" : traceur.vise ? "＋ Coin" : "Visez le sol";
   if (b.textContent !== texte) b.textContent = texte;
   b.disabled = !traceur.vise && !traceur.pres;
-  $("trace-fermer").disabled = !((contourEnCours() || {}).points || []).length;
+  const texteF = traceur.selection ? "⇄ Recaler" : "⟲ Fermer";
+  if (f.textContent !== texteF) f.textContent = texteF;
+  f.disabled = traceur.selection ? !traceur.vise : ((contourEnCours() || {}).points || []).length < 3;
+  majMarche();
+}
+
+// Pendant le tracé : « vous marchez » quand la position suit le sol filmé (le dessin peut glisser un peu).
+function majMarche() {
+  const info = $("trace-info");
+  if (!traceur.actif || info.hidden) return;
+  info.classList.toggle("marche", traceur.marche);
 }
 
 const arrondiMm = (x) => Math.round(x * 1000) / 1000;
 
 // « ＋ Coin » : le point visé devient un coin ; « ⟲ Fermer la pièce » ; « ✓ Placer ici » (le coin touché, corrigé).
+function fermerContour() {
+  const c = contourEnCours(), vise = traceur.vise;
+  if (!c || c.points.length < 3) return;
+  const premier = c.points[0];
+  // En visant le premier coin (à moins de 2 m de là où le dessin le croit), on le revoit : la dérive du suivi depuis le
+  // début de la pièce est mesurée, le dessin se recale et le serveur répartit l'écart sur les coins de la pièce.
+  const ecart = vise && Math.hypot(vise[0] - premier[0], vise[1] - premier[1]) < 2 ? recaler(premier, vise) : null;
+  envoyerJson({ type: "trace", action: "fermer", t: Math.round(maintenant() * 1000) / 1000,
+                ...(ecart ? { ecart: [arrondiMm(-ecart[0]), arrondiMm(-ecart[1])] } : {}) });
+  bip();
+}
+
 function validerCoin() {
   const vise = traceur.vise;
   if (traceur.pres && !traceur.selection) {
-    envoyerJson({ type: "trace", action: "fermer" });
-    bip();
+    fermerContour();
     return;
   }
   if (!vise) return;
@@ -1127,6 +1185,7 @@ function suivrePas(e) {
   const norme = Math.hypot(g.x, g.y, g.z) - 9.81;
   mouvement.acc += 0.25 * (norme - mouvement.acc);
   const t = maintenant();
+  if (Math.abs(mouvement.acc) > 0.6) traceur.secousse = t;
   if (!mouvement.enHaut && mouvement.acc > 1.0 && t - mouvement.dernierPas > 0.3) {
     mouvement.enHaut = true;
     mouvement.dernierPas = t;
@@ -1205,7 +1264,8 @@ function noterCapteurs() {
                    elevation: arrondi(pose.elevation), roulis: arrondi(pose.roulis), acc: arrondi(mouvement.acc) };
   if (traceur.odo && croquisSeul()) {
     // La position suivie par le sol filmé, et de quoi juger le suivi après la visite (détails suivis, calcul, perdu).
-    Object.assign(mesure, { x: arrondiMm(traceur.odo.C[0]), y: arrondiMm(traceur.odo.C[1]), vo_n: traceur.odo.details.length,
+    const C = traceur.pose ? traceur.pose.C : traceur.odo.C;
+    Object.assign(mesure, { x: arrondiMm(C[0]), y: arrondiMm(C[1]), vo_n: traceur.odo.details.length, vo_fige: traceur.fige ? 1 : 0,
                             vo_ms: Math.round(traceur.dureeMs), vo_perdu: traceur.odo.perdu ? 1 : 0 });
   }
   etat.capteursContinus.push(mesure);
@@ -1427,7 +1487,18 @@ $("murs").onclick = () => {
 };
 $("trace-point").onclick = validerCoin;
 $("trace-annuler").onclick = () => envoyerJson({ type: "trace", action: "annuler" });
-$("trace-fermer").onclick = () => envoyerJson({ type: "trace", action: "fermer" });
+$("trace-fermer").onclick = () => {
+  if (traceur.selection) {  // « ⇄ Recaler ici » : le coin touché est là où vise la croix ; tout le dessin suit
+    const { cle, index } = traceur.selection;
+    const p = traceur.pieces.find((q) => q.cle === cle);
+    if (p && p.points[index] && traceur.vise) recaler(p.points[index], traceur.vise);
+    traceur.selection = null;
+    bip();
+    majInfoTrace("Dessin recalé sur ce coin.");
+    return;
+  }
+  fermerContour();
+};
 $("trace-toile").addEventListener("pointerdown", toucherTrace);
 
 $("voir-fiche").onclick = () => {

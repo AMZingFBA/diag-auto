@@ -387,7 +387,8 @@ def test_trace_guide_croix_coins_ancres_fermer_et_corriger(page):
     viser(0, -35, x=0.05, y=0.05)  # la croix revient au premier coin (0, 2)
     assert page.js("$('trace-point').textContent") == "⟲ Fermer la pièce"
     page.toucher("#trace-point")
-    assert page.js("window.envoyes")[-1] == {"type": "trace", "action": "fermer"}
+    envoye = page.js("window.envoyes")[-1]  # le premier coin revu à 5 cm près : l'écart part avec la fermeture
+    assert envoye["action"] == "fermer" and abs(envoye["ecart"][0] - 0.05) < 0.01 and abs(envoye["ecart"][1] - 0.05) < 0.01
     # Corriger un coin : le toucher (il est sous la croix), viser sa vraie place, « ✓ Placer ici ».
     page.js("(() => { toucherTrace({clientX: 195, clientY: 422}); return true; })()")
     assert page.js("traceur.selection") == {"cle": "chambre", "index": 0}
@@ -401,6 +402,36 @@ def test_trace_guide_croix_coins_ancres_fermer_et_corriger(page):
     assert page.js("$('viseur').hidden") is True and page.js("document.body.classList.contains('trace')") is False
     page.js("(() => { choisirMission('dpe'); return true; })()")
 
+
+def test_trace_fige_a_l_arret_et_recaler(page):
+    # Essai de Noah du 23/10 (17:30) : « les traits bougent trop ». Arrêté, la position ne suit plus les petites erreurs du
+    # sol filmé : le dessin ne bouge plus ; en marchant, il suit, sans saut. Un coin touché puis « ⇄ Recaler » remet tout le
+    # dessin sur lui.
+    page.js("""(() => { choisirMission('amiante'); window.envoyes = [];
+        Object.defineProperty($('camera'), 'videoWidth', {value: 1080, configurable: true});
+        Object.defineProperty($('camera'), 'videoHeight', {value: 1920, configurable: true});
+        Object.assign(traceur, {fige: false, Cfige: null, decalage: [0, 0], historique: [], secousse: -1e9, selection: null});
+        afficherTrace(true); return true; })()""")
+    fige = page.js("""(() => { const r = [];
+        for (const x of [0, 0.05, -0.04, 0.08, 0.02]) r.push(positionStable([x, 0]));
+        return [traceur.fige, r]; })()""")
+    assert fige[0] is True and all(c == fige[1][0] for c in fige[1])  # les petites erreurs ne bougent plus le dessin
+    marche = page.js("""(() => { traceur.secousse = maintenant(); const a = positionStable([0.10, 0]);
+        const b = positionStable([0.70, 0]); return [traceur.fige, a, b]; })()""")
+    assert marche[0] is False and abs(marche[1][0] - fige[1][0][0]) < 1e-9  # pas de saut en repartant
+    assert abs((marche[2][0] - marche[1][0]) - 0.60) < 1e-9  # puis il suit la marche
+    # Recaler : le coin (0, 2) est vu 50 cm trop à l'est (la position a dérivé) ; touché, puis « ⇄ Recaler ».
+    page.js("""(() => { traceur.pieces = [{cle: 'chambre', nom: 'Chambre', ferme: true, points: [[0, 2], [3, 2], [3, 4], [0, 4]]}];
+        traceur.courant = 'chambre'; traceur.selection = null;
+        traceur.pose = {R: Boussole.matrice(0, 55, 0), C: [-0.5, 0]}; dessinerTrace();
+        const coin = traceur.ecran.find((p) => p.index === 0); toucherTrace({clientX: coin.x, clientY: coin.y});
+        traceur.pose.C = [0, 0]; dessinerTrace(); return true; })()""")
+    assert page.js("$('trace-fermer').textContent") == "⇄ Recaler"
+    page.toucher("#trace-fermer")
+    page.js("(() => { dessinerTrace(); return true; })()")
+    coin = next(p for p in page.js("traceur.ecran") if p["index"] == 0)
+    assert abs(coin["x"] - 195) < 1 and abs(coin["y"] - 422) < 1  # le coin est de nouveau sous la croix
+    page.js("(() => { afficherTrace(false); choisirMission('dpe'); return true; })()")
 
 def test_position_suivie_sur_une_fausse_camera(page):
     # La chaîne du téléphone de bout en bout : la vidéo (ici, des images de synthèse d'une pièce carrelée, filmées à 1,40 m),
