@@ -274,9 +274,9 @@ function majEtat(m) {
 
 function boutonsReponse(conteneur, options, envoyer) {
   conteneur.replaceChildren(...options.map((o) => {
+    if (o.saisie) return saisieAutre(o, envoyer);
     const bouton = Object.assign(document.createElement("button"), { type: "button", textContent: o.libelle });
     bouton.onclick = () => {
-      if (o.saisie) return saisieAutre(conteneur, o, envoyer);
       conteneur.querySelectorAll("button").forEach((b) => b.classList.toggle("choisi", b === bouton));
       couperVoix(); // il a répondu : la question en cours n'est plus lue
       envoyer(o);
@@ -288,13 +288,14 @@ function boutonsReponse(conteneur, options, envoyer) {
 }
 
 // « Autre… » (Noah, 23/10) : une valeur qui n'est pas dans les boutons, tapée (clavier numérique pour une mesure ou une
-// année), puis vérifiée et mise en forme par le serveur (« 23 » → « 23 cm »).
-function saisieAutre(conteneur, o, envoyer) {
+// année), puis vérifiée et mise en forme par le serveur (« 23 » → « 23 cm »). La case est là tout de suite : sur iPhone,
+// le clavier ne s'ouvrait pas quand elle apparaissait après un appui sur « Autre… ».
+function saisieAutre(o, envoyer) {
   const ligne = Object.assign(document.createElement("form"), { className: "autre" });
   const champ = Object.assign(document.createElement("input"), {
-    type: o.saisie === "nombre" ? "number" : "text", placeholder: o.saisie === "nombre" ? "Valeur" : "Votre réponse",
-    inputMode: o.saisie === "nombre" ? "decimal" : "text", required: true });
-  if (o.saisie === "nombre") Object.assign(champ, { min: o.min, max: o.max, step: "any" });
+    type: "text", placeholder: o.saisie === "nombre" ? "Autre valeur" : "Autre réponse",
+    inputMode: o.saisie === "nombre" ? "decimal" : "text", required: true, enterKeyHint: "done" });
+  if (o.saisie === "nombre") champ.pattern = "[0-9]+([,.][0-9]+)?";
   const unite = Object.assign(document.createElement("span"), { textContent: o.unite || "" });
   const ok = Object.assign(document.createElement("button"), { type: "submit", textContent: "OK" });
   ligne.append(champ, unite, ok);
@@ -305,11 +306,9 @@ function saisieAutre(conteneur, o, envoyer) {
     couperVoix();
     envoyer({ ...o, valeur, libelle: `${valeur}${o.unite ? " " + o.unite : ""}` });
     $("latence").textContent = `✓ Noté : ${valeur}${o.unite ? " " + o.unite : ""}`;
-    ligne.remove();
+    champ.blur();
   };
-  conteneur.querySelectorAll("form.autre").forEach((f) => f.remove());
-  conteneur.append(ligne);
-  champ.focus();
+  return ligne;
 }
 
 function afficherChoix(cible, options) {
@@ -479,6 +478,9 @@ function autoriserBoussole() {
       capteurs.iphone = capteurs.iphone || new Boussole.CapIphone(etat.reglagesBoussole.iphone.inclinaison_calibrage);
       capteurs.cap = capteurs.iphone.mesurer(e.alpha, e.beta, e.gamma, e.webkitCompassHeading);
       capteurs.precision = typeof e.webkitCompassAccuracy === "number" ? e.webkitCompassAccuracy : null;
+      // Le gyroscope, dès le début (alpha relatif) : test du 23/10, iPhone tenu droit, aucun cap pendant 35 s, et rien
+      // pour retrouver après coup le côté des murs filmés avant. Le serveur les recale dès que le nord est connu.
+      capteurs.lacet = Boussole.capCamera(e.alpha, e.beta, e.gamma);
     } else if (e.absolute !== false && performance.now() - capteurs.dernierAbsolu > 2000) {
       capteurs.cap = Boussole.capCamera(e.alpha, e.beta, e.gamma); // Android ancien : orientation absolue
     }
@@ -518,7 +520,8 @@ function afficherBoussole() {
   const fiabilite = fiabiliteBoussole();
   bloc.className = `boussole ${fiabilite}`;
   if (capteurs.cap == null) {
-    $("cap").textContent = "pas de boussole";
+    // iPhone : le nord se cale quand le haut du téléphone est presque à plat (webkitCompassHeading).
+    $("cap").textContent = capteurs.lacet != null ? "nord : téléphone à plat 1 s" : "pas de boussole";
     $("calibrer").hidden = true;
     return;
   }

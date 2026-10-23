@@ -492,6 +492,9 @@ class Checklist:
         self.correction_cap: float | None = None
         self.correction_source = ""  # « boussole », ou « dit (M1) » : orientation d'un mur dite à l'oral
         self.boussole_fiabilite = "inconnue"  # « bonne », « moyenne », « faible », « absente » ou « inconnue » (rien reçu)
+        # Gyroscope reçu, nord pas encore calé (iPhone tenu droit) : on attend avant de demander l'orientation à l'oral ;
+        # les murs filmés entre-temps prendront leur côté dès que le nord sera connu (test du 23/10).
+        self.attente_boussole = False
         self.boussole_gyroscope = False  # le téléphone donne les angles entre murs
         self.boussole_dementie = False  # une orientation dite contredit la boussole : elle est faussée ici
         self._compteurs: dict[str, int] = {}
@@ -1036,7 +1039,7 @@ class Checklist:
         l'orientation, une seule fois (avec le gyroscope, les autres murs s'en déduisent). Étape 13 : c'est par elle
         qu'un mur rejoint le mur du même côté du logement, donc pour tout mur qui l'entoure (dehors, voisin, local non
         chauffé), pas seulement dehors."""
-        if self.correction_cap is not None or self.boussole_fiabilite in ("bonne", "moyenne", "inconnue"):
+        if self.correction_cap is not None or self.boussole_fiabilite in ("bonne", "moyenne", "inconnue") or self.attente_boussole:
             return None
         murs = [e for e in (self.murs_de_la_piece(piece) if piece else self.enveloppe("mur"))
                 if not e.orientation and not e.interieur and e.valeur("donne_sur") is not None]

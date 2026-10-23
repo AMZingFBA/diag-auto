@@ -595,6 +595,7 @@ class Cible:
             "doublon": f"doublon:{self.element_id}={self.source}",
             "confirmation": f"confirmer:{self.element_id}.{self.champ}={self.source}",
             "orientation": f"orientation:{self.element_id}",
+            "cote": f"cote:{self.source}",  # « Et le mur sud, il donne sur quoi ? » (oublié : les boutons ne faisaient rien)
         }.get(self.genre, f"secondaire:{self.type}.{self.champ}")
 
 

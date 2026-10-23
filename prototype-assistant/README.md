@@ -1076,7 +1076,27 @@ met en forme (« 23 » → « 23 cm ») ; une valeur impossible n'est pas notée
 isolation…) se tape en texte, ramené au vocabulaire comme une réponse dite. La valeur est notée « tapé sur le
 téléphone », et la question suivante part aussitôt.
 
-Le prototype compte 313 tests (et le projet, à la racine, 654).
+**Test de Noah du 23/10 au matin (visite `20261023-073730`) : ce qui n'allait pas, et ce qui est corrigé** :
+- **les boutons de « Et le mur sud, il donne sur quoi ? » ne faisaient rien** : la question partait vers le téléphone
+  avec une mauvaise étiquette (`secondaire:mur.donne_sur` au lieu de `cote:sud`), et la réponse cochée revenait sans
+  être comprise. D'où : questions redemandées (« le mur est… » plusieurs fois), réponse lente après « en partie… » (c'est
+  Claude qui finissait par répondre à la voix), et « refusé : citation introuvable » (Claude voulait noter le « voisin »
+  coché). Corrigé ; une réponse cochée peut aussi être citée par Claude ;
+- **le bouton « Voisin chauffé » de « Ce mur donne sur quoi ? » notait « local chauffé »** (une cloison entre deux
+  pièces) : le mur sortait du DPE. La valeur exacte d'un bouton est maintenant gardée telle quelle ;
+- **toutes les réponses sont vérifiées** (`tests/test_tous_les_boutons.py`) : une visite complète, avec et sans
+  boussole, question par question ; à chaque question, l'étiquette envoyée au téléphone redonne la même question, et
+  **chaque bouton** (et « Autre… » avec une valeur tapée) est noté et répond à la question. Pareil pour tous les boutons
+  de la fiche (plus de 100) ;
+- **la boussole** n'avait pas été enlevée, mais sur iPhone le nord ne se cale que quand le haut du téléphone est presque
+  à plat ; tenu droit dès le début, il n'a donné aucun cap pendant 35 s, et le gyroscope n'était pas envoyé (rien pour
+  retrouver le côté des murs filmés avant). Maintenant : le gyroscope part dès le début ; la boussole affiche « nord :
+  téléphone à plat 1 s » et l'assistant le dit une fois ; les murs filmés avant prennent leur côté dès que le nord est
+  connu ; l'orientation n'est demandée à l'oral qu'après une minute sans nord ;
+- **« Autre… » n'ouvrait pas le clavier** sur iPhone (la case apparaissait après l'appui) : la case « Autre valeur » est
+  maintenant affichée directement avec les boutons ; un appui dessus ouvre le clavier chiffres.
+
+Le prototype compte 318 tests (et le projet, à la racine, 654).
 
 ## Réglages (variables d'environnement)
 

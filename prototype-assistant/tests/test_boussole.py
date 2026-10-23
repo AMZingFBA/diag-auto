@@ -237,3 +237,36 @@ def test_visite_avec_la_boussole_du_telephone(tmp_path):
         ("le mur nord", "nord"), ("le mur sud", "sud")]
     assert c.boussole_fiabilite == "bonne" and round(c.correction_cap) == 20
     assert not [d for d in dits if "orienté" in d]  # boussole fiable : aucune question d'orientation
+
+
+# --- iPhone tenu droit : le nord arrive après les premiers murs (test de Noah du 23/10) -------------------------------
+
+
+def test_mur_filme_avant_le_nord_prend_son_cote_ensuite():
+    c = Checklist()
+    c.regler_boussole(None, "absente", True)  # gyroscope seul : le nord n'est pas encore calé
+    c.attente_boussole = True
+    mur, _ = mur_filme(c, "Ce mur donne dehors, brique 30 cm, isolé.", lacet=100.0)
+    assert mur.orientation == "" and c.orientation_a_demander() is None  # on attend le nord, sans le demander
+    c.regler_boussole(260.0, "bonne", True)  # téléphone posé à plat une seconde : cap − lacet = 260°
+    assert mur.orientation == "nord"  # 100 + 260 = 360 : le côté retrouvé après coup
+
+
+def test_nord_pas_encore_cale_dit_une_fois(tmp_path):
+    from test_conversation import CerveauScenario, poli
+    from test_fluidite import attendre, ouvrir, parler
+
+    async def scenario():
+        session, recus = await ouvrir(tmp_path, CerveauScenario(poli()))
+        for t in range(1, 8):  # iPhone tenu droit : gyroscope, pas de cap
+            await session.recevoir_controle({"type": "capteurs", "t": float(t), "cap": None, "lacet": 100.0, "inclinaison": 85.0})
+        session.t_video = 7.0
+        await parler(session, "Ce mur donne dehors, brique 30 cm, isolé par l'intérieur.")
+        await attendre(session)
+        await session.terminer()
+        return session, [m["texte"] for m in recus if m["type"] == "dire"]
+
+    session, dits = asyncio.run(scenario())
+    assert sum("tenez le téléphone à plat" in d for d in dits) == 1
+    assert not [d for d in dits if "orienté" in d]  # pas « Ce mur est orienté nord, sud… ? » tant qu'on attend le nord
+    assert session.checklist.attente_boussole

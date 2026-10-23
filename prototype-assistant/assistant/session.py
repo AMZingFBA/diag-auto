@@ -75,6 +75,24 @@ def valeurs_attendues(cible: Cible | None) -> list[str]:
     return ["oui", "non", *valeurs] if cible.genre == "confirmation" else valeurs
 
 
+def appliquer_coche(checklist: Checklist, cible: Cible, valeur: str, citation: str, t: float) -> list[dict]:
+    """Une réponse cochée (ou tapée) sur le téléphone, appliquée comme une réponse dite. Une information précise est notée
+    telle quelle ; oui / non, « en partie sur le voisin, en partie dehors », la réponse à « Quel est le chauffage
+    principal ? »… sont compris par les règles, comme s'ils avaient été dits en réponse à cette question."""
+    if cible.genre in ("champ", "secondaire") and cible.element_id and not valeur.startswith("en partie"):
+        actions = [{"outil": "enregistrer_reponse", "element_id": cible.element_id, "type": cible.type, "champ": cible.champ,
+                    "valeur": valeur, "citation": citation}]
+        return appliquer(checklist, actions, t, [citation])
+    actions = extraire(valeur, checklist, cible).actions
+    for a in actions:
+        # La valeur exacte d'un bouton (« local chauffé (voisin) ») est gardée telle quelle : relue comme une phrase, elle
+        # devenait « local chauffé », une cloison (test du 23/10 : le mur sur le voisin sortait du DPE).
+        if (a["outil"] == "enregistrer_reponse" and a.get("type") == cible.type and a.get("valeur") != valeur
+                and valeur in {v for _, v in VOCABULAIRE.get((cible.type, a.get("champ", "")), [])}):
+            a["valeur"] = valeur
+    return appliquer(checklist, actions, t, [valeur])
+
+
 def _de(nom: str) -> str:
     """« le mur côté cave » → « du mur côté cave », « la fenêtre » → « de la fenêtre », « les 3 fenêtres » → « des 3 fenêtres »."""
     for article, contraction in (("le ", "du "), ("les ", "des ")):
@@ -105,6 +123,7 @@ ACCUSES = ("Noté.", "C'est noté.", "D'accord, noté.")
 RELANCES = ("Alors…", "Voyons…")
 RELANCE_S = 1.4
 RATTRAPAGE_S = 60.0  # étape 10 : une phrase non remise pendant une coupure est redite si elle a moins d'une minute
+ATTENTE_NORD_S = 60.0  # gyroscope sans nord (iPhone tenu droit) : orientation demandée à l'oral seulement après 1 min
 # « Ce mur, ce mur et ce mur », « un mur ici, un mur ici » : des murs montrés un par un (texte normalisé).
 _DESIGNATION_MUR = re.compile(r"\b(?:(?:ce|cet)\s+mur(?:\s+(?:ici|la))?|un\s+mur\s+(?:ici|la))\b"
                               r"(?!\s+(?:de|du|des|d|en|est|donne|fait|avec|qui)\b)")
@@ -253,7 +272,9 @@ class Session:
         self._annonce = ""  # contradiction à dire avant la prochaine question : « Noté : parpaing au lieu de brique. »
         self._derniere_cle = ""  # clé de la dernière question du parcours (pour la reposer après une digression)
         self.boussole = Boussole()  # boussole et gyroscope du téléphone (étape 6)
-        self._calibration_demandee = False  # « faites un 8 avec le téléphone » : dit une seule fois
+        self._calibration_demandee = False
+        self._nord_demande = False  # « tenez le téléphone à plat une seconde » : dit une seule fois
+        self._cochees: list[tuple[float, str]] = []  # réponses cochées : Claude peut les citer  # « faites un 8 avec le téléphone » : dit une seule fois
         self._complements: set[asyncio.Task] = set()  # relectures de Claude en arrière-plan
         self._compteurs = {"acceptees": 0, "refusees": 0, "questions": 0, "retenues": 0, "veilles": 0, "bips": 0, "relectures_claude": 0,
                            "phrases_dites": 0}
@@ -457,6 +478,7 @@ class Session:
                 fichier.write(json.dumps({"t": round(mesure.t, 3), "cap": mesure.cap, "lacet": mesure.lacet,
                                           "precision": mesure.precision, "inclinaison": mesure.inclinaison}) + "\n")
             self.checklist.regler_boussole(self.boussole.correction(), self.boussole.fiabilite(), self.boussole.gyroscope)
+            self.checklist.attente_boussole = self.boussole.gyroscope and self.checklist.correction_cap is None and mesure.t < ATTENTE_NORD_S
         elif genre == "fin":
             await self.fin_visite()
 
@@ -1391,6 +1413,10 @@ class Session:
                 if self.checklist.boussole_fiabilite == "faible" and not self._calibration_demandee:
                     self._calibration_demandee = True
                     self._annonce = f"{self._annonce} Boussole perturbée : faites un 8 avec le téléphone.".strip()
+                elif vise.cap is None and vise.lacet is not None and self.checklist.correction_cap is None and not self._nord_demande:
+                    # iPhone tenu droit : le nord n'est pas encore calé (test du 23/10). Dit une fois.
+                    self._nord_demande = True
+                    self._annonce = f"{self._annonce} Pour la boussole, tenez le téléphone à plat une seconde.".strip()
 
     def _noter_contradictions(self, depuis: int) -> None:
         """Contradictions relevées par la dernière phrase : la dernière valeur est gardée, et c'est dit au
@@ -1441,6 +1467,9 @@ class Session:
 
     def _phrases_recentes(self, contexte: Contexte) -> list[str]:
         recentes = [texte for _, t_fin, texte in self.phrases if t_fin >= contexte.t - 90]
+        # Une réponse cochée sur le téléphone vaut une réponse dite (test du 23/10 : « citation introuvable » pour un
+        # « voisin » coché, que Claude voulait noter).
+        recentes += [texte for t, texte in self._cochees if t >= contexte.t - 90]
         # Phrases regroupées : citation à cheval ; second avis de Whisper : Claude peut citer l'une ou l'autre transcription.
         return recentes + [p for p in (contexte.phrase, contexte.autre_transcription) if p]
 
@@ -1566,15 +1595,8 @@ class Session:
         t = self.t_video
         citation = f"{'tapé' if message.get('saisie') else 'coché'} sur le téléphone : {libelle}"
         self._interrompue = None  # la question coupée a eu sa réponse : rien à redire
-        if cible.genre in ("champ", "secondaire") and cible.element_id and not valeur.startswith("en partie"):
-            actions = [{"outil": "enregistrer_reponse", "element_id": cible.element_id, "type": cible.type, "champ": cible.champ,
-                        "valeur": valeur, "citation": citation}]
-            resultats = appliquer(self.checklist, actions, t, [citation])
-        else:
-            # Oui / non, pièce, réponse à « Quel est le chauffage principal ? » : le mot coché, compris par les règles comme
-            # s'il avait été dit en réponse à cette question.
-            extraction = extraire(valeur, self.checklist, cible)
-            resultats = appliquer(self.checklist, extraction.actions, t, [valeur])
+        resultats = appliquer_coche(self.checklist, cible, valeur, citation, t)
+        self._cochees += [(t, citation), (t, valeur), (t, libelle)]
         self._situer(resultats, t - 1.0, t)  # « Ce mur donne sur quoi ? » « Extérieur » coché : le mur filmé, et son côté
         self._suivre(resultats)
         self.journaliser("reponse_cochee", cible=cible.code, valeur=valeur, libelle=libelle,
