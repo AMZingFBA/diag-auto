@@ -1184,7 +1184,7 @@ image : pièce « U », cuisine, U, chambre, U), un coup d'œil toutes les 8 s :
 du séjour reconnu à tort), `tests/test_page_navigateur.py` (le croquis dessiné dans le coin, agrandi, renommer, réunir,
 déplacer).
 
-Le prototype compte 340 tests (et le projet, à la racine, 654) à cette étape ; 353 avec le choix de la mission ; 393 avec la capture du tour (étape 15) ; 408 avec le plan dans un repère commun.
+Le prototype compte 340 tests (et le projet, à la racine, 654) à cette étape ; 353 avec le choix de la mission ; 393 avec la capture du tour (étape 15) ; 408 avec le plan dans un repère commun ; 411 avec le plan dans le sens de la marche.
 
 ## Choix de la mission avant de filmer (23/10/2026)
 
@@ -1338,6 +1338,42 @@ prenait 10 à 13 s par phrase).
 les déplacements, porte sur le mur commun, visite complète avec rotation sur place refusée, pièce décidée sur les images du
 tour), `tests/test_missions.py` (les vraies phrases de Noah, « tu m'entends ? »), `tests/test_voix_croquis.py`,
 `tests/test_page_navigateur.py` (plan dans un repère commun, flèche « vous êtes ici »).
+
+## Étape 15 (fin) : le plan dans le sens de la marche, et ce que dit Noah d'abord (23/10/2026, après le test de 12:46)
+
+**Ce que Noah a dit** : « regarde la vidéo, il se perd complètement… il faut que tu cherches un autre moyen de faire le
+plan, une manière plus intelligente, et qui est sûr qu'il ne se trompe pas ; le logiciel ne se repère pas, il fait les
+choses dans le mauvais sens ».
+
+**Ce que montrait la visite de 12:46** (rejouée) :
+- le plan était dessiné le nord en haut : en marchant vers le sud, ce qui est devant apparaît en bas et la gauche à droite,
+  alors qu'un croquis à la main se dessine dans le sens où l'on avance : le « mauvais sens » ;
+- « là je suis au séjour, tu m'as mis dans le couloir » avait fondu dans le séjour le couloir que Noah avait lui-même
+  nommé ;
+- « la salle de bain est dans le couloir qui relie la cuisine au séjour » n'était pas utilisée ;
+- « et au bout du séjour, il a une chambre » (montrée depuis le séjour) puis, en y entrant, Claude, qui n'en avait aucune
+  image, voyait « une nouvelle chambre » : « Chambre 2 », en double.
+
+**Ce qui change** :
+- **le plan dans le sens de la marche** (`web/app.js`, `plan.sens_marche`, `plan.sens_entree`) : en direct, la dernière
+  marche vers le haut (ce qui est devant est en haut, ce qui est à gauche à gauche) ; en grand, la première marche vers le
+  haut (l'entrée en bas) ; le nord est une petite flèche qui tourne avec le dessin ; « vous êtes ici » suit la caméra dans
+  ce sens ;
+- **ce qu'il dit de la disposition est utilisé** (geste « relation », `plan._contre`) : « la salle de bain est dans le
+  couloir qui relie la cuisine au séjour » colle la salle de bain à ces pièces sur le plan ;
+- **une correction n'efface plus une pièce qu'il a nommée** : « je suis au séjour, tu m'as mis dans le couloir » le met au
+  séjour, le couloir reste ; seule une pièce devinée sur l'image est fondue dans la bonne ;
+- **une pièce montrée depuis une porte, puis où l'on entre, reste la même pièce** : la « nouvelle chambre » vue par Claude
+  est la chambre déjà nommée et jamais filmée de l'intérieur (plus de « Chambre 2 »).
+
+**Ce qui reste incertain, honnêtement** : sans LiDAR, aucune méthode automatique sur un téléphone n'est sûre en direct. La
+position vient des pas et du gyroscope (0,5 à 2 m d'erreur) ; le plan en direct est une esquisse qui suit les pas et ce que
+dit le diagnostiqueur. Pour un plan sûr, proposé à Noah : la vidéo complète envoyée par morceaux pendant la visite puis
+reconstruite en 3D après la visite (COLMAP/GLOMAP, licence BSD : les pièces placées d'après les images, pas d'après les
+pas), et en fin de visite 1 à 3 questions sur ce qui reste douteux, avec déplacement d'une pièce au doigt.
+
+**Tests** : `tests/test_missions.py` (correction qui garde le couloir, relation dite, pièce montrée puis entrée sans
+doublon), `tests/test_page_navigateur.py` (plan dans le sens de la marche, flèche du nord, « vous êtes ici »).
 
 ## Correction : vidéos d'iPhone lues à l'envers après la visite (23/10/2026)
 

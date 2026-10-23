@@ -258,3 +258,79 @@ def test_amiante_vraies_phrases_de_noah_comprises(tmp_path, monkeypatch):
     dits = [m["texte"] for m in recus if m["type"] == "dire"]
     assert "Oui, l'escalier." in dits and "Oui, je vous entends." in dits
     assert "Ici c'est le salon." not in claude.phrases  # compris par les règles, sans Claude
+
+
+def test_amiante_correction_garde_le_couloir_et_relation_dite(tmp_path, monkeypatch):
+    # 2e test de Noah (12:46) : « là je suis au séjour, tu m'as mis dans le couloir » avait fondu le couloir dans le séjour ;
+    # « la salle de bain est dans le couloir qui relie la cuisine au séjour » était ignorée.
+    from assistant.voix_croquis import GesteVoix
+
+    monkeypatch.setattr(module_session, "INTERVALLE_PIECES_S", 1000.0)
+
+    class ClaudeQuiComprend:
+        gestes = {
+            "Ici, la cuisine.": GesteVoix("ici", "Cuisine"),
+            "J'y suis, je suis dans le couloir.": GesteVoix("ici", "Couloir"),
+            "Ici il y a le séjour.": GesteVoix("vue", "Séjour"),
+            "Là je suis au séjour, tu m'as mis dans le couloir.": GesteVoix("correction", "Séjour", "Couloir", "D'accord, séjour."),
+            "La salle de bain est dans le couloir qui relie la cuisine au séjour.":
+                GesteVoix("relation", "Salle de bain", avec=("Couloir", "Cuisine", "Séjour")),
+        }
+
+        async def demarrer(self, **_):
+            pass
+
+        async def fermer(self):
+            pass
+
+        async def reconnaitre(self, images, references, courante):
+            return None
+
+        async def comprendre_voix(self, phrase, courante, pieces):
+            return self.gestes.get(phrase, GesteVoix("rien"))
+
+    async def scenario():
+        session, recus = await ouvrir(tmp_path, CerveauScenario(poli()), mission="amiante")
+        session.regard = ClaudeQuiComprend()
+        for phrase in ClaudeQuiComprend.gestes:
+            await parler(session, phrase)
+            await attendre(session)
+        await session.terminer()
+        return session, recus
+
+    session, recus = asyncio.run(scenario())
+    assert [p.nom for p in session.checklist.pieces.values()] == ["Cuisine", "Couloir", "Séjour", "Salle de bain"]
+    assert session.checklist.nom_piece(session.checklist.piece_courante) == "Séjour"  # il est au séjour, le couloir reste
+    assert session.croquis.relations == [("salle de bain", ("couloir", "cuisine", "sejour"))]
+    assert "D'accord, séjour." in [m["texte"] for m in recus if m["type"] == "dire"]
+
+
+def test_amiante_piece_montree_puis_entree_sans_doublon(tmp_path, monkeypatch):
+    # Rejeu du 2e test de Noah (12:46) : « et au bout du séjour, il a une chambre » (montrée depuis le séjour), puis en y
+    # entrant Claude, qui n'en avait aucune image, voit « une nouvelle chambre » : c'était « Chambre 2 », en double.
+    from assistant.voix_croquis import GesteVoix
+
+    monkeypatch.setattr(module_session, "INTERVALLE_PIECES_S", 1000.0)
+
+    class ClaudeQuiVoitEtComprend(ClaudeQuiVoitLesPieces):
+        async def comprendre_voix(self, phrase, courante, pieces):
+            return GesteVoix("vue", "Chambre") if "chambre" in phrase else GesteVoix("rien")
+
+    claude = ClaudeQuiVoitEtComprend({1.0: AvisPiece(None, "Séjour", "forte"), 20.0: AvisPiece(None, "Chambre", "forte")})
+
+    async def scenario():
+        session, recus = await ouvrir(tmp_path, CerveauScenario(poli()), mission="amiante")
+        session.regard = claude
+        await filmer(session, 1.0, 0.0)
+        await parler(session, "Et au bout de séjour, il a une chambre.")
+        await attendre(session)
+        montree = session.checklist.nom_piece(session.checklist.piece_courante)
+        await filmer(session, 20.0, 90.0)
+        await session.terminer()
+        return session, recus, montree
+
+    session, recus, montree = asyncio.run(scenario())
+    assert montree == "Séjour"  # montrée sans y entrer : on est toujours au séjour
+    assert [p.nom for p in session.checklist.pieces.values()] == ["Séjour", "Chambre"]
+    assert session.checklist.nom_piece(session.checklist.piece_courante) == "Chambre"
+    assert "Nouvelle pièce : Chambre 2." not in [m["texte"] for m in recus if m["type"] == "dire"]

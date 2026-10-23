@@ -316,13 +316,30 @@ def test_plan_dans_un_repere_commun(page):
                         "portes": [{"a": "entree", "b": "sejour", "x": 0.0, "y": 1.5}],
                         "trajet": [[0, 0], [0, 1], [0, 2], [0, 3], [0, 4]]}}
     page.js(f"(() => {{ choisirMission('amiante'); capteurs.cap = 90; afficherCroquis({json.dumps(croquis)}); return true; }})()")
-    assert page.js("$('croquis-petit').querySelectorAll('polygon').length") == 3  # 2 pièces + la flèche
+    assert page.js("$('croquis-petit').querySelectorAll(':scope > polygon').length") == 2  # une par pièce (flèche et nord à part)
     assert page.js("$('croquis-petit').querySelectorAll('polyline').length") == 1  # le trajet
     assert "rotate(90)" in page.js("$('croquis-petit').querySelector('.vous-ici').getAttribute('transform')")
     # Le séjour (au nord de l'entrée) est dessiné au-dessus d'elle : y plus petit à l'écran.
-    ys = page.js("[...$('croquis-petit').querySelectorAll('polygon')].slice(0, 2).map((p) => p.getBBox().y)")
+    ys = page.js("[...$('croquis-petit').querySelectorAll(':scope > polygon')].map((p) => p.getBBox().y)")
     assert ys[1] < ys[0]
     page.toucher("#croquis")
     assert "A" in page.js("[...$('croquis-grand').querySelectorAll('text')].map((t) => t.textContent)")
     assert page.js("$('plan-pieces').querySelectorAll('.fleche').length") == 0  # pas de flèches de case sur le plan
     page.js("(() => { $('fermer-plan').onclick(); capteurs.cap = null; return true; })()")
+
+
+
+def test_plan_dans_le_sens_de_la_marche(page):
+    # 2e test de Noah (23/10) : nord en haut, en marchant vers le sud, tout paraissait « dans le mauvais sens ». Le plan se
+    # dessine maintenant dans le sens de la marche : la pièce vers laquelle il marche est en haut.
+    plan = {"oriente": True, "courante": "entree", "position": [0.0, -1.0], "sens_marche": 180.0, "sens_entree": 180.0,
+            "pieces": [{"cle": "entree", "nom": "Entrée", "source": "dit", "polygone": [[-1.2, -1.2], [1.2, -1.2], [1.2, 1.2], [-1.2, 1.2]], "lettres": []},
+                       {"cle": "sejour", "nom": "Séjour", "source": "dit", "polygone": [[-2, -6], [2, -6], [2, -1.2], [-2, -1.2]], "lettres": []}],
+            "portes": [], "trajet": [[0, 0], [0, -1]]}
+    croquis = {"oriente": True, "courante": "entree", "portes": [], "ouvertures": [], "plan": plan,
+               "pieces": [{"cle": "entree", "nom": "Entrée", "source": "dit", "x": 0, "y": 0, "murs": {}}]}
+    page.js(f"(() => {{ choisirMission('amiante'); capteurs.cap = 180; afficherCroquis({json.dumps(croquis)}); return true; }})()")
+    ys = page.js("[...$('croquis-petit').querySelectorAll(':scope > polygon')].map((p) => p.getBBox().y)")
+    assert ys[1] < ys[0]  # le séjour, au sud, devant lui : en haut
+    assert "rotate(0)" in page.js("$('croquis-petit').querySelector('.vous-ici').getAttribute('transform')")  # il regarde devant
+    page.js("(() => { capteurs.cap = null; return true; })()")

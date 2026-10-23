@@ -21,7 +21,7 @@ import json
 import re
 from dataclasses import dataclass
 
-GESTES = ("ici", "vue", "retour", "correction", "inconnu", "question", "rien")
+GESTES = ("ici", "vue", "retour", "correction", "relation", "inconnu", "question", "rien")
 
 CONSIGNES_VOIX_CROQUIS = (
     "Tu aides un diagnostiqueur immobilier qui filme un logement pour en dessiner le croquis (repérage amiante ou plomb). "
@@ -33,11 +33,15 @@ CONSIGNES_VOIX_CROQUIS = (
     "- « retour » : il revient dans un espace déjà vu (« on retourne dans le salon », « la cuisine du début ») ;\n"
     "- « correction » : l'espace affiché est faux (« non c'est la buanderie », « t'as mis séjour à la place de cuisine », "
     "« remplace… ») : donne le bon nom, et le nom faux s'il le dit ;\n"
+    "- « relation » : il dit où se trouve un espace par rapport à d'autres (« la salle de bain est dans le couloir qui "
+    "relie la cuisine au séjour », « la chambre est au bout du séjour ») : « nom » = cet espace, « avec » = les espaces "
+    "cités ;\n"
     "- « inconnu » : une porte vers un local qu'il ne connaît pas (« ici on a un truc ») ;\n"
     "- « question » : il s'adresse au logiciel (« tu m'entends ? », « c'est bon ? ») ;\n"
     "- « rien » : autre chose (un commentaire, du bruit).\n"
     "Garde son mot pour le nom (« salon » reste « salon » ; « petit couloir » devient « Couloir »). Réponds uniquement par un "
-    "JSON sur une ligne : {\"geste\": \"…\", \"nom\": \"…\", \"faux\": \"…\", \"reponse\": \"…\"}. « reponse » : 2 à 4 mots à lui "
+    "JSON sur une ligne : {\"geste\": \"…\", \"nom\": \"…\", \"faux\": \"…\", \"avec\": [\"…\"], \"reponse\": \"…\"}. "
+    "« reponse » : 2 à 4 mots à lui "
     "dire seulement pour une question ou une correction (« Oui, je vous entends. », « D'accord, cuisine. »), sinon vide.")
 
 
@@ -47,6 +51,7 @@ class GesteVoix:
     nom: str = ""
     faux: str = ""
     reponse: str = ""
+    avec: tuple[str, ...] = ()  # « relation » : les espaces cités (« dans le couloir », « entre la cuisine et le séjour »)
 
 
 def contenu_voix(phrase: str, courante: str | None, pieces: list[str]) -> list[dict]:
@@ -75,7 +80,10 @@ def analyser_voix(texte: str) -> GesteVoix | None:
     if geste not in GESTES:
         return None
     nom = nom_propre(donnees.get("nom") or "")
-    if geste in ("ici", "vue", "retour", "correction") and not nom:
+    if geste in ("ici", "vue", "retour", "correction", "relation") and not nom:
+        return None
+    avec = tuple(n for n in (nom_propre(a) for a in (donnees.get("avec") or []) if isinstance(a, str)) if n and n != nom)
+    if geste == "relation" and not avec:
         return None
     reponse = " ".join(str(donnees.get("reponse") or "").split())[:60]
-    return GesteVoix(geste, nom, nom_propre(donnees.get("faux") or ""), reponse)
+    return GesteVoix(geste, nom, nom_propre(donnees.get("faux") or ""), reponse, avec)

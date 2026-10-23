@@ -484,7 +484,7 @@ class Session:
         if self.trajectoire.avec_pas() and self.croquis.passages:
             # Le plan dans un repère commun : les pièces là où l'on a marché, les portes là où l'on est passé.
             plan = construire_plan(self.trajectoire, [(p.vers, p.t) for p in self.croquis.passages], self.t_video,
-                                   self.checklist.correction_cap, self.croquis.vues)
+                                   self.checklist.correction_cap, self.croquis.vues, self.croquis.relations)
             croquis["plan"] = plan_vers_dict(plan, {k: p.nom for k, p in self.croquis.pieces.items()},
                                              {k: p.source for k, p in self.croquis.pieces.items()}, self.croquis.courante)
         return croquis
@@ -1913,12 +1913,30 @@ class Session:
         elif geste.geste == "correction" and cle is not None:
             existante = self.checklist.trouver_piece(geste.nom)
             try:
-                if existante and existante != cle:
-                    self.checklist.fusionner_pieces(cle, existante)
+                if existante and existante != cle and self.checklist.pieces[cle].source == "image":
+                    self.checklist.fusionner_pieces(cle, existante)  # la pièce vue sur l'image était celle-là
+                elif existante and existante != cle:
+                    # « Je suis au séjour, tu m'as mis dans le couloir » : il est dans le séjour ; le couloir, qu'il avait
+                    # nommé, reste une pièce (2e test du 23/10 : il avait été fondu dans le séjour).
+                    self.checklist.definir_piece(self.checklist.nom_piece(existante), t_debut, citation=texte)
                 elif not existante:
                     self.checklist.renommer_piece(cle, geste.nom, "dit")
             except ErreurChecklist:
                 return []
+        elif geste.geste == "relation":
+            cle_x = self.checklist.trouver_piece(geste.nom) or self.checklist.piece_pour(geste.nom, t_debut)
+            avec = []
+            for nom in geste.avec:
+                cle_y = self.checklist.trouver_piece(nom)
+                if cle_y is None:
+                    cle_y = self.checklist.piece_pour(nom, t_debut)
+                avec.append(cle_y)
+            if cle_x not in self.croquis.pieces:
+                self.croquis.voir(cle_x, self.checklist.nom_piece(cle_x), "dit", (t_debut + t_fin) / 2)
+            for cle_y in avec:
+                if cle_y not in self.croquis.pieces:
+                    self.croquis.voir(cle_y, self.checklist.nom_piece(cle_y), "dit", (t_debut + t_fin) / 2)
+            self.croquis.relations.append((cle_x, tuple(avec)))
         if geste.reponse:
             await self.dire(geste.reponse, reference, forcer=True, question=False)
         return [{"statut": "accepte", "geste": geste.geste}] if geste.geste != "question" else []
@@ -1953,6 +1971,12 @@ class Session:
             # « Nouvelle cuisine » juste après être entré dans la cuisine (essai sur la visite du 22/10 : « Cuisine 2 ») :
             # un autre coin de la même pièce.
             avis = type(avis)(courante, "", avis.confiance)
+        if avis is not None and avis.piece is None and avis.type:
+            vue = self._piece_nommee_du_type(avis.type, cle)
+            if vue is not None:
+                # « Au bout du séjour, une chambre » (dite, jamais filmée de l'intérieur), puis Claude, qui n'en a aucune
+                # image, voit « une nouvelle chambre » en y entrant : c'est elle (2e test du 23/10 : « Chambre 2 » en double).
+                avis = type(avis)(self.checklist.nom_piece(vue), "", avis.confiance)
         if avis is None or avis.confiance == "faible" or (avis.piece and avis.piece == courante):
             self._avis_piece = ""
             if cle is not None and avis is not None and avis.piece == courante:
@@ -1996,6 +2020,16 @@ class Session:
         vus = {cle_texte(type_vu)} | ({SYNONYMES_PIECES[cle_texte(type_vu)]} if cle_texte(type_vu) in SYNONYMES_PIECES else set())
         noms = {cle_texte(courante)} | (self._types_vus.get(cle, set()) if cle else set())
         return any(f"{nom} ".startswith(f"{vu} ") for nom in noms for vu in vus)
+
+    def _piece_nommee_du_type(self, type_vu: str, cle: str | None) -> str | None:
+        """Une pièce de ce type déjà nommée (montrée depuis une porte, citée dans une phrase) mais jamais filmée de
+        l'intérieur : la dernière montrée."""
+        vus = {cle_texte(type_vu)} | ({SYNONYMES_PIECES[cle_texte(type_vu)]} if cle_texte(type_vu) in SYNONYMES_PIECES else set())
+        candidates = [k for k, piece in self.checklist.pieces.items()
+                      if k != cle and k not in self._references
+                      and any(f"{cle_texte(piece.nom)} ".startswith(f"{vu} ") for vu in vus)]
+        montrees = {k: t for k, t in self.croquis.vues}
+        return max(candidates, key=lambda k: montrees.get(k, -1.0), default=None)
 
     async def _annoncer_piece(self, cle: str, texte: str) -> None:
         """L'annonce d'une nouvelle pièce, jamais par-dessus le diagnostiqueur : tout de suite s'il se tait, sinon au

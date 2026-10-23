@@ -58,6 +58,7 @@ class Croquis:
         self.courante: str | None = None
         self.fixees: dict[str, tuple[int, int]] = {}  # pièces déplacées à la main sur le croquis
         self.vues: list[tuple[str, float]] = []  # espaces regardés sans y entrer (« au bout du salon, une chambre »)
+        self.relations: list[tuple[str, tuple[str, ...]]] = []  # « la salle de bain est dans le couloir » : (x, (couloir,))
 
     def entrer(self, cle: str, nom: str, source: str, t: float, cap: float | None = None, lacet: float | None = None) -> None:
         """On est dans la pièce `cle` (nouvelle, ou déjà vue : une revisite ne crée rien)."""
@@ -86,6 +87,8 @@ class Croquis:
             p.vers = nouvelle if p.vers == ancienne else p.vers
         self.courante = nouvelle if self.courante == ancienne else self.courante
         self.vues = [(nouvelle if c == ancienne else c, t) for c, t in self.vues]
+        self.relations = [(nouvelle if x == ancienne else x, tuple(nouvelle if c == ancienne else c for c in avec))
+                          for x, avec in self.relations]
 
     def fusionner(self, cle: str, dans: str) -> None:
         """La pièce `cle` était `dans` (reconnue à tort) : ses passages deviennent ceux de `dans`."""
@@ -97,6 +100,7 @@ class Croquis:
         self.passages = [p for p in self.passages if p.de != p.vers]
         self.courante = dans if self.courante == cle else self.courante
         self.vues = [(dans if c == cle else c, t) for c, t in self.vues]
+        self.relations = [(dans if x == cle else x, tuple(dans if c == cle else c for c in avec)) for x, avec in self.relations]
 
     def deplacer(self, cle: str, vers: str, correction: float | None = None) -> None:
         """Déplace une pièce d'une case (ex. deux portes du même côté d'une grande pièce : le croquis ne peut pas le deviner)."""

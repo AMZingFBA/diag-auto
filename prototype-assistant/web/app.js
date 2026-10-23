@@ -3,7 +3,7 @@
 // (16 kHz) et une image par seconde, et lit à voix haute les questions de l'assistant.
 
 // Version de la page, comparée à celle du serveur (test du 23/10 : l'iPhone gardait l'ancienne page en mémoire).
-const VERSION_PAGE = "2026-10-23-11";
+const VERSION_PAGE = "2026-10-23-12";
 const $ = (id) => document.getElementById(id);
 const TAUX = 16000;
 const TYPE_SON = 1;
@@ -502,6 +502,15 @@ function dessinerPlan(svg, plan, grand) {
   const largeur = svg.clientWidth || 132, hauteur = svg.clientHeight || 132;
   svg.setAttribute("viewBox", `0 0 ${largeur} ${hauteur}`);
   svg.replaceChildren();
+  // Dessiné comme un croquis à la main, dans le sens de la marche (2e test de Noah, 23/10 : nord en haut, en marchant vers
+  // le sud, tout paraissait « dans le mauvais sens ») : en direct, la dernière marche vers le haut (ce qui est devant est
+  // en haut, ce qui est à gauche à gauche) ; en grand, la première marche vers le haut (l'entrée en bas).
+  const sens = (grand ? plan.sens_entree : plan.sens_marche) ?? plan.sens_marche ?? 0;
+  const r = (-sens * Math.PI) / 180;
+  const tourne = ([x, y]) => [x * Math.cos(r) + y * Math.sin(r), -x * Math.sin(r) + y * Math.cos(r)];
+  plan = { ...plan, pieces: plan.pieces.map((p) => ({ ...p, polygone: p.polygone.map(tourne) })),
+           trajet: plan.trajet.map(tourne), position: tourne(plan.position),
+           portes: plan.portes.map((d) => { const [x, y] = tourne([d.x, d.y]); return { ...d, x, y }; }) };
   const points = [...plan.pieces.flatMap((p) => p.polygone), ...plan.trajet, plan.position];
   const xs = points.map((p) => p[0]), ys = points.map((p) => p[1]);
   const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
@@ -546,11 +555,15 @@ function dessinerPlan(svg, plan, grand) {
                      "stroke-width": 1.5, "stroke-dasharray": "3 3", opacity: 0.8 });
   }
   const [vx, vy] = P(plan.position);
-  const ici = el("g", { class: "vous-ici", "data-x": vx, "data-y": vy, transform: `translate(${vx},${vy})` });
+  const ici = el("g", { class: "vous-ici", "data-x": vx, "data-y": vy, "data-sens": sens, transform: `translate(${vx},${vy})` });
   ici.append(creer("circle", { r: grand ? 6 : 4.5, fill: "#1a73e8", stroke: "#fff", "stroke-width": 2 }),
              creer("polygon", { points: grand ? "0,-17 6,-7 -6,-7" : "0,-12 4,-5 -4,-5", fill: "#1a73e8" }));
   tournerVousIci();
-  if (plan.oriente) el("text", { x: largeur - 10, y: 12, "text-anchor": "end", "font-size": grand ? 14 : 9, fill: "#b00", "font-weight": "700" }, "N ↑");
+  if (plan.oriente) {  // le nord, là où il est sur ce dessin tourné
+    const nord = el("g", { transform: `translate(${largeur - 14},${16}) rotate(${-sens})` });
+    nord.append(creer("polygon", { points: "0,-9 4,3 -4,3", fill: "#b00" }),
+                creer("text", { x: 0, y: 14, "text-anchor": "middle", "font-size": grand ? 11 : 8, fill: "#b00", "font-weight": "700" }, "N"));
+  }
 }
 
 // La flèche « vous êtes ici » suit la caméra : cap si le plan est orienté au nord, sinon lacet du gyroscope (le repère du plan).
@@ -558,7 +571,8 @@ function tournerVousIci() {
   const plan = etat.croquis && etat.croquis.plan;
   const direction = plan && plan.oriente ? capteurs.cap : capteurs.lacet;
   document.querySelectorAll(".vous-ici").forEach((g) => {
-    g.setAttribute("transform", `translate(${g.dataset.x},${g.dataset.y})${direction != null ? ` rotate(${direction})` : ""}`);
+    const angle = direction != null ? direction - (Number(g.dataset.sens) || 0) : null; // chaque dessin a son propre sens
+    g.setAttribute("transform", `translate(${g.dataset.x},${g.dataset.y})${angle != null ? ` rotate(${angle})` : ""}`);
   });
 }
 

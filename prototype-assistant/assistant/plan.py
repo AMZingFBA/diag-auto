@@ -62,6 +62,10 @@ class Plan:
     trajet: list[tuple[float, float]] = field(default_factory=list)
     position: tuple[float, float] = (0.0, 0.0)
     depuis_la_porte: set[str] = field(default_factory=set)  # pièces seulement regardées depuis leur porte
+    # Le sens de la marche (repère d'affichage), pour dessiner le plan comme un croquis à la main : ce qui est devant en
+    # haut (2e test de Noah, 23/10 : nord en haut, en marchant vers le sud tout paraissait « dans le mauvais sens »).
+    sens_marche: float | None = None  # celui de la dernière marche
+    sens_entree: float | None = None  # celui de la première marche (le plan d'ensemble, entrée en bas)
     axe: float = 0.0
     oriente: bool = False
 
@@ -97,7 +101,8 @@ def entrees(trajectoire: Trajectoire, changements: list[tuple[str, float]]) -> l
 
 
 def construire(trajectoire: Trajectoire, changements: list[tuple[str, float]], t_actuel: float,
-               correction: float | None = None, vues: list[tuple[str, float]] | None = None) -> Plan:
+               correction: float | None = None, vues: list[tuple[str, float]] | None = None,
+               relations: list[tuple[str, tuple[str, ...]]] | None = None) -> Plan:
     """Le plan : pièces (rectangles), portes, trajet et position, dans le repère d'affichage (nord en haut si la correction
     boussole − gyroscope est connue, ou si la trajectoire est déjà en caps)."""
     sejours = entrees(trajectoire, changements)
@@ -144,6 +149,11 @@ def construire(trajectoire: Trajectoire, changements: list[tuple[str, float]], t
             portes_vues.append((ici, cle, (x, y)))
     rectangles = {cle: _rectangle(cle, pts) for cle, pts in points.items()}
     _ecarter(rectangles)
+    for x, avec in relations or []:  # « la salle de bain est dans le couloir » : elle le touche
+        for y in avec:
+            if x in rectangles and y in rectangles and x != y:
+                _contre(rectangles[x], rectangles[y])
+        _ecarter(rectangles)
     _accoler(rectangles)
 
     plan = Plan(axe=axe)
@@ -165,6 +175,10 @@ def construire(trajectoire: Trajectoire, changements: list[tuple[str, float]], t
         if not any({pa, pb} == {a, b} for pa, pb, _, _ in plan.portes):
             plan.portes.append((a, b, *afficher(u, v)))
     plan.trajet = [tourner(x, y, vers_affichage) for x, y in _alleger([(x, y) for _, x, y in positions])]
+    marches = [m for m in trajectoire.marches() if m.distance >= 1.0]
+    if marches:
+        plan.sens_entree = _sens(trajectoire, marches[0], vers_affichage)
+        plan.sens_marche = _sens(trajectoire, marches[-1], vers_affichage)
     plan.position = tourner(*trajectoire.position(t_actuel), vers_affichage)
     return plan
 
@@ -183,6 +197,33 @@ def _rectangle(cle: str, pts: list[tuple[float, float]]) -> Rectangle:
     lu, lv = (long, court) if etendue_u >= etendue_v else (court, long)
     lu, lv = max(lu, etendue_u + 2 * MARGE_M), max(lv, etendue_v + 2 * MARGE_M)
     return Rectangle(cu - lu / 2, cv - lv / 2, cu + lu / 2, cv + lv / 2)
+
+
+def _sens(trajectoire: Trajectoire, marche, decalage: float) -> float | None:
+    """Direction moyenne des pas d'une marche (repère d'affichage)."""
+    directions = [p.direction for p in trajectoire.pas if p.compte and p.direction is not None and marche.t_debut <= p.t <= marche.t_fin]
+    if not directions:
+        return None
+    s = sum(math.sin(math.radians(d)) for d in directions)
+    c = sum(math.cos(math.radians(d)) for d in directions)
+    return (math.degrees(math.atan2(s, c)) + decalage) % 360.0
+
+
+def _contre(r: Rectangle, autre: Rectangle) -> None:
+    """Déplace r pour qu'il touche `autre`, du côté où il se trouve déjà (relation dite par le diagnostiqueur)."""
+    (cu, cv), (au, av) = r.centre, autre.centre
+    if r.u1 >= autre.u0 and autre.u1 >= r.u0 and r.v1 >= autre.v0 and autre.v1 >= r.v0:
+        return  # elles se touchent déjà
+    if abs(cu - au) * (autre.v1 - autre.v0) >= abs(cv - av) * (autre.u1 - autre.u0):
+        du = (autre.u1 - r.u0) if cu > au else (autre.u0 - r.u1)
+        r.u0, r.u1 = r.u0 + du, r.u1 + du
+        dv = min(0.0, autre.v1 - r.v0 - 0.5) if r.v0 > autre.v1 - 0.5 else max(0.0, autre.v0 - r.v1 + 0.5)
+        r.v0, r.v1 = r.v0 + dv, r.v1 + dv
+    else:
+        dv = (autre.v1 - r.v0) if cv > av else (autre.v0 - r.v1)
+        r.v0, r.v1 = r.v0 + dv, r.v1 + dv
+        du = min(0.0, autre.u1 - r.u0 - 0.5) if r.u0 > autre.u1 - 0.5 else max(0.0, autre.u0 - r.u1 + 0.5)
+        r.u0, r.u1 = r.u0 + du, r.u1 + du
 
 
 def _ecarter(rectangles: dict[str, Rectangle]) -> None:
@@ -298,4 +339,6 @@ def vers_dict(plan: Plan, noms: dict[str, str], sources: dict[str, str], courant
         "portes": [{"a": a, "b": b, "x": round(x, 2), "y": round(y, 2)} for a, b, x, y in plan.portes],
         "trajet": [arrondi(p) for p in plan.trajet],
         "position": arrondi(plan.position),
+        "sens_marche": None if plan.sens_marche is None else round(plan.sens_marche, 1),
+        "sens_entree": None if plan.sens_entree is None else round(plan.sens_entree, 1),
     }
