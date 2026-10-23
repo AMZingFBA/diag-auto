@@ -9,9 +9,11 @@ pièces presque jointives partagent leur mur ; la porte entre deux pièces est l
 posée sur leur mur commun. Pas de cotes : des
 proportions approximatives, à la mesure des pas (0,6 m par pas, hypothèse).
 
-Une pièce dont les murs ont été relevés (assistant/coins.py : chaque coin visé) garde sa forme exacte et ses longueurs :
-elle est seulement déplacée (jamais déformée) pour ne pas chevaucher ses voisines et partager leur mur ; ses murs donnent
-l'axe du logement, plus sûr que la direction des marches.
+Une pièce tracée sur la caméra (web/trace.js : chaque coin validé, la position du téléphone suivie par le sol filmé) est
+dessinée telle quelle, à sa place, avec ses angles : ni déplacée, ni déformée, ni remise d'équerre (Noah, 23/10 : « le plan
+2D doit se construire à partir des points réellement enregistrés, en respectant les changements de direction et les angles
+entre les murs »). Les pièces seulement estimées s'écartent d'elle ou s'étendent jusqu'à ses murs ; ses murs donnent l'axe
+du logement, plus sûr que la direction des marches.
 """
 
 from __future__ import annotations
@@ -49,7 +51,8 @@ class Rectangle:
     v0: float
     u1: float
     v1: float
-    mesure: bool = False  # murs relevés : la pièce se déplace, sa taille ne change jamais
+    mesure: bool = False  # pièce tracée : sa taille ne change jamais
+    fixe: bool = False  # pièce tracée : elle ne bouge pas non plus (elle est là où ses coins ont été validés)
 
     @property
     def centre(self) -> tuple[float, float]:
@@ -101,16 +104,6 @@ def axe_des_releves(releves: dict[str, list[tuple[float, float]]]) -> float:
 def _aire(poly: list[tuple[float, float]]) -> float:
     """Aire signée : positive si les sommets tournent dans le sens inverse des aiguilles d'une montre."""
     return sum(x1 * y2 - x2 * y1 for (x1, y1), (x2, y2) in zip(poly, poly[1:] + poly[:1])) / 2.0
-
-
-def _biais(poly: list[tuple[float, float]]) -> float:
-    """De combien les murs d'un polygone s'écartent des axes (−45 à 45°)."""
-    s = c = 0.0
-    for (x1, y1), (x2, y2) in zip(poly, poly[1:] + poly[:1]):
-        angle = math.radians(4.0 * math.degrees(math.atan2(x2 - x1, y2 - y1)))
-        s, c = s + math.dist((x1, y1), (x2, y2)) * math.sin(angle), c + math.dist((x1, y1), (x2, y2)) * math.cos(angle)
-    biais = math.degrees(math.atan2(s, c)) / 4.0 if math.hypot(s, c) > 1e-9 else 0.0
-    return (biais + 45.0) % 90.0 - 45.0
 
 
 def entrees(trajectoire: Trajectoire, changements: list[tuple[str, float]]) -> list[Sejour]:
@@ -186,17 +179,11 @@ def construire(trajectoire: Trajectoire, changements: list[tuple[str, float]], t
     formes: dict[str, list[tuple[float, float]]] = {}
     for cle, poly in releves.items():
         uv = [vers_axe(x, y) for x, y in poly]
-        if _aire(uv) < 0:
-            uv = uv[::-1]  # dans le sens inverse des aiguilles d'une montre, comme les rectangles (lettres A, B, C…)
-        biais = _biais(uv)
-        if abs(biais) <= 12.0:  # le gyroscope a un peu dérivé depuis la pièce d'avant : remise d'équerre avec le logement
-            cu, cv = sum(u for u, _ in uv) / len(uv), sum(v for _, v in uv) / len(uv)
-            uv = [(cu + du, cv + dv) for du, dv in (tourner(u - cu, v - cv, -biais) for u, v in uv)]
-        formes[cle] = uv
+        formes[cle] = uv[::-1] if _aire(uv) < 0 else uv  # sens inverse des aiguilles d'une montre (lettres A, B, C…)
     rectangles = {cle: _rectangle(cle, pts) for cle, pts in points.items() if cle not in formes}
     for cle, uv in formes.items():
         rectangles[cle] = Rectangle(min(u for u, _ in uv), min(v for _, v in uv), max(u for u, _ in uv),
-                                    max(v for _, v in uv), mesure=True)
+                                    max(v for _, v in uv), mesure=True, fixe=True)
     depart = {cle: r.centre for cle, r in rectangles.items()}
     _ecarter(rectangles)
     for x, avec in relations or []:  # « la salle de bain est dans le couloir » : elle le touche
@@ -274,7 +261,10 @@ def _sens(trajectoire: Trajectoire, marche, decalage: float) -> float | None:
 
 
 def _contre(r: Rectangle, autre: Rectangle) -> None:
-    """Déplace r pour qu'il touche `autre`, du côté où il se trouve déjà (relation dite par le diagnostiqueur)."""
+    """Déplace r pour qu'il touche `autre`, du côté où il se trouve déjà (relation dite par le diagnostiqueur). Une pièce
+    tracée ne bouge pas."""
+    if r.fixe:
+        return
     (cu, cv), (au, av) = r.centre, autre.centre
     if r.u1 >= autre.u0 and autre.u1 >= r.u0 and r.v1 >= autre.v0 and autre.v1 >= r.v0:
         return  # elles se touchent déjà
@@ -302,15 +292,18 @@ def _ecarter(rectangles: dict[str, Rectangle]) -> None:
                 ra, rb = rectangles[a], rectangles[b]
                 if not ra.chevauche(rb):
                     continue
+                if ra.fixe and rb.fixe:
+                    continue  # deux pièces tracées : chacune est là où ses coins ont été validés
                 pu = min(ra.u1, rb.u1) - max(ra.u0, rb.u0)
                 pv = min(ra.v1, rb.v1) - max(ra.v0, rb.v0)
                 (cau, cav), (cbu, cbv) = ra.centre, rb.centre
+                ka, kb = (0.0, 2.0) if ra.fixe else (2.0, 0.0) if rb.fixe else (1.0, 1.0)  # seule la pièce estimée s'écarte
                 if pu <= pv:
                     d = (pu / 2 + 1e-6) * (1 if cbu >= cau else -1)
-                    ra.u0, ra.u1, rb.u0, rb.u1 = ra.u0 - d, ra.u1 - d, rb.u0 + d, rb.u1 + d
+                    ra.u0, ra.u1, rb.u0, rb.u1 = ra.u0 - ka * d, ra.u1 - ka * d, rb.u0 + kb * d, rb.u1 + kb * d
                 else:
                     d = (pv / 2 + 1e-6) * (1 if cbv >= cav else -1)
-                    ra.v0, ra.v1, rb.v0, rb.v1 = ra.v0 - d, ra.v1 - d, rb.v0 + d, rb.v1 + d
+                    ra.v0, ra.v1, rb.v0, rb.v1 = ra.v0 - ka * d, ra.v1 - ka * d, rb.v0 + kb * d, rb.v1 + kb * d
                 bouge = True
         if not bouge:
             break
@@ -329,6 +322,8 @@ def _accoler(rectangles: dict[str, Rectangle], ecart_max: float = 0.8) -> None:
                 gauche, droite = (ra, rb) if ra.u0 < rb.u0 else (rb, ra)
                 ecart = droite.u0 - gauche.u1
                 if 0 < ecart < ecart_max:
+                    if gauche.fixe and droite.fixe:
+                        continue
                     if gauche.mesure and droite.mesure:  # deux pièces relevées : la seconde vient contre la première
                         droite.u0, droite.u1 = droite.u0 - ecart, droite.u1 - ecart
                     elif gauche.mesure or droite.mesure:  # seule la pièce estimée s'étend jusqu'au mur relevé
@@ -340,6 +335,8 @@ def _accoler(rectangles: dict[str, Rectangle], ecart_max: float = 0.8) -> None:
                 bas, haut = (ra, rb) if ra.v0 < rb.v0 else (rb, ra)
                 ecart = haut.v0 - bas.v1
                 if 0 < ecart < ecart_max:
+                    if bas.fixe and haut.fixe:
+                        continue
                     if bas.mesure and haut.mesure:
                         haut.v0, haut.v1 = haut.v0 - ecart, haut.v1 - ecart
                     elif bas.mesure or haut.mesure:

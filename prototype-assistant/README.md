@@ -1184,7 +1184,7 @@ image : pièce « U », cuisine, U, chambre, U), un coup d'œil toutes les 8 s :
 du séjour reconnu à tort), `tests/test_page_navigateur.py` (le croquis dessiné dans le coin, agrandi, renommer, réunir,
 déplacer).
 
-Le prototype compte 340 tests (et le projet, à la racine, 654) à cette étape ; 353 avec le choix de la mission ; 393 avec la capture du tour (étape 15) ; 408 avec le plan dans un repère commun ; 411 avec le plan dans le sens de la marche ; 416 avec les gardes de la voix (rien d'inventé, rien d'effacé) ; 429 avec le relevé des murs.
+Le prototype compte 340 tests (et le projet, à la racine, 654) à cette étape ; 353 avec le choix de la mission ; 393 avec la capture du tour (étape 15) ; 408 avec le plan dans un repère commun ; 411 avec le plan dans le sens de la marche ; 416 avec les gardes de la voix (rien d'inventé, rien d'effacé) ; 429 avec le relevé des murs ; 432 avec le tracé guidé du plan (qui remplace le relevé).
 
 ## Choix de la mission avant de filmer (23/10/2026)
 
@@ -1399,7 +1399,72 @@ doublon, espace montré qui est celui où l'on est, nom inventé refusé, pièce
 n'efface jamais une pièce déjà vécue), `tests/test_voix_croquis.py` (nom entendu même mal transcrit),
 `tests/test_page_navigateur.py` (plan dans le sens de la marche, flèche du nord, « vous êtes ici »).
 
+## Étape 17 : le tracé guidé du plan sur la caméra (23/10/2026)
+
+**Ce que Noah a demandé** (texte collé) : une croix de visée au centre de l'écran ; viser un coin à la jonction du mur et du
+sol, appuyer pour l'enregistrer ; en allant vers le coin suivant, un trait pointillé du dernier point validé à l'endroit visé ;
+valider le coin suivant fixe le segment, et ainsi de suite ; les points et les segments validés restent visibles à leur
+emplacement réel dans la caméra, même en marchant, en tournant ou en regardant ailleurs ; revenir au premier point propose de
+fermer le contour ; annuler le dernier point, corriger un coin. « La croix reste au centre, mais les coins et les traits
+doivent être ancrés dans l'espace réel : il faut suivre la position et l'orientation du téléphone. » Le plan 2D se construit
+à partir des points enregistrés, en respectant les changements de direction et les angles entre les murs.
+
+**La difficulté** : Safari sur iPhone n'offre pas de réalité augmentée (WebXR) : aucun suivi de position n'est fourni à une
+page web (ARKit demande une application native, donc un Mac et l'App Store). La position se calcule donc ici.
+
+**Ce qui est fait** :
+- `web/trace.js` : la géométrie : le point du sol sous la croix (rayon de la caméra, téléphone à 1,40 m du sol, hypothèse),
+  un point du sol redessiné dans l'image pour n'importe quelle position et orientation du téléphone, un mur coupé derrière
+  la caméra, le cadrage de la vidéo à l'écran ;
+- `web/odometrie.js` : **la position du téléphone par le sol filmé**. De petits détails du sol sont suivis d'une image à
+  l'autre (Lucas et Kanade, du plus grossier au plus fin, vérifiés à l'aller et au retour) ; chacun a une place fixe au sol ;
+  vu sous un autre angle, il dit où est le téléphone ; la médiane écarte ceux qui sont sur un meuble ou un mur ; puis
+  position et petite correction de l'orientation sont affinées ensemble (le gyroscope a du bruit et un léger retard sur
+  l'image) ; sol uni ou image floue : la position avance de 0,6 m à chaque pas compté. Écrit ici, sans bibliothèque ;
+- `web/app.js` : bouton « 📐 Murs » : la croix, et par-dessus l'image les coins (ronds) et les murs (traits) de toutes les
+  pièces tracées, redessinés à chaque image avec l'orientation de cette image (le dessin et l'image restent ensemble quand on
+  tourne) ; du dernier coin au point visé, le mur en cours en pointillés avec sa longueur ; « ＋ Coin » valide ; revenu à
+  moins de 30 cm du premier coin, le bouton devient « ⟲ Fermer la pièce » ; « ↶ Annuler » efface le dernier coin (ou rouvre
+  la pièce fermée) ; toucher un coin le choisit, « ✓ Placer ici » le corrige ; la position suivie part au serveur avec
+  chaque mesure ;
+- serveur (`assistant/session.py`, `_tracer`) : le contour de chaque pièce ; un coin validé avant d'avoir nommé la pièce en
+  ouvre une à nommer (« ici c'est la cuisine », dit sans bouger, ou Claude sur l'image) ; un coin validé après une pièce
+  fermée commence la pièce suivante ; à la voix : « les murs », « annule », « c'est fini » ; « Cuisine : 4 murs. » à la
+  fermeture ; pendant le tracé, l'image ne fait jamais changer de pièce ;
+- trajectoire (`assistant/trajectoire.py`) : la position suivie par le téléphone remplace les pas ;
+- plan (`assistant/plan.py`) : chaque pièce tracée telle quelle, à sa place, avec ses angles (ni déplacée, ni déformée, ni
+  remise d'équerre) ; les pièces seulement estimées s'écartent d'elle ou s'étendent jusqu'à ses murs ;
+- remplacé : le relevé de l'étape 16 (coins pris quand la croix s'arrête une seconde, `assistant/coins.py`).
+
+**Vérifié** :
+- visite de synthèse (sol carrelé, murs unis, caméra à 1,40 m, `tests/synthese.py`) : capteurs parfaits, moins de 1 cm
+  d'écart après 2,5 m ; avec les défauts d'un vrai téléphone (flou de bouger, bruit de l'image, gyroscope bruité de 0,3° et
+  en retard d'une image), 2,5 cm en tournant sur place et 3 à 8 cm après 2,5 m de marche (sans la correction de
+  l'orientation par l'image : 15 à 19 cm en tournant) ;
+- sur la page, avec une fausse caméra (images de synthèse et événements du gyroscope) : la position suit la vraie à moins
+  de 8 cm ;
+- capture d'écran : des coins tracés aux croisements du carrelage tombent exactement sur les joints de l'image ;
+- calcul : 6 ms par image sur le PC (à mesurer sur le téléphone).
+
+**Limites, honnêtement** :
+- pas encore essayé sur le téléphone de Noah : vitesse du calcul, sol sans motif (carrelage uni, moquette), faible lumière ;
+- la hauteur du téléphone (1,40 m) donne l'échelle : la garder à peu près constante pendant le tracé ; une erreur agrandit ou
+  rétrécit tout sans désaligner le tracé ; une mesure au laser servira à caler l'échelle ;
+- le champ de la caméra (45° en portrait) est celui de l'iPhone de Noah ; un autre téléphone peut demander de le régler (le
+  point sous la croix reste juste, le dessin loin du centre serait un peu décalé) ;
+- la position dérive lentement (quelques centimètres par mètre) : sur une maison entière, des pièces tracées loin les unes
+  des autres peuvent se décaler de quelques dizaines de centimètres.
+
+**Tests** : `tests/test_trace_js.py` (point sous la croix, coin qui reste à sa place en tournant ou en avançant, mur coupé
+derrière la caméra, cadrage), `tests/test_odometrie_js.py` (tourner sur place, marcher, sol uni, défauts d'un vrai
+téléphone), `tests/test_trace_visite.py` (coins validés, contour fermé, angles gardés, deux pièces qui ne bougent pas,
+annuler, corriger, pièce à nommer puis pièce suivante, la voix, position suivie), `tests/test_page_navigateur.py` (tracé
+guidé : croix, coin validé, coin ancré en tournant, fermer, corriger ; position suivie sur une fausse caméra).
+
 ## Étape 16 : le relevé des murs (23/10/2026, après le test de Noah de 15:06)
+
+> Remplacé le même jour par le tracé guidé (étape 17) : chaque coin est validé d'un appui, et la position du
+> téléphone est suivie.
 
 **Ce que Noah a dit** : « ça marche toujours pas ; je pense que le plus safe, ce serait d'ajouter de suivre les murs de la
 maison, tu en penses quoi ? c'est le plus safe ».

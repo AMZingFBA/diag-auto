@@ -44,8 +44,9 @@
   <!-- Pendant la visite -->
   <section id="visite" class="ecran" hidden>
     <video id="camera" playsinline muted></video>
-    <!-- Relevé des murs (Noah, 23/10 : « suivre les murs de la maison ») : la croix est le point que vise la caméra ; on
-         l'arrête une seconde sur chaque coin, au ras du sol. -->
+    <!-- Tracé guidé du plan (Noah, 23/10) : la croix au centre est le point que vise la caméra ; les coins validés et les
+         murs tracés sont dessinés par-dessus l'image, à leur place réelle (web/trace.js, web/odometrie.js). -->
+    <canvas id="trace-toile" class="trace-toile" hidden></canvas>
     <div id="viseur" class="viseur" hidden aria-hidden="true"></div>
     <header class="bandeau">
       <span id="connexion" class="pastille" title="Connexion"></span>
@@ -63,7 +64,7 @@
          l'agrandit, et permet de renommer une pièce mal reconnue. -->
     <div id="croquis" class="croquis" hidden><svg id="croquis-petit"></svg>
       <p id="croquis-aide" class="croquis-aide" hidden>Le croquis se dessine ici : entrez dans une pièce et faites-en le tour.</p></div>
-    <div id="releve" class="releve-info" hidden></div>
+    <div id="trace-info" class="trace-info" hidden></div>
     <div id="alerte" class="alerte" hidden></div>
     <div class="bas">
       <div class="ligne-question">
@@ -87,6 +88,12 @@
         </form>
         <p id="infos" class="petit"></p>
       </details>
+      <!-- Tracé : valider le coin visé, annuler le dernier, fermer le contour (revenu au premier coin). -->
+      <div id="outils-trace" class="outils-trace" hidden>
+        <button id="trace-annuler">↶ Annuler</button>
+        <button id="trace-point" class="principal">＋ Coin</button>
+        <button id="trace-fermer">⟲ Fermer</button>
+      </div>
       <div class="boutons">
         <button id="murs" hidden>📐 Murs</button>
         <button id="voir-fiche">📋 Fiche</button>
@@ -128,6 +135,8 @@
   </section>
 
   <script src="boussole.js"></script>
+  <script src="trace.js"></script>
+  <script src="odometrie.js"></script>
   <script src="liaison.js"></script>
   <script src="app.js"></script>
 </body>

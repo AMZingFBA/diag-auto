@@ -3,7 +3,7 @@
 // (16 kHz) et une image par seconde, et lit à voix haute les questions de l'assistant.
 
 // Version de la page, comparée à celle du serveur (test du 23/10 : l'iPhone gardait l'ancienne page en mémoire).
-const VERSION_PAGE = "2026-10-23-13";
+const VERSION_PAGE = "2026-10-23-14";
 const $ = (id) => document.getElementById(id);
 const TAUX = 16000;
 const TYPE_SON = 1;
@@ -47,8 +47,6 @@ const etat = {
   // Seuils de la boussole (boussole.toml) ; remplacés par ceux du serveur au chargement.
   reglagesBoussole: { precision: { bonne: 15, faible: 30 }, dispersion: { bonne: 12, faible: 25 }, iphone: { inclinaison_calibrage: 60 } },
   mission: null, // choisie sur l'accueil : « dpe », « amiante » ou « plomb »
-  releve: false, // relevé des murs ouvert (bouton « Murs ») : la croix est affichée
-  finReleve: null,
 };
 
 // Mouvement du téléphone (étape 15 : « un tour de 3 s par pièce ») : orientation complète à chaque événement, rotation
@@ -101,16 +99,229 @@ function choisirMission(mission) {
   $("murs").hidden = !croquisSeul();
 }
 
-// Relevé des murs (assistant/coins.py) : ouvert, la croix s'affiche et chaque coin visé une seconde fait un bip.
-function afficherReleve(texte, ouvert) {
-  etat.releve = ouvert;
-  document.body.classList.toggle("releve", ouvert);
-  $("viseur").hidden = !ouvert;
-  $("murs").textContent = ouvert ? "✓ Fin des murs" : "📐 Murs";
-  $("releve").textContent = texte;
-  $("releve").hidden = !texte;
-  clearTimeout(etat.finReleve);
-  if (!ouvert && texte) etat.finReleve = setTimeout(() => { $("releve").hidden = true; }, 5000);
+// --- Tracé guidé du plan sur la caméra (Noah, 23/10) ------------------------------------------------------------------
+// La croix au centre vise un coin au ras du sol ; « ＋ Coin » le valide. Les coins et les murs déjà tracés restent dessinés
+// à leur place réelle dans l'image, même en tournant ou en marchant : l'orientation vient du gyroscope, la position du sol
+// filmé (web/odometrie.js), et la caméra est supposée à 1,40 m du sol (une erreur sur cette hauteur agrandit ou rétrécit
+// tout, sans désaligner le tracé). Du dernier coin validé au point visé, le mur en cours en pointillés, avec sa longueur.
+// Le serveur garde les contours et en fait le plan (assistant/session.py, _tracer).
+const traceur = {
+  actif: false,
+  hauteur: 1.4,
+  odo: null,
+  toile: null, // l'image de la caméra réduite à 240 pixels de large, pour suivre la position
+  orientations: [], // { quand, a, b, g } des 2 dernières secondes
+  derniereTrame: 0,
+  pose: null, // { R, C } de la dernière image affichée
+  pieces: [], // contours reçus du serveur : { cle, nom, ferme, points: [[x, y]] }
+  courant: null, // la pièce du contour en cours
+  selection: null, // { cle, index } : le coin touché, à corriger
+  vise: null, // le point du sol sous la croix
+  ecran: [], // les coins dessinés (pour les toucher) : { cle, index, x, y }
+  pres: false, // la croix est revenue près du premier coin : on peut fermer
+  dureeMs: 0, // temps de calcul du suivi par image (moyenne glissante), envoyé avec les mesures pour le diagnostic
+};
+const PRES_DU_PREMIER_M = 0.3;
+
+function afficherTrace(actif) {
+  traceur.actif = actif;
+  document.body.classList.toggle("trace", actif);
+  $("viseur").hidden = !actif;
+  $("trace-toile").hidden = !actif;
+  $("outils-trace").hidden = !actif;
+  $("murs").textContent = actif ? "✓ Fin du tracé" : "📐 Murs";
+  if (!actif) traceur.selection = null;
+  majInfoTrace();
+}
+
+function contourEnCours() {
+  return traceur.pieces.find((p) => p.cle === traceur.courant && !p.ferme) || null;
+}
+
+function majInfoTrace(texte) {
+  const info = $("trace-info");
+  if (!traceur.actif) { info.hidden = true; return; }
+  const c = contourEnCours();
+  info.textContent = texte || (traceur.selection ? "Coin choisi : visez sa vraie place, puis « ✓ Placer ici »."
+    : !c ? "Visez un coin de la pièce au ras du sol, puis « ＋ Coin »."
+    : `${c.nom} : ${c.points.length} coin${c.points.length > 1 ? "s" : ""}. Visez le coin suivant ; revenez au premier pour fermer.`);
+  info.hidden = false;
+}
+
+function noterOrientation(e) {
+  if (e.alpha == null || e.beta == null || e.gamma == null) return;
+  const quand = performance.now();
+  traceur.orientations.push({ quand, a: e.alpha, b: e.beta, g: e.gamma });
+  while (traceur.orientations.length && quand - traceur.orientations[0].quand > 2000) traceur.orientations.shift();
+}
+
+// L'orientation du téléphone à l'instant `quand` (la mesure la plus proche).
+function orientationA(quand) {
+  let meilleure = null;
+  for (const o of traceur.orientations) if (!meilleure || Math.abs(o.quand - quand) < Math.abs(meilleure.quand - quand)) meilleure = o;
+  return meilleure && Boussole.matrice(meilleure.a, meilleure.b, meilleure.g);
+}
+
+// À chaque image de la caméra (amiante, plomb) : la position du téléphone suivie par le sol filmé (15 fois par seconde au
+// plus, dès le début de la visite), et le tracé redessiné sur cette image, avec l'orientation de sa prise (le dessin et
+// l'image ont le même retard : ils restent ensemble quand on tourne).
+function suivrePosition(meta) {
+  if (!croquisSeul() || !window.Odometrie || etat.termine) return;
+  const video = $("camera");
+  if (!video.videoWidth) return;
+  const quand = performance.now();
+  const R = orientationA(meta && meta.captureTime ? meta.captureTime : quand - LATENCE_IMAGE_MS);
+  if (!R) return;
+  if (quand - traceur.derniereTrame >= 60) {
+    traceur.derniereTrame = quand;
+    const l = 240, h = Math.round((240 * video.videoHeight) / video.videoWidth);
+    const toile = traceur.toile || (traceur.toile = document.createElement("canvas"));
+    if (toile.width !== l || toile.height !== h) Object.assign(toile, { width: l, height: h });
+    const ctx = toile.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(video, 0, 0, l, h);
+    traceur.odo = traceur.odo || new Odometrie.Odometrie({ hauteur: traceur.hauteur, champ: champHorizontal() });
+    traceur.odo.image(Odometrie.gris(ctx.getImageData(0, 0, l, h).data, l, h), R);
+    traceur.dureeMs += 0.2 * (performance.now() - quand - traceur.dureeMs);
+  }
+  if (!traceur.odo) return;
+  traceur.pose = { R: traceur.odo.orientation(R), C: traceur.odo.C };
+  if (traceur.actif) dessinerTrace();
+}
+
+function dessinerTrace() {
+  const toile = $("trace-toile"), video = $("camera");
+  const W = toile.clientWidth || innerWidth, H = toile.clientHeight || innerHeight, dpr = window.devicePixelRatio || 1;
+  if (toile.width !== Math.round(W * dpr) || toile.height !== Math.round(H * dpr)) {
+    Object.assign(toile, { width: Math.round(W * dpr), height: Math.round(H * dpr) });
+  }
+  const ctx = toile.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  const pose = traceur.pose;
+  traceur.ecran = [];
+  if (!pose || !video.videoWidth) { majBoutonCoin(); return; }
+  const F = Trace.focaleEcran(champHorizontal(), video.videoWidth, video.videoHeight, W, H);
+  const h = traceur.hauteur;
+  const E = (uv) => Trace.versEcran(uv, F, W, H);
+  const distance = (A, B) => Math.hypot(B[0] - A[0], B[1] - A[1]);
+  traceur.vise = Trace.auSol(pose.C, h, Trace.rayon(pose.R), 12);
+  const courant = contourEnCours();
+  traceur.pres = !!(courant && courant.points.length >= 3 && traceur.vise && distance(traceur.vise, courant.points[0]) < PRES_DU_PREMIER_M);
+  for (const p of traceur.pieces) {
+    const n = p.points.length, couleur = p.ferme ? "#3ddc84" : "#ffd400";
+    for (let i = 0; i < (p.ferme ? n : n - 1); i++) {
+      const A = p.points[i], B = p.points[(i + 1) % n];
+      const s = Trace.segment(pose.R, pose.C, h, A, B);
+      if (s) traitTrace(ctx, E(s[0]), E(s[1]), couleur, false, distance(A, B));
+    }
+    p.points.forEach((P, index) => {
+      const uv = Trace.projeter(pose.R, pose.C, h, P);
+      if (!uv) return;
+      const [x, y] = E(uv);
+      if (x < -40 || y < -40 || x > W + 40 || y > H + 40) return;
+      traceur.ecran.push({ cle: p.cle, index, x, y });
+      const choisi = traceur.selection && traceur.selection.cle === p.cle && traceur.selection.index === index;
+      const premier = p === courant && index === 0;
+      rondTrace(ctx, x, y, choisi ? 11 : premier && traceur.pres ? 13 : 7, choisi ? "#ff5252" : premier && traceur.pres ? "#3ddc84" : couleur);
+    });
+  }
+  // Le mur en cours : du dernier coin validé au point visé (au premier coin quand on y revient), en pointillés.
+  if (courant && courant.points.length && traceur.vise && !traceur.selection) {
+    const A = courant.points[courant.points.length - 1], B = traceur.pres ? courant.points[0] : traceur.vise;
+    const s = Trace.segment(pose.R, pose.C, h, A, B);
+    if (s) traitTrace(ctx, E(s[0]), E(s[1]), "#ffffff", true, distance(A, B));
+  }
+  majBoutonCoin();
+}
+
+function traitTrace(ctx, a, b, couleur, pointille, longueur) {
+  ctx.lineCap = "round";
+  ctx.setLineDash(pointille ? [10, 8] : []);
+  for (const [largeur, c] of [[7, "rgba(0, 0, 0, 0.55)"], [3.5, couleur]]) {
+    ctx.lineWidth = largeur;
+    ctx.strokeStyle = c;
+    ctx.beginPath();
+    ctx.moveTo(a[0], a[1]);
+    ctx.lineTo(b[0], b[1]);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  if (longueur != null && Math.hypot(b[0] - a[0], b[1] - a[1]) > 60) {
+    const texte = `${longueur.toFixed(2).replace(".", ",")} m`;
+    ctx.font = "600 15px system-ui, sans-serif";
+    const l = ctx.measureText(texte).width + 12, x = (a[0] + b[0]) / 2, y = (a[1] + b[1]) / 2;
+    ctx.fillStyle = "rgba(20, 33, 61, 0.85)";
+    ctx.fillRect(x - l / 2, y - 12, l, 24);
+    ctx.fillStyle = "#fff";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(texte, x, y);
+  }
+}
+
+function rondTrace(ctx, x, y, r, couleur) {
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, 2 * Math.PI);
+  ctx.fillStyle = couleur;
+  ctx.fill();
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = "rgba(0, 0, 0, 0.7)";
+  ctx.stroke();
+}
+
+function majBoutonCoin() {
+  const b = $("trace-point");
+  const texte = traceur.selection ? "✓ Placer ici" : traceur.pres ? "⟲ Fermer la pièce" : traceur.vise ? "＋ Coin" : "Visez le sol";
+  if (b.textContent !== texte) b.textContent = texte;
+  b.disabled = !traceur.vise && !traceur.pres;
+  $("trace-fermer").disabled = !((contourEnCours() || {}).points || []).length;
+}
+
+const arrondiMm = (x) => Math.round(x * 1000) / 1000;
+
+// « ＋ Coin » : le point visé devient un coin ; « ⟲ Fermer la pièce » ; « ✓ Placer ici » (le coin touché, corrigé).
+function validerCoin() {
+  const vise = traceur.vise;
+  if (traceur.pres && !traceur.selection) {
+    envoyerJson({ type: "trace", action: "fermer" });
+    bip();
+    return;
+  }
+  if (!vise) return;
+  if (traceur.selection) {
+    const { cle, index } = traceur.selection;
+    envoyerJson({ type: "trace", action: "deplacer", cle, index, x: arrondiMm(vise[0]), y: arrondiMm(vise[1]) });
+    const p = traceur.pieces.find((q) => q.cle === cle);
+    if (p && p.points[index]) p.points[index] = [vise[0], vise[1]];
+    traceur.selection = null;
+  } else {
+    const pose = capteurs.pose || {};
+    envoyerJson({ type: "trace", action: "point", x: arrondiMm(vise[0]), y: arrondiMm(vise[1]), t: Math.round(maintenant() * 1000) / 1000,
+                  direction: capteurs.lacet != null ? capteurs.lacet : capteurs.cap, elevation: pose.elevation });
+    const c = contourEnCours();
+    if (c) c.points.push([vise[0], vise[1]]); // tout de suite à l'écran ; le serveur confirme
+    else {
+      traceur.pieces.push({ cle: "_nouveau", nom: "Pièce", ferme: false, points: [[vise[0], vise[1]]] });
+      traceur.courant = "_nouveau";
+    }
+  }
+  bip();
+  majInfoTrace();
+}
+
+// Toucher un coin dessiné le choisit (pour le corriger) ; toucher ailleurs, ou de nouveau, le lâche.
+function toucherTrace(e) {
+  const r = $("trace-toile").getBoundingClientRect();
+  const x = e.clientX - r.left, y = e.clientY - r.top;
+  let proche = null, meilleur = 36;
+  for (const p of traceur.ecran) {
+    const d = Math.hypot(p.x - x, p.y - y);
+    if (d < meilleur) { meilleur = d; proche = p; }
+  }
+  const deja = proche && traceur.selection && traceur.selection.cle === proche.cle && traceur.selection.index === proche.index;
+  traceur.selection = proche && !deja ? { cle: proche.cle, index: proche.index } : null;
+  majInfoTrace();
+  majBoutonCoin();
 }
 
 // Le message d'ouverture de la liaison (et de chaque reconnexion) : la mission part avec lui.
@@ -343,19 +554,18 @@ function recevoir(m) {
     case "piece_reconnue":
       $("latence").textContent = `📷 Pièce : ${m.nom}${m.nouvelle ? " (nouvelle)" : ""}. Touchez le croquis pour corriger.`;
       break;
-    case "releve":
-      if (m.etat === "ouvert") {
-        afficherReleve(`📐 Murs de ${m.piece} : visez chaque coin au ras du sol, 1 seconde (bip). Revenez sur le premier coin pour finir.`, true);
-      } else {
-        bip();
-        setTimeout(bip, 180);
-        afficherReleve(m.murs ? `✓ ${m.piece} : ${m.murs} murs relevés` : `✗ ${m.piece} : pas de forme, rouvrez « Murs » et visez chaque coin`, false);
-      }
+    case "trace": {
+      // Les contours gardés par le serveur (ils remplacent ce qui a été ajouté à l'écran en attendant).
+      const fermes = traceur.pieces.filter((p) => p.ferme).length;
+      traceur.pieces = m.pieces || [];
+      traceur.courant = m.courant;
+      const s = traceur.selection;
+      if (s && !traceur.pieces.some((p) => p.cle === s.cle && p.points.length > s.index)) traceur.selection = null;
+      if (!!m.ouvert !== traceur.actif) afficherTrace(!!m.ouvert);
+      const ferme = traceur.pieces.filter((p) => p.ferme).length > fermes && traceur.pieces.find((p) => p.cle === m.courant && p.ferme);
+      majInfoTrace(ferme ? `✓ ${ferme.nom} : ${ferme.points.length} murs. Pièce suivante : nommez-la, puis visez son premier coin.` : undefined);
       break;
-    case "coin":
-      if (!m.annule) bip();
-      afficherReleve(`📐 ${m.piece} : ${m.n} coin${m.n > 1 ? "s" : ""}${m.annule ? " (dernier effacé)" : m.plafond ? " (au plafond)" : ""}. Revenez sur le premier coin pour finir.`, true);
-      break;
+    }
     case "tour":
       // Le serveur a vu un tour de la pièce complet (assistant/tour.py) : un bip dans l'oreillette, sans regarder l'écran.
       bip();
@@ -825,11 +1035,12 @@ function suivreTrames() {
     const surTrame = (_maintenant, meta) => {
       if (etat.termine) return;
       examinerTrame(meta);
+      suivrePosition(meta);
       video.requestVideoFrameCallback(surTrame);
     };
     video.requestVideoFrameCallback(surTrame);
   } else {
-    etat.minuteries.push(setInterval(() => examinerTrame(null), 66));
+    etat.minuteries.push(setInterval(() => { examinerTrame(null); suivrePosition(null); }, 66));
   }
 }
 
@@ -920,6 +1131,7 @@ function suivrePas(e) {
     mouvement.enHaut = true;
     mouvement.dernierPas = t;
     mouvement.pas.push(Math.round(t * 1000) / 1000);
+    if (traceur.odo) traceur.odo.pas(capteurs.lacet != null ? capteurs.lacet : capteurs.cap || 0); // seulement s'il est perdu
   } else if (mouvement.enHaut && mouvement.acc < 0.2) {
     mouvement.enHaut = false;
   }
@@ -959,6 +1171,7 @@ function autoriserBoussole() {
   });
   window.addEventListener("deviceorientation", (e) => {
     if (e.alpha == null) return;
+    noterOrientation(e); // le même repère que le lacet
     if (typeof e.webkitCompassHeading === "number" && !Number.isNaN(e.webkitCompassHeading)) {
       // iPhone : webkitCompassHeading suit le haut de l'appareil ; le cap de la caméra vient de la matrice complète.
       capteurs.iphone = capteurs.iphone || new Boussole.CapIphone(etat.reglagesBoussole.iphone.inclinaison_calibrage);
@@ -990,6 +1203,11 @@ function noterCapteurs() {
   const mesure = { t: Math.round(t * 1000) / 1000, cap: arrondi(capteurs.cap), lacet: arrondi(capteurs.lacet),
                    precision: arrondi(capteurs.precision), inclinaison: arrondi(capteurs.inclinaison),
                    elevation: arrondi(pose.elevation), roulis: arrondi(pose.roulis), acc: arrondi(mouvement.acc) };
+  if (traceur.odo && croquisSeul()) {
+    // La position suivie par le sol filmé, et de quoi juger le suivi après la visite (détails suivis, calcul, perdu).
+    Object.assign(mesure, { x: arrondiMm(traceur.odo.C[0]), y: arrondiMm(traceur.odo.C[1]), vo_n: traceur.odo.details.length,
+                            vo_ms: Math.round(traceur.dureeMs), vo_perdu: traceur.odo.perdu ? 1 : 0 });
+  }
   etat.capteursContinus.push(mesure);
   mouvement.lot.push(mesure); // envoyé en direct, par lots (étape 15)
 }
@@ -1203,7 +1421,14 @@ if (window.ResizeObserver) {
 }
 for (const b of $("missions").querySelectorAll("button")) b.onclick = () => choisirMission(b.dataset.mission);
 // Amiante, plomb : le bouton ouvre le plan (croquis en grand, corrections) ; DPE : la fiche du logement.
-$("murs").onclick = () => envoyerJson({ type: "releve", action: etat.releve ? "fin" : "debut" });
+$("murs").onclick = () => {
+  envoyerJson({ type: "trace", action: traceur.actif ? "fin" : "debut" });
+  afficherTrace(!traceur.actif);
+};
+$("trace-point").onclick = validerCoin;
+$("trace-annuler").onclick = () => envoyerJson({ type: "trace", action: "annuler" });
+$("trace-fermer").onclick = () => envoyerJson({ type: "trace", action: "fermer" });
+$("trace-toile").addEventListener("pointerdown", toucherTrace);
 
 $("voir-fiche").onclick = () => {
   if (croquisSeul()) { $("plan").hidden = false; afficherCroquis(etat.croquis); return; }

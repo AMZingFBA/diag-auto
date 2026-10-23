@@ -9,6 +9,7 @@ Sauté si Edge n'est pas installé. Ce n'est pas Safari : un défaut propre à l
 """
 
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -37,6 +38,7 @@ class Navigateur:
         from websockets.sync.client import connect
 
         self.port = port_libre()
+        self.dossier = dossier
         self.processus = subprocess.Popen([EDGE, "--headless=new", f"--remote-debugging-port={self.port}", f"--user-data-dir={dossier}",
                                            "--no-first-run", "--no-default-browser-check", "about:blank"],
                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -81,6 +83,14 @@ class Navigateur:
     def fermer(self) -> None:
         self.ws.close()
         self.processus.kill()
+        if os.name == "nt":
+            # Le processus lancé n'est qu'un lanceur : le navigateur et ses processus restaient ouverts après les tests (266
+            # le 23/10). Tous ceux qui utilisent le dossier de profil de ce test sont arrêtés.
+            motif = str(self.dossier).replace("'", "''")
+            subprocess.run(["powershell", "-NoProfile", "-Command",
+                            f"Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like '*{motif}*' }} | "
+                            "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"],
+                           capture_output=True, timeout=60)
 
 
 @pytest.fixture(scope="module")
@@ -345,34 +355,98 @@ def test_plan_dans_le_sens_de_la_marche(page):
     page.js("(() => { capteurs.cap = null; return true; })()")
 
 
-def test_releve_des_murs_croix_coins_et_longueurs(page):
-    # Noah (23/10) : « suivre les murs de la maison ». Le bouton « Murs » (amiante, plomb) ouvre le relevé : la croix au
-    # centre de l'écran (le point que vise la caméra), le croquis réduit dans le coin ; chaque coin fait un bip ; la pièce
-    # fermée a la longueur de ses murs sur le plan.
-    assert page.js("$('murs').hidden") is True  # DPE : pas de relevé
-    page.js("(() => { choisirMission('amiante'); window.envoyes = []; return true; })()")
-    assert page.js("$('murs').hidden") is False
+def test_trace_guide_croix_coins_ancres_fermer_et_corriger(page):
+    # Noah (23/10) : la croix au centre vise un coin au ras du sol, « ＋ Coin » le valide ; le mur en cours va du dernier
+    # coin au point visé ; les coins restent à leur place dans l'image quand le téléphone tourne ; revenu au premier coin,
+    # on ferme la pièce ; un coin touché se corrige.
+    assert page.js("$('murs').hidden") is True  # DPE : pas de tracé
+    page.js("""(() => { choisirMission('amiante'); window.envoyes = [];
+        Object.defineProperty($('camera'), 'videoWidth', {value: 1080, configurable: true});
+        Object.defineProperty($('camera'), 'videoHeight', {value: 1920, configurable: true});
+        traceur.pieces = []; traceur.courant = null; traceur.selection = null; return true; })()""")
     page.toucher("#murs")
-    assert page.js("window.envoyes") == [{"type": "releve", "action": "debut"}]
-    page.js("recevoir({type: 'releve', etat: 'ouvert', piece: 'Chambre', coins: 0})")
-    assert page.js("$('viseur').hidden") is False and page.js("document.body.classList.contains('releve')") is True
-    centre = page.js("(() => { const r = $('viseur').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()")
-    assert abs(centre[0] - 195) < 2 and abs(centre[1] - 422) < 2  # au centre de l'écran de 390 × 844
+    assert page.js("window.envoyes") == [{"type": "trace", "action": "debut"}]
+    assert page.js("document.body.classList.contains('trace')") is True
+    assert page.js("$('viseur').hidden || $('trace-toile').hidden || $('outils-trace').hidden") is False
     assert page.js("$('croquis').getBoundingClientRect().width") < 140  # réduit dans le coin : la croix reste visible
-    page.js("recevoir({type: 'coin', piece: 'Chambre', n: 2})")
-    assert "2 coins" in page.js("$('releve').textContent")
-    page.toucher("#murs")
-    assert page.js("window.envoyes")[-1] == {"type": "releve", "action": "fin"}
-    page.js("recevoir({type: 'releve', etat: 'ferme', piece: 'Chambre', murs: 4})")
-    assert page.js("$('viseur').hidden") is True and "4 murs" in page.js("$('releve').textContent")
-    plan = {"oriente": False, "courante": "chambre", "position": [1.2, 1.0], "sens_marche": None, "sens_entree": None,
-            "pieces": [{"cle": "chambre", "nom": "Chambre", "source": "image", "mesuree": True, "murs": [4.02, 3.0, 4.02, 3.0],
-                        "polygone": [[0, 0], [4.02, 0], [4.02, 3], [0, 3]], "lettres": ["A", "D", "C", "B"]}],
-            "portes": [], "trajet": [], "coins": [[0.1, 0.1]]}
-    croquis = {"oriente": False, "courante": "chambre", "portes": [], "ouvertures": [], "plan": plan,
-               "pieces": [{"cle": "chambre", "nom": "Chambre", "source": "image", "x": 0, "y": 0, "murs": {}}]}
-    page.js(f"(() => {{ $('plan').hidden = false; afficherCroquis({json.dumps(croquis)}); return true; }})()")
-    assert page.js("[...$('croquis-grand').querySelectorAll('.longueur')].map((t) => t.textContent)") == ["4,02 m", "3,00 m", "4,02 m", "3,00 m"]
-    assert page.js("$('croquis-grand').querySelector(':scope > polygon').getAttribute('stroke-dasharray')") == ""  # relevée
-    assert page.js("$('croquis-petit').querySelectorAll('.coin').length") == 1
-    page.js("(() => { $('plan').hidden = true; choisirMission('dpe'); return true; })()")
+
+    def viser(cap, elevation, x=0.0, y=0.0):
+        page.js(f"(() => {{ traceur.pose = {{R: Boussole.matrice({-cap % 360}, {90 + elevation}, 0), C: [{x}, {y}]}};"
+                " dessinerTrace(); return true; })()")
+
+    viser(0, -35)  # 2 m devant (1,40 / tan 35°)
+    assert abs(page.js("traceur.vise[1]") - 1.4 / 0.7002075) < 1e-3 and page.js("$('trace-point').textContent") == "＋ Coin"
+    page.toucher("#trace-point")
+    envoye = page.js("window.envoyes")[-1]
+    assert envoye["action"] == "point" and abs(envoye["y"] - 1.999) < 0.01 and abs(envoye["x"]) < 1e-3
+    viser(20, -35)  # le téléphone tourne de 20° vers la droite : le coin passe à gauche de la croix
+    coin = page.js("traceur.ecran")[0]
+    assert coin["x"] < 195 - 50 and abs(coin["y"] - 422) < 40
+    page.js("""(() => { traceur.pieces = [{cle: 'chambre', nom: 'Chambre', ferme: false,
+        points: [[0, 2], [3, 2], [3, 4], [0, 4]]}]; traceur.courant = 'chambre'; return true; })()""")
+    viser(0, -35, x=0.05, y=0.05)  # la croix revient au premier coin (0, 2)
+    assert page.js("$('trace-point').textContent") == "⟲ Fermer la pièce"
+    page.toucher("#trace-point")
+    assert page.js("window.envoyes")[-1] == {"type": "trace", "action": "fermer"}
+    # Corriger un coin : le toucher (il est sous la croix), viser sa vraie place, « ✓ Placer ici ».
+    page.js("(() => { toucherTrace({clientX: 195, clientY: 422}); return true; })()")
+    assert page.js("traceur.selection") == {"cle": "chambre", "index": 0}
+    viser(0, -35, x=0.2)
+    assert page.js("$('trace-point').textContent") == "✓ Placer ici"
+    page.toucher("#trace-point")
+    envoye = page.js("window.envoyes")[-1]
+    assert envoye["action"] == "deplacer" and envoye["cle"] == "chambre" and envoye["index"] == 0 and abs(envoye["x"] - 0.2) < 1e-3
+    # Le serveur ferme le tracé (« c'est fini » à la voix) : la croix disparaît.
+    page.js("(() => { recevoir({type: 'trace', ouvert: false, courant: null, pieces: []}); return true; })()")
+    assert page.js("$('viseur').hidden") is True and page.js("document.body.classList.contains('trace')") is False
+    page.js("(() => { choisirMission('dpe'); return true; })()")
+
+
+def test_position_suivie_sur_une_fausse_camera(page):
+    # La chaîne du téléphone de bout en bout : la vidéo (ici, des images de synthèse d'une pièce carrelée, filmées à 1,40 m),
+    # l'orientation de chaque image (événements du gyroscope), le suivi de position (web/odometrie.js) : en tournant puis
+    # en avançant de 60 cm, la position calculée sur la page suit la vraie, à quelques centimètres près. (Sans écran, le
+    # navigateur ne rappelle pas la page à chaque image : le test appelle suivrePosition comme le ferait ce rappel.)
+    import base64
+    import io
+    import math
+
+    from PIL import Image
+
+    from synthese import Piece, angles, parcours
+
+    piece = Piece()
+    etapes = [(0.0, (1.5, 1.2), 30.0, -35.0), (0.6, (1.5, 1.2), 30.0, -35.0), (1.2, (1.5, 1.2), 60.0, -32.0),
+              (1.6, (2.02, 1.5), 60.0, -32.0)]
+    poses = parcours(etapes, fps=12.0)
+    images = []
+    for _, pos, cap, elev in poses:
+        tampon = io.BytesIO()
+        Image.fromarray(piece.rendre(pos, 1.4, *angles(cap, elev), largeur=270, hauteur=480, finesse=1)).convert("RGB").save(tampon, format="PNG")
+        images.append("data:image/png;base64," + base64.b64encode(tampon.getvalue()).decode())
+    page.js("""(async () => {
+        choisirMission('amiante'); etat.termine = false; traceur.odo = null; traceur.orientations = [];
+        const toile = document.createElement('canvas'); toile.width = 270; toile.height = 480;
+        window.fausseCamera = toile; window.fluxFaux = toile.captureStream(0);
+        toile.getContext('2d').fillRect(0, 0, 270, 480);
+        const v = $('camera'); delete v.videoWidth; delete v.videoHeight; v.srcObject = window.fluxFaux; v.muted = true;
+        window.fluxFaux.getVideoTracks()[0].requestFrame();
+        await Promise.race([v.play(), new Promise((r) => setTimeout(r, 2000))]);
+        if (!window.boussoleBranchee) { autoriserBoussole(); window.boussoleBranchee = true; }
+        return v.videoWidth; })()""")
+    for url, (_, _, cap, elev) in zip(images, poses):
+        a, b, g = angles(cap, elev)
+        page.js(f"""(async () => {{
+            window.dispatchEvent(new DeviceOrientationEvent('deviceorientation', {{alpha: {a}, beta: {b}, gamma: {g}, absolute: false}}));
+            await new Promise((r) => setTimeout(r, 100));
+            const image = new Image(); image.src = {json.dumps(url)}; await image.decode();
+            window.fausseCamera.getContext('2d').drawImage(image, 0, 0);
+            window.fluxFaux.getVideoTracks()[0].requestFrame();
+            await new Promise((r) => setTimeout(r, 60));
+            traceur.derniereTrame = 0; suivrePosition(null);
+            return true; }})()""")
+    position = page.js("traceur.odo && traceur.odo.C")
+    vrai = (poses[-1][1][0] - 1.5, poses[-1][1][1] - 1.2)
+    assert position is not None and math.dist(position, vrai) < 0.08, (position, vrai)
+    assert page.js("traceur.odo.details.length") >= 12  # des détails du sol suivis
+    page.js("(() => { $('camera').srcObject = null; choisirMission('dpe'); return true; })()")

@@ -12,6 +12,9 @@ Ici, navigation à l'estime (podomètre) :
 - un pas compté pendant une rotation sur place (vitesse de rotation au-delà de 60°/s, ou pendant un tour de pièce repéré)
   n'est pas un déplacement : ce sont des piétinements.
 
+Quand le téléphone suit lui-même sa position par le sol filmé (web/odometrie.js, tracé guidé du plan), chaque mesure en
+donne la position (x, y) : elle remplace les pas (plus juste, à quelques centimètres près sur quelques mètres).
+
 Repère : celui du gyroscope (x vers le lacet 90°, y vers le lacet 0°), le même pendant toute la visite ; tourné vers le
 nord pour l'affichage dès que l'écart boussole − gyroscope est connu. Sans gyroscope (téléphone ancien), le cap.
 Précision attendue (recherches du 23/10) : 0,5 à 1 m dans le bon cas sur 5 à 15 m, plus si la caméra ne vise pas le sens
@@ -35,6 +38,7 @@ ECART_PAS_MIN_S = 0.35
 ROTATION_SUR_PLACE_DEG_S = 60.0
 FENETRE_VITESSE_S = 0.3
 PAUSE_MARCHE_S = 1.5  # plus de 1,5 s sans pas : la marche est finie
+PAS_VO_M = 0.10  # position suivie par le téléphone : un point gardé tous les 10 cm (le reste est du tremblement)
 
 
 def ecart(a: float, b: float) -> float:
@@ -69,6 +73,9 @@ class Trajectoire:
         self._avec_acc = False  # le téléphone envoie l'accélération : les pas sont repérés ici
         self._pic = False
         self._dernier_pic = -1e9
+        # Position suivie par le téléphone (sol filmé) : (t, x, y), un point tous les 10 cm ; les pas en sont déduits.
+        self._vo: list[tuple[float, float, float]] = []
+        self._vo_pas: tuple[float, float, float] | None = None  # où était le dernier pas déduit
 
     # --- Entrées ------------------------------------------------------------------------------------------------
 
@@ -91,8 +98,12 @@ class Trajectoire:
         self._t.append(float(t))
         self._angle.append(angle % 360.0)
         self._deroule.append(deroule)
+        x, y = mesure.get("x"), mesure.get("y")
+        if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+            self._ajouter_position(float(t), float(x), float(y))
+            return
         acc = mesure.get("acc")
-        if isinstance(acc, (int, float)):
+        if isinstance(acc, (int, float)) and not self._vo:
             self._avec_acc = True
             if not self._pic and acc >= SEUIL_PAS_HAUT and t - self._dernier_pic >= ECART_PAS_MIN_S:
                 self._pic, self._dernier_pic = True, float(t)
@@ -100,9 +111,23 @@ class Trajectoire:
             elif self._pic and acc <= SEUIL_PAS_BAS:
                 self._pic = False
 
+    def _ajouter_position(self, t: float, x: float, y: float) -> None:
+        """Position suivie par le téléphone. Tous les 0,6 m parcourus, un pas est déduit dans la direction du déplacement
+        (les marches, l'axe du logement et le sens de la marche s'en servent comme des pas comptés)."""
+        if not self._vo or math.dist(self._vo[-1][1:], (x, y)) >= PAS_VO_M:
+            self._vo.append((t, x, y))
+            self._positions = None
+        if self._vo_pas is None:
+            self._vo_pas = (t, x, y)
+        elif math.dist(self._vo_pas[1:], (x, y)) >= self.longueur_pas:
+            direction = math.degrees(math.atan2(x - self._vo_pas[1], y - self._vo_pas[2])) % 360.0
+            self.pas.append(Pas(t, direction, True))
+            self._vo_pas = (t, x, y)
+
     def ajouter_pas(self, t: float) -> None:
-        """Un pas repéré par le téléphone (ignoré si le serveur repère lui-même les pas dans l'accélération)."""
-        if not self._avec_acc:
+        """Un pas repéré par le téléphone (ignoré si le serveur repère lui-même les pas dans l'accélération, ou si le
+        téléphone suit sa position)."""
+        if not self._avec_acc and not self._vo:
             self._noter_pas(t)
 
     def _noter_pas(self, t: float) -> None:
@@ -152,7 +177,9 @@ class Trajectoire:
         return any(a - 0.2 <= t <= b + 0.2 for a, b in self.tours)
 
     def positions(self) -> list[tuple[float, float, float]]:
-        """(t, x, y) en mètres : le départ, puis la position après chaque pas compté."""
+        """(t, x, y) en mètres : le départ, puis la position après chaque pas compté (ou celle suivie par le téléphone)."""
+        if self._vo:
+            return self._vo
         if self._positions is None:
             x = y = 0.0
             points = [(self._t[0] if self._t else 0.0, 0.0, 0.0)]
@@ -174,6 +201,10 @@ class Trajectoire:
 
     def distance(self, t1: float, t2: float) -> float:
         """Distance marchée entre deux instants (pas comptés seulement : une rotation sur place ne compte pas)."""
+        if self._vo:
+            points = [(x, y) for t, x, y in self._vo if t1 < t <= t2]
+            return sum(math.dist(a, b) for a, b in zip(points, points[1:])) + (
+                math.dist(self.position(t1), points[0]) if points else 0.0)
         return self.longueur_pas * sum(1 for p in self.pas if p.compte and t1 < p.t <= t2)
 
     def marches(self) -> list[Marche]:
@@ -189,8 +220,8 @@ class Trajectoire:
         return resultat
 
     def avec_pas(self) -> bool:
-        """Le téléphone envoie-t-il des pas (accéléromètre autorisé) ?"""
-        return bool(self.pas)
+        """Le téléphone envoie-t-il des pas (accéléromètre autorisé), ou sa position ?"""
+        return bool(self.pas) or bool(self._vo)
 
 
 def tourner(x: float, y: float, angle: float) -> tuple[float, float]:
