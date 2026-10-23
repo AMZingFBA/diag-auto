@@ -431,3 +431,26 @@ def test_autre_valeur_tapee_enregistree(tmp_path):
     assert mur.valeur("materiau").valeur == "terre"  # ramené au vocabulaire, comme dit à l'oral
     autre = next(o for o in questions(apres)[0]["options"] if o.get("saisie"))
     assert autre == {"libelle": "Autre…", "valeur": "", "saisie": "texte"}  # isolation : texte libre (« laine de bois 12 cm »)
+
+
+def test_reponses_par_boutons_sans_plafond_de_questions(tmp_path):
+    # Test de Noah du 23/10 : répondant vite par boutons, il dépassait le plafond de questions par minute (20), et la
+    # question suivante était retenue : l'assistant se taisait. Après une réponse, la question part toujours.
+    async def scenario():
+        session, recus = await ouvrir(tmp_path, CerveauScenario(poli()))
+        session.reglages.questions_par_minute = 3
+        await session.ouvrir_visite()
+        for valeur in ("extérieur", "brique", "20 cm", "non isolé", "non", "local chauffé (voisin)", "oui", "extérieur"):
+            cible = session._cible.code
+            avant = len(recus)
+            await session.recevoir_controle({"type": "reponse", "cible": cible, "valeur": valeur, "libelle": valeur})
+            assert [m for m in recus[avant:] if m["type"] == "dire"], f"rien après « {valeur} » ({cible})"
+        await session.terminer()
+        return session
+
+    session = asyncio.run(scenario())
+    assert not [e for e in journal_de(session) if e["evenement"] == "question_retenue"]
+
+
+def journal_de(session):
+    return [json.loads(ligne) for ligne in (session.dossier / "journal.jsonl").read_text(encoding="utf-8").splitlines()]

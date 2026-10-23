@@ -1096,7 +1096,17 @@ téléphone », et la question suivante part aussitôt.
 - **« Autre… » n'ouvrait pas le clavier** sur iPhone (la case apparaissait après l'appui) : la case « Autre valeur » est
   maintenant affichée directement avec les boutons ; un appui dessus ouvre le clavier chiffres.
 
-Le prototype compte 318 tests (et le projet, à la racine, 654).
+**Même jour, 8 h 01** : « dans l'épaisseur, j'ai appuyé sur Autre et rien ne se passe ; l'assistant ne parle plus ».
+- **l'assistant se taisait** : répondant vite par boutons, Noah dépassait le plafond de 20 questions par minute, et la
+  question suivante était retenue (« question_retenue » au journal). Le plafond ne vaut plus que pour ce que l'assistant
+  dit de lui-même ; après une réponse (bouton ou voix), la question suivante part toujours ;
+- **« Autre »** : le téléphone affichait encore l'ancienne page (un bouton « Autre… » au lieu de la case) : le serveur
+  n'envoyait pas de consigne de cache, et Safari réutilisait la page sans la redemander. Maintenant la page est toujours
+  revérifiée (« Cache-Control: no-cache », et le service worker ne passe plus par le cache du navigateur) ; et la page
+  compare sa version à celle du serveur : si elle est ancienne, elle affiche « Nouvelle version de l'assistant :
+  rechargez la page » avant de commencer.
+
+Le prototype compte 320 tests (et le projet, à la racine, 654).
 
 ## Réglages (variables d'environnement)
 

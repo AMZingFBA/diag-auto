@@ -165,3 +165,13 @@ def test_phrases_regroupees_pendant_une_reponse(tmp_path):
     vus, bilan = asyncio.run(scenario())
     assert vus == ["Euh.", "Bon alors. Voilà."]
     assert bilan["phrases"] == 3 and bilan["appels_reponse"] == 2
+
+
+def test_page_toujours_reverifiee_et_version_annoncee(client):
+    # Test du 23/10 : l'iPhone gardait l'ancienne page (le bouton « Autre » corrigé n'arrivait pas).
+    import re
+
+    for fichier in ("/", "/app.js", "/style.css"):
+        assert client.get(fichier).headers["cache-control"] == "no-cache"
+    page = client.get("/app.js").text
+    assert client.get("/api/statut").json()["version_page"] == re.search(r'VERSION_PAGE = "([^"]+)"', page).group(1)

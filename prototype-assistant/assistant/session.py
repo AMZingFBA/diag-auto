@@ -274,6 +274,7 @@ class Session:
         self.boussole = Boussole()  # boussole et gyroscope du téléphone (étape 6)
         self._calibration_demandee = False
         self._nord_demande = False  # « tenez le téléphone à plat une seconde » : dit une seule fois
+        self._derniere_reponse = -1e9  # dernière réponse du diagnostiqueur (bouton ou phrase) : il donne le rythme
         self._cochees: list[tuple[float, str]] = []  # réponses cochées : Claude peut les citer  # « faites un 8 avec le téléphone » : dit une seule fois
         self._complements: set[asyncio.Task] = set()  # relectures de Claude en arrière-plan
         self._compteurs = {"acceptees": 0, "refusees": 0, "questions": 0, "retenues": 0, "veilles": 0, "bips": 0, "relectures_claude": 0,
@@ -575,6 +576,7 @@ class Session:
                     return
 
     async def _repondre(self, lot: list[dict]) -> None:
+        self._derniere_reponse = time.monotonic()
         # Les mesures portent sur la DERNIÈRE phrase du lot : c'est après elle que le diagnostiqueur attend.
         dernier = lot[-1]
         audio = dernier["source"] == "audio"
@@ -1532,7 +1534,11 @@ class Session:
         maintenant = time.monotonic()
         while self._questions and maintenant - self._questions[0] > 60:
             self._questions.popleft()
-        if not forcer and not suite and len(self._questions) >= self.reglages.questions_par_minute:
+        # Le plafond ne vaut que pour ce que l'assistant dit de lui-même (veille) : après une réponse du diagnostiqueur
+        # (bouton ou voix), la question suivante part toujours, à son rythme. Test du 23/10 : répondant par boutons, Noah
+        # dépassait 20 questions par minute, et l'assistant se taisait.
+        a_son_rythme = maintenant - self._derniere_reponse < 15.0
+        if not forcer and not suite and not a_son_rythme and len(self._questions) >= self.reglages.questions_par_minute:
             self._compteurs["retenues"] += 1
             self.journaliser("question_retenue", texte=texte, raison="plafond de questions par minute")
             return
@@ -1595,6 +1601,7 @@ class Session:
         t = self.t_video
         citation = f"{'tapé' if message.get('saisie') else 'coché'} sur le téléphone : {libelle}"
         self._interrompue = None  # la question coupée a eu sa réponse : rien à redire
+        self._derniere_reponse = time.monotonic()
         resultats = appliquer_coche(self.checklist, cible, valeur, citation, t)
         self._cochees += [(t, citation), (t, valeur), (t, libelle)]
         self._situer(resultats, t - 1.0, t)  # « Ce mur donne sur quoi ? » « Extérieur » coché : le mur filmé, et son côté

@@ -82,6 +82,20 @@ class Gestionnaire:
             await session.terminer()
 
 
+class PageSansCache(StaticFiles):
+    """La page du téléphone, toujours revérifiée : test du 23/10, l'iPhone gardait l'ancienne page (sans « Cache-Control »,
+    Safari la réutilisait sans redemander), et le bouton « Autre » corrigé n'arrivait pas."""
+
+    async def get_response(self, path, scope):
+        reponse = await super().get_response(path, scope)
+        reponse.headers["Cache-Control"] = "no-cache"
+        return reponse
+
+
+# Version de la page (web/app.js) : si le téléphone en a une autre, il le dit (« rechargez la page »).
+VERSION_PAGE = (re.search(r'VERSION_PAGE = "([^"]+)"', (DOSSIER_PROTOTYPE / "web" / "app.js").read_text(encoding="utf-8")) or [None, ""])[1]
+
+
 def creer_app(reglages: Reglages | None = None) -> FastAPI:
     reglages = reglages or Reglages()
     gestionnaire = Gestionnaire(reglages)
@@ -113,7 +127,7 @@ def creer_app(reglages: Reglages | None = None) -> FastAPI:
         cerveau = (f"Claude Code (abonnement), modèle {reglages.modele}" if gestionnaire.mode_cerveau == "claude"
                    else "simulation (règles simples, sans Claude)")
         return {"cerveau": cerveau, "mode_cerveau": gestionnaire.mode_cerveau, "transcription": gestionnaire.transcripteur.nom,
-                "code_requis": bool(reglages.code), "boussole": REGLAGES_BOUSSOLE,
+                "code_requis": bool(reglages.code), "boussole": REGLAGES_BOUSSOLE, "version_page": VERSION_PAGE,
                 # Réponses en boutons, par information : la fiche de la pièce sur le téléphone (questionnaire en direct).
                 "options": options_par_champ()}
 
@@ -249,5 +263,5 @@ def creer_app(reglages: Reglages | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="visite inconnue")
         return JSONResponse(await session.terminer())
 
-    app.mount("/", StaticFiles(directory=DOSSIER_PROTOTYPE / "web", html=True), name="web")
+    app.mount("/", PageSansCache(directory=DOSSIER_PROTOTYPE / "web", html=True), name="web")
     return app

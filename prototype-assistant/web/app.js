@@ -2,6 +2,8 @@
 // Page du téléphone : filme, enregistre la vidéo complète en local, envoie au serveur le son
 // (16 kHz) et une image par seconde, et lit à voix haute les questions de l'assistant.
 
+// Version de la page, comparée à celle du serveur (test du 23/10 : l'iPhone gardait l'ancienne page en mémoire).
+const VERSION_PAGE = "2026-10-23-1";
 const $ = (id) => document.getElementById(id);
 const TAUX = 16000;
 const TYPE_SON = 1;
@@ -62,6 +64,10 @@ async function chargerStatut() {
     const r = await fetch("/api/statut");
     const s = await r.json();
     $("statut-serveur").textContent = `Serveur prêt. Cerveau : ${s.cerveau}. Transcription : ${s.transcription}.`;
+    if (s.version_page && s.version_page !== VERSION_PAGE) {
+      $("statut-serveur").textContent = "Nouvelle version de l'assistant : rechargez la page (tirez vers le bas) avant de commencer.";
+      $("statut-serveur").classList.add("a-recharger");
+    }
     $("ligne-code").hidden = !s.code_requis;
     if (s.boussole) etat.reglagesBoussole = s.boussole;
     if (s.options) etat.options = s.options;

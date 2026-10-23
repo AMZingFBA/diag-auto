@@ -77,6 +77,7 @@ progress { width: 100%; margin-top: 10px; }
 .choix button { width: auto; flex: 1 1 calc(50% - 8px); margin: 0; padding: 12px 10px; font-size: 1rem; background: #fff; color: var(--texte);
                 border: 2px solid var(--accent); }
 .choix button.choisi { background: var(--accent); color: #fff; }
+.a-recharger { color: var(--danger); font-weight: 700; }
 .choix form.autre { display: flex; align-items: center; gap: 8px; flex: 1 1 100%; }
 .choix form.autre input { flex: 1; margin: 0; font-size: 1.1rem; }
 .choix form.autre span { color: var(--texte); font-weight: 600; }
