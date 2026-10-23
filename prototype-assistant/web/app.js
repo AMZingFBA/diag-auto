@@ -3,7 +3,7 @@
 // (16 kHz) et une image par seconde, et lit à voix haute les questions de l'assistant.
 
 // Version de la page, comparée à celle du serveur (test du 23/10 : l'iPhone gardait l'ancienne page en mémoire).
-const VERSION_PAGE = "2026-10-23-3";
+const VERSION_PAGE = "2026-10-23-4";
 const $ = (id) => document.getElementById(id);
 const TAUX = 16000;
 const TYPE_SON = 1;
@@ -259,6 +259,9 @@ function recevoir(m) {
       alerte(m.message);
       setTimeout(() => alerte(""), 6000);
       break;
+    case "proposition":
+      proposerDapresImage(m);
+      break;
     case "bilan":
       etat.bilan = m; // l'arrêt reste décidé par le 2e appui sur « Terminer »
       break;
@@ -282,6 +285,7 @@ function boutonsReponse(conteneur, options, envoyer) {
   conteneur.replaceChildren(...options.map((o) => {
     if (o.saisie) return saisieAutre(o, envoyer);
     const bouton = Object.assign(document.createElement("button"), { type: "button", textContent: o.libelle });
+    bouton.dataset.valeur = o.valeur;
     bouton.onclick = () => {
       conteneur.querySelectorAll("button").forEach((b) => b.classList.toggle("choisi", b === bouton));
       couperVoix(); // il a répondu : la question en cours n'est plus lue
@@ -333,7 +337,19 @@ function saisieAutre(o, envoyer) {
   return ligne;
 }
 
+// L'image propose la réponse (assistant/regard.py) : le bouton vu sur l'image s'allume ; un appui confirme. Rien n'est
+// noté sans lui.
+function proposerDapresImage(m) {
+  if (etat.cibleAffichee !== m.cible) return; // la question a changé entre-temps
+  const bouton = [...$("choix").querySelectorAll("button")].find((b) => b.dataset.valeur === m.valeur);
+  if (!bouton) return;
+  bouton.classList.add("vu");
+  bouton.textContent = `📷 ${m.libelle}`;
+  $("latence").textContent = `📷 Sur l'image : ${m.libelle}${m.raison ? ` (${m.raison})` : ""}. Touchez pour confirmer.`;
+}
+
 function afficherChoix(cible, options) {
+  etat.cibleAffichee = cible;
   boutonsReponse($("choix"), options, (o) => envoyerJson({ type: "reponse", cible, valeur: o.valeur, libelle: o.libelle, saisie: o.saisie, t: maintenant() }));
 }
 

@@ -77,6 +77,7 @@ progress { width: 100%; margin-top: 10px; }
 .choix button { width: auto; flex: 1 1 calc(50% - 8px); margin: 0; padding: 12px 10px; font-size: 1rem; background: #fff; color: var(--texte);
                 border: 2px solid var(--accent); }
 .choix button.choisi { background: var(--accent); color: #fff; }
+.choix button.vu { background: #e3f5e9; border-color: #2e9e5b; border-width: 3px; }  /* vu sur l'image : à confirmer */
 .a-recharger { color: var(--danger); font-weight: 700; }
 /* « Autre… » : un bouton comme les autres tant qu'on ne l'a pas touché ; touché, une case et « OK » (clavier chiffres). */
 .choix form.autre { display: flex; align-items: center; gap: 8px; flex: 1 1 calc(50% - 8px); }

@@ -161,3 +161,15 @@ def test_ok_encore_la_quand_la_case_perd_la_main_comme_sur_iphone(page):
     assert page.js("getComputedStyle(document.querySelector('#choix form.autre button')).display") != "none"
     page.toucher("#choix form.autre button")
     assert [m["valeur"] for m in page.js("window.envoyes")] == ["22,5"]
+
+
+def test_bouton_vu_sur_l_image_s_allume_et_se_confirme_d_un_appui(page):
+    # L'image propose la réponse (assistant/regard.py) : le bouton s'allume ; c'est l'appui qui répond.
+    question(page, "F1.menuiserie", [{"libelle": "PVC", "valeur": "PVC"}, {"libelle": "Bois", "valeur": "bois"}])
+    page.js("recevoir({type: 'proposition', cible: 'F1.menuiserie', valeur: 'PVC', libelle: 'PVC', raison: 'cadre blanc'})")
+    assert page.js("[...document.querySelectorAll('#choix button.vu')].map((b) => b.textContent)") == ["📷 PVC"]
+    assert "Sur l'image : PVC" in page.js("$('latence').textContent") and page.js("window.envoyes") == []  # rien d'envoyé
+    page.js("recevoir({type: 'proposition', cible: 'F9.vitrage', valeur: 'bois', libelle: 'Bois', raison: ''})")  # autre question
+    assert page.js("document.querySelectorAll('#choix button.vu').length") == 1
+    page.toucher("#choix button.vu")
+    assert [(m["cible"], m["valeur"]) for m in page.js("window.envoyes")] == [("F1.menuiserie", "PVC")]

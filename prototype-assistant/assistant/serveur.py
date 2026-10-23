@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .boussole import REGLAGES as REGLAGES_BOUSSOLE
 from .cerveau import CerveauClaudeCode, trouver_claude
+from .regard import RegardClaude
 from .reglages import DOSSIER_PROTOTYPE, Reglages
 from .reponses import options_par_champ
 from .session import Session
@@ -72,7 +73,10 @@ class Gestionnaire:
         dossier = self.reglages.dossier_sessions / ident
         dossier.mkdir(parents=True, exist_ok=True)
         cerveau, veille = self._cerveaux(dossier)
-        session = Session(ident, dossier, cerveau, veille, self.transcripteur, self.reglages)
+        regard = None
+        if self.mode_cerveau == "claude":  # l'image propose la réponse (assistant/regard.py)
+            regard = RegardClaude(dossier / "claude-regard", binaire=self.binaire_claude)
+        session = Session(ident, dossier, cerveau, veille, self.transcripteur, self.reglages, regard=regard)
         self.sessions[ident] = session
         await session.demarrer(piece)
         return session, False

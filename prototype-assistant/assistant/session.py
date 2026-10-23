@@ -32,6 +32,7 @@ from .extraction import VOCABULAIRE, Cible, confirme_meme, extraire, normaliser,
 from .boussole import CAP_DU_POINT, MEME_COTE, Boussole, Mesure, Visee, ecart, visee_decalee
 from .decor import Decor
 from .repetition import mots_repetes, reformulation
+from .regard import visible
 from .reponses import SAISIES, options_pour, suspecte, valeur_tapee
 from .garde import Questions, champ_rempli, demande_de_repeter, nom_abstrait
 from .simulation import CerveauSimulation
@@ -211,8 +212,9 @@ def rappel_fin(checklist: Checklist, maximum: int = 3) -> str:
 
 
 class Session:
-    def __init__(self, ident: str, dossier: Path, cerveau, cerveau_veille, transcripteur, reglages: Reglages) -> None:
+    def __init__(self, ident: str, dossier: Path, cerveau, cerveau_veille, transcripteur, reglages: Reglages, regard=None) -> None:
         self.id = ident
+        self.regard = regard  # assistant/regard.py : l'image propose la réponse à la question posée (None : sans)
         self.dossier = dossier
         (dossier / "images").mkdir(parents=True, exist_ok=True)
         self.cerveau = cerveau
@@ -321,6 +323,9 @@ class Session:
 
     async def _demarrer_cerveaux(self) -> None:
         debut = time.perf_counter()
+        if self.regard is not None:
+            tache = asyncio.create_task(self.regard.demarrer())
+            tache.add_done_callback(lambda t: t.exception() and log.warning("Regard de Claude : %s", t.exception()))
         try:
             await asyncio.gather(*(c.demarrer() for c in self._cerveaux()))
             mesures = getattr(self.cerveau, "prechauffage", {})
@@ -338,7 +343,7 @@ class Session:
         self.termine = True
         for tache in [*self._taches, *self._complements]:
             tache.cancel()
-        for c in self._cerveaux():
+        for c in [*self._cerveaux(), *([self.regard] if self.regard is not None else [])]:
             await c.fermer()
         bilan = self.bilan()
         self._sauver_etat(self.checklist.vers_dict())
@@ -1571,6 +1576,25 @@ class Session:
             # Questionnaire en direct : la question arrive sur le téléphone avec ses réponses en boutons.
             message.update(cible=cible.code, options=options_pour(cible))
         await self._envoyer(message)
+        if self.regard is not None and message.get("options") and visible(cible):
+            tache = asyncio.create_task(self._regarder(cible, texte, message["options"]))
+            self._complements.add(tache)
+            tache.add_done_callback(self._complements.discard)
+
+    async def _regarder(self, cible: Cible, question: str, options: list[dict]) -> None:
+        """L'image propose la réponse (assistant/regard.py) : le bouton s'allume sur le téléphone, rien n'est noté."""
+        images = [i for i in self.images if i.t >= self.t_video - 3.0][-2:]
+        debut = time.perf_counter()
+        proposition = await self.regard.proposer(question, options, images)
+        if proposition is None:
+            self.journaliser("regard", cible=cible.code, images=len(images), proposition=None, duree_s=round(time.perf_counter() - debut, 2))
+            return
+        encore = self._cible is not None and self._cible.code == cible.code and not champ_rempli(cible, self.checklist)
+        self.journaliser("regard", cible=cible.code, images=len(images), proposition=proposition.valeur, raison=proposition.raison,
+                         duree_s=round(time.perf_counter() - debut, 2), montree=encore)
+        if encore:
+            await self._envoyer({"type": "proposition", "cible": cible.code, "valeur": proposition.valeur,
+                                 "libelle": proposition.libelle, "raison": proposition.raison})
 
     async def recevoir_reponse(self, message: dict) -> None:
         """Réponse cochée sur le téléphone (bouton de la question en cours, ou fiche de la pièce) : appliquée tout de suite

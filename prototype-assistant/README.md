@@ -1118,7 +1118,22 @@ maintenant ouverte tant qu'elle contient un chiffre, et « OK » envoie la valeu
 de téléphone, touchée au doigt (écran tactile simulé) ; on vérifie ce qui part vers le serveur (bouton, « Autre… », nombre,
 « OK », y compris quand la case perd la main comme sur iPhone). Sauté si Edge manque ; ce n'est pas Safari.
 
-Le prototype compte 325 tests (et le projet, à la racine, 654).
+**L'image propose la réponse (Noah, 23/10 : « rends la vidéo plus utile, on ne l'utilise presque plus »)** :
+- constat : pendant la visite, la vidéo ne servait plus qu'à la boussole et aux vignettes ; le coup d'œil de Claude toutes
+  les 10 s (« veille ») n'a rien dit en 26 essais sur la visite de 7 h 37 ;
+- maintenant (`assistant/regard.py`) : quand une question porte sur quelque chose qui se voit (menuiserie, vitrage ou volets
+  d'une fenêtre, type de porte ou de radiateur, chaudière, ballon, ventilation, matériau d'un mur), Claude (Sonnet, par
+  l'abonnement, un processus à part qui ne retarde jamais la conversation) regarde les 2 dernières images. S'il voit
+  **clairement** une des réponses proposées, son bouton s'allume sur le téléphone (« 📷 PVC », et ce qui se voit). **Rien
+  n'est noté sans un appui ou une réponse dite** ; pas de proposition pour « donne sur », l'isolation ou une année ;
+- essai sur les vraies images de la visite du 22/10 après-midi : Claude s'abstient quand c'est douteux (« cadre blanc,
+  PVC ou alu indiscernable ») ; Haiku a pris un store intérieur baissé pour un coffre de volet roulant, Sonnet non : c'est
+  donc Sonnet (1,5 à 4 s par image). Les propositions viendront surtout des cas nets (radiateur en fonte, chaudière, bouche
+  de VMC, volets visibles) : à juger sur une vraie visite ;
+- tests : `tests/test_regard.py` (questions regardées ou non, réponse de Claude jamais inventée, bouton proposé jamais
+  noté) et `tests/test_page_navigateur.py` (le bouton s'allume, un appui confirme).
+
+Le prototype compte 329 tests (et le projet, à la racine, 654).
 
 ## Réglages (variables d'environnement)
 
