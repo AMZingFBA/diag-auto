@@ -52,7 +52,8 @@ progress { width: 100%; margin-top: 10px; }
   background: rgba(255,255,255,0.88); border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.35); }
 .croquis svg { display: block; width: 100%; height: 100%; }
 /* Amiante, plomb : le croquis en grand, sous le bandeau (la vidéo reste visible en dessous). */
-body[data-mission="amiante"] .croquis, body[data-mission="plomb"] .croquis { left: 12px; right: 132px; width: auto; height: 42vh; }
+body[data-mission="amiante"] .croquis, body[data-mission="plomb"] .croquis { left: 12px; right: 132px; width: auto; height: auto;
+  bottom: calc(var(--bas, 45vh) + 8px); min-height: 120px; }
 body[data-mission="amiante"] .jauge, body[data-mission="plomb"] .jauge,
 body[data-mission="amiante"] .actions, body[data-mission="plomb"] .actions,
 body[data-mission="amiante"] .choix, body[data-mission="plomb"] .choix { display: none !important; }  /* rien du DPE */

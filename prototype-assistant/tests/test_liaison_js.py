@@ -183,3 +183,36 @@ derniere().couper(4401); avancer(10000);
 console.log(JSON.stringify({ fin: liaison.etat, liaisons: serveur.liaisons.length }));
 """)
     assert r == {"fin": "refuse", "liaisons": 1}
+
+
+
+def test_images_apres_le_son():
+    # Étape 15 : la rafale d'images d'un tour de pièce attend que la liaison se vide ; le son, lui, part tout de suite.
+    r = node("""
+liaison.demarrer(); avancer(1000);
+derniere().bufferedAmount = 500000;                      // liaison chargée (4G faible)
+for (let i = 1; i <= 3; i++) liaison.envoyerImage({ nom: "image" + i, size: 30000 });
+liaison.envoyer(son("son1"));
+const pendant = serveur.recus.filter((d) => d.startsWith("binaire:"));
+derniere().bufferedAmount = 0;                           // la liaison se vide
+liaison.envoyer(son("son2"));
+console.log(JSON.stringify({ pendant, apres: serveur.recus.filter((d) => d.startsWith("binaire:")) }));
+""")
+    assert r["pendant"] == ["binaire:son1"]  # le son passe devant les images
+    assert r["apres"] == ["binaire:son1", "binaire:son2", "binaire:image1", "binaire:image2", "binaire:image3"]
+
+
+def test_images_en_attente_bornees_et_rattrapees_apres_le_son():
+    r = node("""
+liaison.o.imagesMaxOctets = 70000;
+liaison.demarrer(); avancer(1000);
+serveur.joignable = false; derniere().couper();
+for (let i = 1; i <= 4; i++) liaison.envoyerImage({ nom: "image" + i, size: 30000 });   // la 1re et la 2e sont perdues
+liaison.envoyerImage({ nom: "image-minuterie", size: 30000 }, false);                    // pas gardée pendant la coupure
+liaison.envoyer(son("coupure"));
+serveur.joignable = true; avancer(3000);
+const coupures = JSON.parse(serveur.recus.filter((d) => d.includes('"debut"')).pop()).coupures;
+console.log(JSON.stringify({ recus: serveur.recus.filter((d) => d.startsWith("binaire:")), perdues: liaison.imagesPerdues, coupures }));
+""")
+    assert r["recus"] == ["binaire:coupure", "binaire:image3", "binaire:image4"]  # le son d'abord, puis les images gardées
+    assert r["perdues"] == 2 and r["coupures"][0]["images_gardees"] == 2

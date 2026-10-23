@@ -28,7 +28,11 @@
       lentMs: 1500, // réponse plus lente : « réseau lent » (pas une coupure)
       delais: [500, 1000, 2000], // reconnexion : 0,5 s, 1 s, puis toutes les 2 s
       saturationOctets: 2_000_000, // la liaison n'arrive pas à suivre : on garde au lieu d'empiler
-      tamponMaxOctets: 12_000_000, // ~2 à 3 min de son et d'images gardés pendant une coupure
+      tamponMaxOctets: 12_000_000, // ~2 à 3 min de son et de messages gardés pendant une coupure
+      // Images (étape 15) : une rafale d'images d'un tour de pièce ne doit pas retarder le son. Une image ne part que si
+      // rien d'autre n'attend et que la liaison est presque vide ; sinon elle attend dans sa propre file, bornée.
+      imagesSaturationOctets: 128_000,
+      imagesMaxOctets: 6_000_000,
       horloge: () => Date.now(),
       planifier: (f, ms) => setTimeout(f, ms),
       annuler: (id) => clearTimeout(id),
@@ -42,6 +46,9 @@
     this.tampon = [];
     this.octets = 0;
     this.perdus = 0;
+    this.images = []; // images en attente (après le son et les messages)
+    this.octetsImages = 0;
+    this.imagesPerdues = 0;
     this.n = 0;
     this.attendus = new Map(); // numéro du battement → instant d'envoi
     this.rtt = null;
@@ -81,6 +88,7 @@
   Liaison.prototype.envoyer = function (donnees, garder = true) {
     if (this.ouverte() && !this.tampon.length && this.ws.bufferedAmount <= this.o.saturationOctets) {
       this.ws.send(donnees);
+      if (this.images.length) this._vider(); // des images attendaient : elles suivent si la liaison le permet
       return true;
     }
     if (!garder) return false;
@@ -89,6 +97,24 @@
     while (this.octets > this.o.tamponMaxOctets && this.tampon.length) {
       this.octets -= taille(this.tampon.shift()); // trop long : on perd le plus ancien
       this.perdus += 1;
+    }
+    this._vider();
+    return false;
+  };
+
+  // Une image : après le son et les messages (voir imagesSaturationOctets). Les plus anciennes sont perdues si la file
+  // déborde (coupure longue) ; `garder` faux : abandonnée si elle ne peut pas partir tout de suite.
+  Liaison.prototype.envoyerImage = function (donnees, garder = true) {
+    if (this.ouverte() && !this.tampon.length && !this.images.length && this.ws.bufferedAmount <= this.o.imagesSaturationOctets) {
+      this.ws.send(donnees);
+      return true;
+    }
+    if (!garder) return false;
+    this.images.push(donnees);
+    this.octetsImages += taille(donnees);
+    while (this.octetsImages > this.o.imagesMaxOctets && this.images.length) {
+      this.octetsImages -= taille(this.images.shift());
+      this.imagesPerdues += 1;
     }
     this._vider();
     return false;
@@ -143,7 +169,8 @@
       this._horsReseau = null;
       if (this.coupureDepuis !== null) {
         this.coupures.push({ duree_s: Math.round((this.o.horloge() - this.coupureDepuis) / 100) / 10, cause: this.causeCoupure,
-                             gardes: this.tampon.length, perdus: this.perdus });
+                             gardes: this.tampon.length, perdus: this.perdus, images_gardees: this.images.length,
+                             images_perdues: this.imagesPerdues });
         this.coupureDepuis = null;
       }
       ws.send(JSON.stringify(this.o.debut(this.coupures.splice(0))));
@@ -241,6 +268,11 @@
     while (this.tampon.length && this.ouverte() && this.ws.bufferedAmount <= this.o.saturationOctets) {
       const donnees = this.tampon.shift();
       this.octets -= taille(donnees);
+      this.ws.send(donnees);
+    }
+    while (!this.tampon.length && this.images.length && this.ouverte() && this.ws.bufferedAmount <= this.o.imagesSaturationOctets) {
+      const donnees = this.images.shift();
+      this.octetsImages -= taille(donnees);
       this.ws.send(donnees);
     }
   };

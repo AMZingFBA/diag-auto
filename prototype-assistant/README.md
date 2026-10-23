@@ -1184,7 +1184,7 @@ image : pièce « U », cuisine, U, chambre, U), un coup d'œil toutes les 8 s :
 du séjour reconnu à tort), `tests/test_page_navigateur.py` (le croquis dessiné dans le coin, agrandi, renommer, réunir,
 déplacer).
 
-Le prototype compte 340 tests (et le projet, à la racine, 654) à cette étape ; 353 avec le choix de la mission.
+Le prototype compte 340 tests (et le projet, à la racine, 654) à cette étape ; 353 avec le choix de la mission ; 393 avec la capture du tour (étape 15).
 
 ## Choix de la mission avant de filmer (23/10/2026)
 
@@ -1213,6 +1213,70 @@ boussole) dans cette mission, et affiche les pièces reconnues et le croquis.
 **Tests** : `tests/test_missions.py` (amiante : aucune question du DPE, rien de noté pour le DPE, pièces annoncées et
 corrigées à la voix, premier coup d'œil sans attendre ; DPE : pièces non regardées ; mission inconnue = DPE), `tests/test_serveur.py` (plomb par la vraie liaison), `tests/test_page_navigateur.py`
 (cases de l'accueil, bouton grisé puis libellé, mission dans le message d'ouverture, croquis en grand, bouton Plan).
+
+**Après relecture (défauts confirmés, corrigés le 23/10)** :
+- à la voix, en amiante et plomb : les locaux du repérage sont compris (véranda, escalier, palier, débarras, chaufferie,
+  local technique, sous-sol…) ; « c'est une autre chambre » crée « Chambre 2 » (deux chambres semblables), « la deuxième
+  chambre » va à « Chambre 2 » ;
+- une pièce renommée (« non, c'est la buanderie ») revue par Claude sous l'ancien type (« nouvelle cuisine ») reste la
+  même pièce ;
+- « Nouvelle pièce : … » n'est jamais dit par-dessus le diagnostiqueur : au premier silence, et plus du tout si la pièce
+  a été renommée entre-temps ;
+- « on fait une pause » / « on reprend » marchent aussi en amiante et plomb : pendant la pause, rien n'est reconnu ni
+  annoncé ;
+- en DPE, le processus Claude des pièces n'est plus lancé (il ne servait plus) ;
+- téléphone : la mission ne change plus pendant l'ouverture de la caméra (plus de double visite) ; le grand croquis
+  s'arrête au-dessus du bloc du bas, quelle que soit la taille de l'écran ; le plan vide dit quoi faire ; une annonce
+  n'efface plus l'indication « touchez le croquis pour corriger » ; un serveur pas relancé est signalé (« il faut le
+  relancer ») ; la version est revérifiée quand la page revient ; le service worker efface ses anciennes copies.
+
+## Étape 15 (en cours) : le croquis professionnel, à partir d'un tour de chaque pièce (23/10/2026)
+
+**Ce que Noah a demandé** : « filmer une grande maison en une fois, passer d'une pièce à une autre, d'un étage à un
+autre, et il le comprend ; on arrive dans une pièce, on fait un tour très rapide avec le téléphone, 3 secondes par pièce
+maximum, et ça repère les murs, fenêtres, relief… tout automatique » ; puis : « analyser les angles des murs, la taille
+proportionnelle des murs, la forme des pièces, et que l'image se situe par rapport aux déplacements du diagnostiqueur ».
+On filme en direct dans l'application.
+
+**Ce qu'ont montré les essais (sur les vraies visites et sur des pièces de synthèse)** :
+- à une image par seconde, un tour de pièce est invisible (2 images floues, les capteurs envoyés une fois par seconde ne
+  le voient pas) : il faut des images prises selon la rotation et les capteurs en direct ;
+- le seul vrai tour enregistré (23/10 au matin) fait 380° en 2,2 s, avec des pointes à 300°/s : les images sont trop
+  floues pour mesurer quoi que ce soit (ni la profondeur par IA, ni Claude, ni un humain n'y voient un coin de mur). **Il
+  faut un tour d'environ 5 à 6 s**, téléphone droit à hauteur de poitrine, depuis le milieu de la pièce ;
+- la meilleure méthode pour la forme : **Claude repère les coins des murs dans chaque image** (à moins de 1° près sur
+  des pièces de synthèse, même floues), les fenêtres, portes et radiateurs, et **notre calcul** (direction de chaque coin
+  = gyroscope + position dans l'image) donne la forme et les proportions : moins de 2 % d'erreur sur les pièces de
+  synthèse (moins de 5 % avec les petites images du direct). Claude seul, en mode rapide, se trompe sur les proportions ;
+- la profondeur par IA (Depth Anything 3 Small, MoGe-2, sous licences commerciales) donne une forme juste à 10-15 % près
+  sur des images nettes, mais demande 10 s à 2 min de calcul par pièce sur ce PC : pour plus tard, après la visite ou
+  sur un GPU loué ;
+- la position entre les pièces : pas (accéléromètre) + gyroscope en direct (0,3 à 1 m près par passage de porte), puis
+  recollage des pièces sur les portes vues des deux côtés ; la reconstruction 3D de la vidéo (GLOMAP, licence BSD)
+  après la visite.
+
+**Fait à ce stade (capture du tour, en direct)** :
+- téléphone : orientation complète à chaque événement (cap, lacet, **élévation et roulis** justes en portrait comme en
+  paysage : `web/boussole.js` `poseCamera`), pas (accéléromètre), envoyés au serveur **par lots de 0,25 s** (≈ 15 mesures
+  par seconde) ; pendant une rotation, **une image à chaque demi-champ tourné** (~22° en portrait), au plus 8 par
+  seconde, en attendant une image moins floue au-delà de 200°/s, chacune envoyée **avec sa pose à l'instant de la prise**
+  (80 ms avant le dessin : mesuré sur l'iPhone de Noah) ; les images passent **après le son** (`web/liaison.js` : une
+  rafale d'images ne retarde plus l'assistant) ;
+- serveur : chaque tour est repéré en direct (`assistant/tour.py` : rotation ≥ 330° couverte ou ≥ 270° dans un sens, en
+  8 s au plus, caméra à l'horizontale) et, en amiante et plomb, le téléphone **bipe** : « 🔄 Tour de la pièce enregistré » ;
+  les images et leur pose sont gardées (`images.jsonl`), les capteurs aussi (`capteurs-lot.jsonl`) ; les **images
+  noires** (caméra coupée par le téléphone, page en arrière-plan) sont écartées ;
+- mesuré sur les relevés réels : le vrai tour du 23/10 est trouvé (14,0 à 16,9 s), aucun faux tour sur les autres
+  visites (téléphone basculé vers le plafond puis posé, balayages de DPE, téléphone posé à plat).
+
+**Prochaines briques** : Claude regarde les images de chaque tour (coins, ouvertures, relief, pièce) ; notre calcul en
+tire la forme, les angles et les proportions ; le mur A est celui de la porte d'entrée ; les pièces sont placées selon
+les pas et recollées sur les portes ; un plan par étage (escalier vu, « je monte ») ; le croquis dessiné en polygones.
+
+**Tests** : `tests/test_tour.py` (tours fabriqués et vrais relevés de Noah, dont le faux tour vers le plafond),
+`tests/test_capture_tour.py` (images posées, lots de capteurs, bip du tour, images noires), `tests/test_boussole_js.py`
+(élévation et roulis), `tests/test_liaison_js.py` (images après le son), `tests/test_page_navigateur.py` (images clés
+pendant une rotation, pose interpolée).
 
 ## Correction : vidéos d'iPhone lues à l'envers après la visite (23/10/2026)
 

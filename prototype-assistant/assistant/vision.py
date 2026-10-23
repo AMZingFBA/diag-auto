@@ -46,6 +46,13 @@ def reduire(image: np.ndarray, cote_max: int = COTE_MAX) -> np.ndarray:
     return image
 
 
+def image_noire(jpeg: bytes, seuil: float = 3.0) -> bool:
+    """Image toute noire : caméra coupée par le téléphone (page en arrière-plan sur iPhone : 4 visites sur 11 du 22-23/10,
+    jusqu'à 168 s). Une image illisible n'est pas dite noire."""
+    image = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_REDUCED_GRAYSCALE_8)
+    return image is not None and float(image.mean()) < seuil
+
+
 def redresser(couleur: np.ndarray, rotation: float) -> np.ndarray:
     """L'image d'une vidéo de téléphone telle qu'elle s'affiche. ``rotation`` (PyAV, matrice d'affichage) est l'angle dont
     l'affichage tourne l'image dans le sens direct : −90 pour un iPhone en portrait, soit un quart de tour dans le sens des

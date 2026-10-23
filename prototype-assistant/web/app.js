@@ -3,11 +3,15 @@
 // (16 kHz) et une image par seconde, et lit à voix haute les questions de l'assistant.
 
 // Version de la page, comparée à celle du serveur (test du 23/10 : l'iPhone gardait l'ancienne page en mémoire).
-const VERSION_PAGE = "2026-10-23-8";
+const VERSION_PAGE = "2026-10-23-10";
 const $ = (id) => document.getElementById(id);
 const TAUX = 16000;
 const TYPE_SON = 1;
 const TYPE_IMAGE = 2;
+const TYPE_IMAGE_POSEE = 3; // image + sa pose (cap, lacet, élévation, roulis) au moment de la prise (étape 15)
+// L'image dessinée depuis la caméra montre ce que la vidéo a enregistré ~83 ms plus tôt (mesuré sur l'iPhone de Noah) :
+// sa pose est lue à cet instant-là, sinon 10° d'erreur à 120°/s.
+const LATENCE_IMAGE_MS = 80;
 
 const etat = {
   liaison: null, // web/liaison.js : battement de cœur, reconnexion silencieuse, rattrapage (étape 10)
@@ -45,6 +49,23 @@ const etat = {
   mission: null, // choisie sur l'accueil : « dpe », « amiante » ou « plomb »
 };
 
+// Mouvement du téléphone (étape 15 : « un tour de 3 s par pièce ») : orientation complète à chaque événement, rotation
+// déroulée (sans saut à 360°), vitesse de rotation, pas ; envoyés au serveur par lots de 0,25 s, qui y voit les tours de
+// pièce et les déplacements. Pendant une rotation, une image part à chaque demi-champ tourné, avec sa pose.
+const mouvement = {
+  lot: [], // mesures (≈ 15 par seconde) à envoyer au prochain lot
+  pas: [], // instants des pas détectés depuis le dernier lot
+  anneau: [], // toutes les orientations de la dernière seconde et demie : la pose d'une image à l'instant de sa prise
+  deroule: null, // lacet (sinon cap) déroulé, en degrés
+  dernierAngle: null,
+  dernierQuand: 0,
+  vitesse: 0, // degrés par seconde autour de la verticale, lissée
+  acc: 0, // accélération lissée hors pesanteur (m/s²), pour les pas
+  enHaut: false,
+  dernierPas: -1,
+  derniereImage: null, // { deroule, elevation, quand } : rotation comptée depuis la dernière image envoyée
+};
+
 // Missions (Noah, 23/10) : le DPE et ses questions ; l'amiante et le plomb, le croquis en grand (aucune question du DPE).
 const MISSIONS = {
   dpe: { titre: "DPE", demarrer: "Démarrer le DPE", piece: "Pièce de départ (facultatif : sans effet sur le DPE)",
@@ -60,7 +81,7 @@ function croquisSeul() {
 }
 
 function choisirMission(mission) {
-  if (!MISSIONS[mission]) return;
+  if (!MISSIONS[mission] || etat.demarrage) return; // la caméra s'ouvre déjà : la mission ne change plus
   etat.mission = mission;
   for (const b of $("missions").querySelectorAll("button")) {
     b.classList.toggle("choisi", b.dataset.mission === mission);
@@ -103,7 +124,8 @@ async function chargerStatut() {
     const s = await r.json();
     $("statut-serveur").textContent = `Serveur prêt. Cerveau : ${s.cerveau}. Transcription : ${s.transcription}.`;
     if (s.version_page && s.version_page !== VERSION_PAGE) {
-      $("statut-serveur").textContent = "Nouvelle version de l'assistant : rechargez la page (tirez vers le bas) avant de commencer.";
+      $("statut-serveur").textContent = "Nouvelle version de l'assistant : rechargez la page (tirez vers le bas) avant de commencer. "
+        + "Si ce message reste après le rechargement, il faut relancer le serveur sur le PC.";
       $("statut-serveur").classList.add("a-recharger");
     }
     $("ligne-code").hidden = !s.code_requis;
@@ -258,6 +280,8 @@ function recevoir(m) {
       etat.session = m.session;
       if (m.options) etat.options = m.options;
       alerte("");
+      // Serveur pas relancé après une mise à jour : il ignore la mission choisie (premier essai de Noah du 23/10).
+      if (etat.mission && (m.mission || "dpe") !== etat.mission) alerte("Le serveur du PC n'a pas pris la mission choisie : il faut le relancer.");
       $("infos").textContent = `Visite ${m.session}${m.reprise ? " (reprise)" : ""} — cerveau : ${m.cerveau} — transcription : ${m.transcription}`;
       break;
     case "parole_debut":
@@ -276,7 +300,10 @@ function recevoir(m) {
       if (m.image) $("vignette").src = m.image + (etat.code ? `?code=${encodeURIComponent(etat.code)}` : "");
       $("question").classList.toggle("muet", m.muet || etat.muet);
       $("question").hidden = false;
-      if (!m.suite) $("latence").textContent = m.latence_s != null ? `Réponse ${secondes(m.latence_s)} après la fin de votre phrase` : "";
+      // Amiante, plomb : une annonce (« Nouvelle pièce : … ») n'efface pas l'indication « touchez le croquis pour corriger ».
+      if (!m.suite && (m.latence_s != null || !croquisSeul())) {
+        $("latence").textContent = m.latence_s != null ? `Réponse ${secondes(m.latence_s)} après la fin de votre phrase` : "";
+      }
       if (m.cible !== undefined) afficherChoix(m.cible, m.options || []);
       if (!m.muet && !etat.muet) parler(m.texte, m.id, m.suite);
       break;
@@ -300,6 +327,11 @@ function recevoir(m) {
       break;
     case "piece_reconnue":
       $("latence").textContent = `📷 Pièce : ${m.nom}${m.nouvelle ? " (nouvelle)" : ""}. Touchez le croquis pour corriger.`;
+      break;
+    case "tour":
+      // Le serveur a vu un tour de la pièce complet (assistant/tour.py) : un bip dans l'oreillette, sans regarder l'écran.
+      bip();
+      $("latence").textContent = `🔄 Tour de la pièce enregistré (${Math.round(Math.abs(m.rotation))}° en ${String(m.duree_s).replace(".", ",")} s)`;
       break;
     case "proposition":
       proposerDapresImage(m);
@@ -403,7 +435,8 @@ function afficherChoix(cible, options) {
 // --- Croquis du logement (assistant/croquis.py) ------------------------------------------------------------
 // Sans mesures : chaque pièce est une case ; portes entre pièces, fenêtres et portes du logement sur leur mur ; murs A à D.
 const TYPES_PIECES = ["Entrée", "Séjour", "Salle à manger", "Cuisine", "Chambre", "Salle de bains", "Salle d'eau", "WC", "Couloir",
-  "Dégagement", "Bureau", "Buanderie", "Cellier", "Garage", "Escalier", "Cave", "Grenier", "Véranda"];
+  "Dégagement", "Bureau", "Buanderie", "Cellier", "Garage", "Escalier", "Palier", "Cave", "Grenier", "Combles", "Sous-sol",
+  "Véranda", "Placard", "Dressing", "Débarras", "Chaufferie", "Mezzanine"];
 const SVG = "http://www.w3.org/2000/svg";
 
 function dessinerCroquis(svg, c, grand) {
@@ -470,7 +503,13 @@ function afficherCroquis(c) {
   $("croquis").hidden = !croquisSeul();
   $("croquis-aide").hidden = !vide;
   if ($("croquis").hidden) return;
-  if (vide) return $("croquis-petit").replaceChildren();
+  if (vide) {
+    // Rien encore (ou une nouvelle visite) : le plan ouvert dit quoi faire, au lieu d'un grand rectangle blanc.
+    $("croquis-petit").replaceChildren();
+    $("croquis-grand").replaceChildren();
+    $("plan-pieces").replaceChildren(Object.assign(document.createElement("p"), { className: "petit", textContent: $("croquis-aide").textContent }));
+    return;
+  }
   dessinerCroquis($("croquis-petit"), c, true);
   if ($("plan").hidden) return;
   dessinerCroquis($("croquis-grand"), c, true);
@@ -616,21 +655,146 @@ async function demarrerSon() {
   }
 }
 
-// --- Images (1 par seconde, ~512 px) --------------------------------------------------------
+// --- Images (~512 px) : une par seconde, et pendant une rotation une à chaque demi-champ tourné -----------------
 
-function envoyerImage() {
+// Chaque seconde : la mesure de la boussole (étape 6), et une image si aucune n'est partie depuis 0,7 s.
+function chaqueSeconde() {
+  envoyerCapteurs(maintenant());
+  if (!mouvement.derniereImage || performance.now() - mouvement.derniereImage.quand >= 700) capturerImage("temps", null);
+}
+
+// Champ horizontal de la caméra principale (mesuré sur les visites de Noah : ~45° en portrait, ~61° en paysage).
+function champHorizontal() {
+  const video = $("camera");
+  return video.videoHeight > video.videoWidth ? 45 : 61;
+}
+
+// À chaque image de la caméra (requestVideoFrameCallback, sinon toutes les 66 ms) : une image clé dès que la caméra a
+// tourné d'un demi-champ (~22° en portrait), ou s'est levée ou baissée de 20°, depuis la dernière image envoyée. 8 par
+// seconde au plus ; au-delà de 200°/s, on attend un peu une image moins floue (essai du 23/10 : à 360°/s, image inutilisable).
+function examinerTrame(meta) {
+  const derniere = mouvement.derniereImage;
+  if (!derniere || mouvement.deroule == null || !etat.liaison || etat.termine) return;
+  const pas = champHorizontal() / 2;
+  const tourne = Math.abs(mouvement.deroule - derniere.deroule);
+  const pose = capteurs.pose;
+  const leve = pose && derniere.elevation != null ? Math.abs(pose.elevation - derniere.elevation) : 0;
+  if (tourne < pas && leve < 20) return;
+  if (performance.now() - derniere.quand < 125) return;
+  if (mouvement.vitesse > 200 && tourne < 1.5 * pas) return;
+  capturerImage("rotation", meta);
+}
+
+function suivreTrames() {
+  const video = $("camera");
+  if (video.requestVideoFrameCallback) {
+    const surTrame = (_maintenant, meta) => {
+      if (etat.termine) return;
+      examinerTrame(meta);
+      video.requestVideoFrameCallback(surTrame);
+    };
+    video.requestVideoFrameCallback(surTrame);
+  } else {
+    etat.minuteries.push(setInterval(() => examinerTrame(null), 66));
+  }
+}
+
+// La pose de la caméra à l'instant `quand` (ms, horloge de performance.now) : interpolée dans l'anneau des orientations.
+function poseA(quand) {
+  const a = mouvement.anneau;
+  if (!a.length) return {};
+  let i = a.findIndex((m) => m.quand >= quand);
+  if (i < 0) i = a.length - 1;
+  const apres = a[i], avant = a[Math.max(0, i - 1)];
+  const k = apres.quand > avant.quand ? Math.min(1, Math.max(0, (quand - avant.quand) / (apres.quand - avant.quand))) : 1;
+  const melange = (x, y) => (x == null || y == null ? (y == null ? x : y) : x + k * (y - x));
+  const deroule = melange(avant.deroule, apres.deroule);
+  const proche = k < 0.5 ? avant : apres;
+  // Cap et lacet de l'instant : ceux de l'orientation la plus proche, décalés de la rotation faite depuis.
+  const decale = (angle) => (angle == null || deroule == null || proche.deroule == null ? angle : (angle + deroule - proche.deroule + 720) % 360);
+  return { deroule, cap: decale(proche.cap), lacet: decale(proche.lacet), elevation: melange(avant.elevation, apres.elevation),
+           roulis: proche.roulis };
+}
+
+function capturerImage(raison, meta) {
   const video = $("camera");
   if (!video.videoWidth || !etat.liaison) return;
+  const quand = performance.now();
+  const prise = meta && meta.captureTime ? meta.captureTime : quand - LATENCE_IMAGE_MS;
+  const pose = poseA(prise);
   const echelle = 512 / Math.max(video.videoWidth, video.videoHeight);
-  const toile = envoyerImage.toile || (envoyerImage.toile = document.createElement("canvas"));
+  const toile = capturerImage.toile || (capturerImage.toile = document.createElement("canvas"));
   toile.width = Math.round(video.videoWidth * echelle);
   toile.height = Math.round(video.videoHeight * echelle);
-  toile.getContext("2d").drawImage(video, 0, 0, toile.width, toile.height);
+  toile.getContext("2d").drawImage(video, 0, 0, toile.width, toile.height); // toBlob copie l'image tout de suite
+  const t = Math.max(0, (prise - etat.debut) / 1000);
+  mouvement.derniereImage = { deroule: pose.deroule != null ? pose.deroule : mouvement.deroule,
+                              elevation: pose.elevation != null ? pose.elevation : null, quand };
+  // Pendant une coupure, toutes les images d'une rotation sont gardées, et une sur trois des autres.
+  const garder = raison === "rotation" || etat.liaison.ouverte() || etat.images++ % 3 === 0;
+  const arrondi = (x) => (x == null ? null : Math.round(x * 10) / 10);
+  const portrait = toile.height > toile.width;
+  const entete = { raison, cap: arrondi(pose.cap), lacet: arrondi(pose.lacet), elevation: arrondi(pose.elevation),
+                   roulis: arrondi(pose.roulis), vitesse: Math.round(mouvement.vitesse), precision: arrondi(capteurs.precision),
+                   portrait, champ: champHorizontal() };
+  toile.toBlob((blob) => blob && envoyerImagePosee(t, entete, blob, garder), "image/jpeg", 0.7);
+}
+
+// Message binaire de type 3 : [3][t float64][longueur u16][pose en JSON][JPEG]. Après le son (web/liaison.js).
+function envoyerImagePosee(t, pose, blob, garder) {
+  if (!etat.liaison) return;
+  const json = new TextEncoder().encode(JSON.stringify(pose));
+  const entete = new ArrayBuffer(11);
+  const vue = new DataView(entete);
+  vue.setUint8(0, TYPE_IMAGE_POSEE);
+  vue.setFloat64(1, t, true);
+  vue.setUint16(9, json.length, true);
+  etat.liaison.envoyerImage(new Blob([entete, json, blob]), garder);
+}
+
+// Orientation à chaque événement : rotation déroulée, vitesse, et l'anneau qui donne la pose de chaque image.
+function suivreRotation() {
+  const angle = capteurs.lacet != null ? capteurs.lacet : capteurs.cap;
+  const quand = performance.now();
+  if (angle == null) return;
+  if (mouvement.deroule == null || quand - mouvement.dernierQuand > 500) {
+    mouvement.deroule = angle; // début, ou trou (page cachée) : on repart de là
+    mouvement.vitesse = 0;
+  } else {
+    const pas = ((angle - mouvement.dernierAngle + 540) % 360) - 180;
+    mouvement.deroule += pas;
+    const dt = (quand - mouvement.dernierQuand) / 1000;
+    if (dt > 0) mouvement.vitesse += 0.3 * (Math.abs(pas) / dt - mouvement.vitesse);
+  }
+  mouvement.dernierAngle = angle;
+  mouvement.dernierQuand = quand;
+  const pose = capteurs.pose || {};
+  mouvement.anneau.push({ quand, deroule: mouvement.deroule, cap: capteurs.cap, lacet: capteurs.lacet,
+                          elevation: pose.elevation, roulis: pose.roulis });
+  while (mouvement.anneau.length && quand - mouvement.anneau[0].quand > 1500) mouvement.anneau.shift();
+}
+
+// Pas (accéléromètre, sans la pesanteur) : un pic au-dessus de 1 m/s², au plus un pas toutes les 0,3 s.
+function suivrePas(e) {
+  if (!etat.debut || etat.termine) return;
+  const g = e.accelerationIncludingGravity;
+  if (!g || g.x == null) return;
+  const norme = Math.hypot(g.x, g.y, g.z) - 9.81;
+  mouvement.acc += 0.25 * (norme - mouvement.acc);
   const t = maintenant();
-  // Pendant une coupure, une image sur trois est gardée pour le rattrapage (le son, lui, est gardé en entier).
-  const garder = etat.liaison.ouverte() || etat.images++ % 3 === 0;
-  toile.toBlob((blob) => blob && envoyerBinaire(TYPE_IMAGE, t, blob, garder), "image/jpeg", 0.7);
-  envoyerCapteurs(t);
+  if (!mouvement.enHaut && mouvement.acc > 1.0 && t - mouvement.dernierPas > 0.3) {
+    mouvement.enHaut = true;
+    mouvement.dernierPas = t;
+    mouvement.pas.push(Math.round(t * 1000) / 1000);
+  } else if (mouvement.enHaut && mouvement.acc < 0.2) {
+    mouvement.enHaut = false;
+  }
+}
+
+// Toutes les 0,25 s : les mesures et les pas depuis le dernier lot (le serveur y voit les tours de pièce en direct).
+function envoyerMouvement() {
+  if (!mouvement.lot.length && !mouvement.pas.length) return;
+  envoyerJson({ type: "capteurs_lot", mesures: mouvement.lot.splice(0), pas: mouvement.pas.splice(0) });
 }
 
 // --- Boussole : direction filmée, pour nommer les murs (« le mur nord ») ---------------------------
@@ -641,13 +805,18 @@ function envoyerImage() {
 // webkitCompassHeading (cap du haut de l'appareil), recalé sur l'alpha relatif. Android récent : cap =
 // « deviceorientationabsolute », lacet = « deviceorientation ». Android ancien : « deviceorientation » est absolu, il
 // donne le cap seul.
-const capteurs = { cap: null, lacet: null, precision: null, inclinaison: null, dernierAbsolu: 0, ecarts: [], iphone: null };
+const capteurs = { cap: null, lacet: null, precision: null, inclinaison: null, pose: null, dernierAbsolu: 0, ecarts: [], iphone: null };
 
 function autoriserBoussole() {
   // iPhone : l'accès se demande pendant l'appui sur « Démarrer ». Refusé : l'assistant demandera l'orientation à l'oral.
   if (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === "function") {
     DeviceOrientationEvent.requestPermission().catch(() => {});
   }
+  // Le mouvement (pas) : une demande à part sur iPhone, dans le même appui.
+  if (window.DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === "function") {
+    DeviceMotionEvent.requestPermission().catch(() => {});
+  }
+  window.addEventListener("devicemotion", suivrePas);
   window.addEventListener("deviceorientationabsolute", (e) => {
     if (e.alpha == null) return;
     capteurs.cap = Boussole.capCamera(e.alpha, e.beta, e.gamma);
@@ -669,6 +838,8 @@ function autoriserBoussole() {
     }
     if (e.absolute === false) capteurs.lacet = Boussole.capCamera(e.alpha, e.beta, e.gamma); // gyroscope (sans nord)
     capteurs.inclinaison = e.beta;
+    if (e.beta != null && e.gamma != null) capteurs.pose = Boussole.poseCamera(e.alpha, e.beta, e.gamma);
+    if (etat.debut && !etat.termine) suivreRotation();
     noterCapteurs();
   });
   etat.minuteries.push(setInterval(afficherBoussole, 250));
@@ -681,8 +852,12 @@ function noterCapteurs() {
   const dernier = etat.capteursContinus[etat.capteursContinus.length - 1];
   if (dernier && t - dernier.t < 0.05) return;
   const arrondi = (x) => (x == null ? null : Math.round(x * 10) / 10);
-  etat.capteursContinus.push({ t: Math.round(t * 1000) / 1000, cap: arrondi(capteurs.cap), lacet: arrondi(capteurs.lacet),
-                               precision: arrondi(capteurs.precision), inclinaison: arrondi(capteurs.inclinaison) });
+  const pose = capteurs.pose || {};
+  const mesure = { t: Math.round(t * 1000) / 1000, cap: arrondi(capteurs.cap), lacet: arrondi(capteurs.lacet),
+                   precision: arrondi(capteurs.precision), inclinaison: arrondi(capteurs.inclinaison),
+                   elevation: arrondi(pose.elevation), roulis: arrondi(pose.roulis), acc: arrondi(mouvement.acc) };
+  etat.capteursContinus.push(mesure);
+  mouvement.lot.push(mesure); // envoyé en direct, par lots (étape 15)
 }
 
 function fiabiliteBoussole() {
@@ -740,7 +915,10 @@ function demarrerEnregistrement(qualite) {
 // --- Démarrage et fin ----------------------------------------------------------------------------
 
 async function demarrer() {
-  if (!etat.mission) return; // le bouton reste grisé tant que la mission n'est pas choisie
+  // Bouton grisé tant que la mission n'est pas choisie ; un second appui pendant l'ouverture de la caméra ne lance pas une
+  // seconde visite (relecture du 23/10 : son doublé, caméra jamais éteinte).
+  if (!etat.mission || etat.demarrage) return;
+  etat.demarrage = true;
   debloquerVoix();
   autoriserBoussole();
   etat.code = $("code").value;
@@ -752,6 +930,7 @@ async function demarrer() {
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
     });
   } catch (e) {
+    etat.demarrage = false;
     $("demarrer").disabled = false;
     $("statut-serveur").textContent = `Caméra ou micro refusés (${e.name}). La page doit être ouverte en https et l'accès autorisé.`;
     return;
@@ -767,7 +946,9 @@ async function demarrer() {
   if ($("enregistrer").checked) demarrerEnregistrement(qualite);
   await demarrerSon();
   connecter();
-  etat.minuteries.push(setInterval(envoyerImage, 1000));
+  etat.minuteries.push(setInterval(chaqueSeconde, 1000));
+  etat.minuteries.push(setInterval(envoyerMouvement, 250));
+  suivreTrames();
   etat.minuteries.push(setInterval(() => ($("chrono").textContent = horodatage(maintenant())), 1000));
   try { etat.verrouEcran = await navigator.wakeLock.request("screen"); } catch { /* écran : réglage du téléphone */ }
 }
@@ -876,6 +1057,15 @@ function envoyerVideo(blob) {
 // --- Boutons ---------------------------------------------------------------------------------------
 
 $("demarrer").onclick = demarrer;
+// La version est revérifiée quand la page revient (Safari réaffiche parfois un onglet gardé en mémoire, sans le recharger).
+const revoirStatut = () => { if (!document.hidden && !$("accueil").hidden) chargerStatut(); };
+document.addEventListener("visibilitychange", revoirStatut);
+window.addEventListener("pageshow", revoirStatut);
+// Amiante, plomb : le grand croquis s'arrête au-dessus du bloc du bas (question, boutons), quelle que soit sa hauteur.
+if (window.ResizeObserver) {
+  const bas = document.querySelector(".bas");
+  new ResizeObserver(() => document.body.style.setProperty("--bas", `${bas.offsetHeight}px`)).observe(bas);
+}
 for (const b of $("missions").querySelectorAll("button")) b.onclick = () => choisirMission(b.dataset.mission);
 // Amiante, plomb : le bouton ouvre le plan (croquis en grand, corrections) ; DPE : la fiche du logement.
 $("voir-fiche").onclick = () => {
@@ -901,5 +1091,7 @@ $("formulaire-texte").onsubmit = (e) => {
   $("texte").value = "";
 };
 window.addEventListener("beforeunload", (e) => { if (!etat.termine && etat.flux) e.preventDefault(); });
+// Page cachée (écran verrouillé, autre application) : la caméra et les capteurs s'arrêtent ; le serveur le note.
+document.addEventListener("visibilitychange", () => { if (etat.debut && !etat.termine) envoyerJson({ type: "visibilite", cachee: document.hidden }); });
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => { /* certificat auto-signé : pas de service worker */ });
 chargerStatut();

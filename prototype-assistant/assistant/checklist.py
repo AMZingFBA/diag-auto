@@ -566,6 +566,13 @@ class Checklist:
         self.renommages.append((cle, dans))
         return dans
 
+    def nom_libre(self, nom: str) -> str:
+        """« Chambre » s'il n'y en a pas encore, sinon le premier numéro libre : « Chambre 2 », « Chambre 3 »…"""
+        nom = " ".join(nom.split())
+        if cle_texte(nom) not in self.pieces:
+            return nom
+        return next(f"{nom} {n}" for n in range(2, 100) if cle_texte(f"{nom} {n}") not in self.pieces)
+
     def trouver_piece(self, nom: str) -> str | None:
         """« la chambre » → « chambre », ou « chambre 1 » si c'est la seule chambre ; None si inconnue ou ambiguë."""
         cle = cle_texte(nom)

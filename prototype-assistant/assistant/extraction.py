@@ -386,6 +386,10 @@ _PIECES = {
     "wc": "WC", "toilettes": "WC", "entree": "Entrée", "couloir": "Couloir", "degagement": "Dégagement",
     "bureau": "Bureau", "cellier": "Cellier", "buanderie": "Buanderie", "garage": "Garage", "cave": "Cave",
     "grenier": "Grenier", "combles": "Combles", "dressing": "Dressing", "chambre": "Chambre", "mezzanine": "Mezzanine",
+    # Croquis (amiante, plomb ; relecture du 23/10 : « non, c'est la véranda » était ignoré) : les locaux du repérage.
+    "veranda": "Véranda", "escalier": "Escalier", "palier": "Palier", "debarras": "Débarras", "chaufferie": "Chaufferie",
+    "local technique": "Local technique", "sous sol": "Sous-sol", "atelier": "Atelier", "hall": "Hall",
+    "vestibule": "Vestibule", "lingerie": "Lingerie", "salle de jeux": "Salle de jeux",
 }
 _NOMS_PIECES = "|".join(sorted(_PIECES, key=len, reverse=True))
 # « Ici c'est la cuisine », « on passe au salon ». Pas « c'est les combles » ni « donne dans le garage »,
@@ -401,6 +405,10 @@ _NOM_PIECE = re.compile(r"\b(" + _NOMS_PIECES + r")(?:\s+(\d+))?\b")
 # (croquis : une pièce reconnue à tort sur la vidéo est renommée). La dernière nommée l'emporte.
 _PIECE_CORRIGEE = re.compile(r"(?:^|\bnon\b|\ben fait\b|\bpas (?:la |le |l |les )\w+)\s*,?\s*c est (?:bien )?(?:la |le |l |les )(" + _NOMS_PIECES
                              + r")(?:\s+(\d+))?\b")  # réponse à « Quelle est la pièce suivante ? »
+# « C'est une autre chambre », « on passe dans une autre chambre » : une nouvelle pièce du même type, numérotée (deux
+# chambres semblables, la seconde reconnue à tort comme la première) ; « la deuxième chambre » : celle de ce numéro.
+_AUTRE_PIECE = re.compile(r"\b(?:une |un |l )autre (" + _NOMS_PIECES + r")\b|\b(?:la |le )?(deuxieme|seconde|second|troisieme|quatrieme"
+                          r"|cinquieme) (" + _NOMS_PIECES + r")\b")
 _ANNEE = re.compile(r"\b(19[3-9]\d|20[0-3]\d)\b")
 
 # --- Groupes, exceptions, références (étape 4 de Noah) ---
@@ -1001,9 +1009,16 @@ def extraire(phrase: str, checklist: Checklist, cible: Cible | None = None) -> E
         resultat.demande = _demande(texte)  # « il te faut quoi d'autre ? » : le serveur sait y répondre
         return resultat
 
-    piece = (_PIECE.search(texte) or next(reversed(list(_PIECE_CORRIGEE.finditer(texte))), None)
-             or (_NOM_PIECE.search(texte) if cible and cible.genre == "piece" else None))
-    if piece:
+    autre = _AUTRE_PIECE.search(texte)
+    piece = None if autre else (_PIECE.search(texte) or next(reversed(list(_PIECE_CORRIGEE.finditer(texte))), None)
+                                or (_NOM_PIECE.search(texte) if cible and cible.genre == "piece" else None))
+    if autre:
+        if autre.group(1):  # « une autre chambre » : une nouvelle, numérotée
+            action("piece_courante", nom=_PIECES[autre.group(1)], nouvelle="oui")
+        else:  # « la deuxième chambre » : « Chambre 2 »
+            action("piece_courante", nom=f"{_PIECES[autre.group(3)]} {_ORDINAUX[autre.group(2)]}")
+        texte = texte[: autre.start()] + texte[autre.end():]
+    elif piece:
         action("piece_courante", nom=_PIECES[piece.group(1)] + (f" {piece.group(2)}" if piece.group(2) else ""))
         texte = texte[: piece.start()] + texte[piece.end():]
     elif cible and cible.genre == "piece" and cible.champ == "proposee" and _OUI.match(texte.strip(" ,")):
@@ -1020,7 +1035,8 @@ def extraire(phrase: str, checklist: Checklist, cible: Cible | None = None) -> E
         # mur » (la réponse ne commençait pas par « oui » : les deux murs étaient restés, et les questions doublées).
         action("fusionner", element_id=cible.element_id, meme_que=cible.source)
         return resultat
-    courante = _PIECES[piece.group(1)] if piece else checklist.nom_piece(checklist.piece_courante) if checklist.piece_courante else ""
+    courante = (_PIECES[piece.group(1)] if piece else _PIECES[autre.group(1) or autre.group(3)] if autre
+                else checklist.nom_piece(checklist.piece_courante) if checklist.piece_courante else "")
     if courante and not re.search(r"\b(?:sauf|excepte|a part|hormis)\b", texte):  # « sauf celle de la chambre » : une exception
         texte = _sans_la_piece(texte, courante)
 

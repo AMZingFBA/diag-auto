@@ -95,3 +95,9 @@ Livrable : rejouer cette session réelle avant/après, montrer le dialogue obten
 ## Choix de la mission (Noah, message direct du 23/10/2026, intégré le 23/10)
 - « comment je test le logiciel sur mon tel quan dj'ouvre l'url du logciel ca met uniquemet le dpe fautq ue je chossise avant le bonton ce que je veux faire par ex dpe ca m'envois a lavideo piryur faire le dpe ; ou amiante et ca m'memene au croquis »
 - Mis en œuvre : accueil à trois cases (DPE, Amiante, Plomb (CREP)), « Démarrer » grisé tant qu'aucune n'est choisie ; DPE = questions du DPE, sans croquis ; amiante et plomb = croquis en grand, pièces reconnues et annoncées, aucune question du DPE (prototype-assistant/README.md, « Choix de la mission »).
+
+## Étape 15 (Noah, messages directs du 23/10/2026, en cours) — Croquis professionnel : un tour par pièce, étages, géométrie
+- « ameliore la creation de croquis faut qu'on filme une grande maison en un efois qu'on puisse passe de une piece a une autre d'un etage a un autr eet il le compren d / juste on arriv edan sune pice eon fait un tour tre srapide avec notre tel de 3 seconde par piec emax et ca re^pere les mur fernetre relief ect ect tpout automatique je veux une logciel de haute porfessionalisme »
+- « tu en es ou ? on filme directement en direct sur le lgocirel que tu me creer »
+- « il est pas assez performant faut analyser les angle des murs , la taille proportionelel des mur , la frome des piece, que l'image se situe dans l'image ppar rapport aux deplacement du diagnostqiuer »
+- Fait (23/10) : capture du tour en direct (images selon la rotation avec leur pose, capteurs par lots, tour repéré et bipé). En cours : forme, angles et proportions (coins vus par Claude + calcul), placement selon les pas, étages (prototype-assistant/README.md, « Étape 15 »).

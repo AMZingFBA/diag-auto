@@ -42,6 +42,9 @@ class ImageInstant:
     t: float
     jpeg: bytes
     chemin: Path | None = None
+    # Pose de la caméra à la prise (étape 15) : cap, lacet, élévation, roulis, vitesse de rotation, raison (« rotation » :
+    # image clé d'un tour de pièce, « temps » : une par seconde). None pour les images sans pose (anciennes pages, tests).
+    pose: dict | None = None
 
 
 @dataclass

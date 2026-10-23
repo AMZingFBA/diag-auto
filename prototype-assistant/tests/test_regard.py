@@ -20,7 +20,7 @@ class RegardFactice:
     def __init__(self):
         self.vu: list[tuple[str, int]] = []
 
-    async def demarrer(self):
+    async def demarrer(self, **_):
         pass
 
     async def fermer(self):

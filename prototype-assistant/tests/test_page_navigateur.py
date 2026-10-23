@@ -117,6 +117,15 @@ def page(tmp_path_factory):
     shutil.rmtree(dossier / "edge", ignore_errors=True)
 
 
+@pytest.fixture(autouse=True)
+def page_propre(page):
+    """Chaque test part du même état : mission DPE, écran de visite, plan et fiche fermés, croquis vide (page partagée)."""
+    page.js("(() => { etat.demarrage = false; choisirMission('dpe'); $('plan').hidden = true; $('fiche').hidden = true;"
+            " $('accueil').hidden = true; $('visite').hidden = false; etat.croquis = null; afficherCroquis(null); alerte('');"
+            " window.envoyes = []; return true; })()")
+    yield
+
+
 def question(page, cible: str, options: list[dict]) -> None:
     page.js(f"(() => {{ window.envoyes = []; afficherChoix({json.dumps(cible)}, {json.dumps(options)}); return true; }})()")
 
@@ -227,3 +236,67 @@ def test_amiante_croquis_en_grand_et_bouton_plan(page):
     page.toucher("#voir-fiche")
     assert page.js("$('plan').hidden") is False and page.js("$('fiche').hidden") is True
     page.js("(() => { $('fermer-plan').onclick(); choisirMission('dpe'); return true; })()")
+
+
+def test_images_cles_pendant_un_tour(page):
+    # Étape 15 : pendant une rotation, une image part à chaque demi-champ tourné (22,5° en portrait), pas plus de 8 par
+    # seconde ; trop vite (> 200°/s), on attend un peu une image moins floue.
+    r = page.js("""(() => {
+        const vrai = { capturer: capturerImage, champ: champHorizontal, liaison: etat.liaison };
+        const prises = [];
+        capturerImage = (raison) => { prises.push([raison, mouvement.deroule]);
+                                      mouvement.derniereImage = { deroule: mouvement.deroule, elevation: 0, quand: performance.now() - 1000 }; };
+        champHorizontal = () => 45;
+        etat.liaison = {};
+        mouvement.derniereImage = { deroule: 0, elevation: 0, quand: performance.now() - 1000 };
+        mouvement.vitesse = 100;
+        for (const d of [10, 20, 23, 30, 46]) { mouvement.deroule = d; examinerTrame(null); }
+        mouvement.vitesse = 300;  // tour trop rapide : image floue
+        for (const d of [70, 80]) { mouvement.deroule = d; examinerTrame(null); }
+        capturerImage = vrai.capturer; champHorizontal = vrai.champ; etat.liaison = vrai.liaison;
+        mouvement.derniereImage = null; mouvement.deroule = null; mouvement.vitesse = 0;
+        return prises; })()""")
+    assert r == [["rotation", 23], ["rotation", 46], ["rotation", 80]]  # 70 : trop vite (24°) ; 80 : 34° ≥ 1,5 × 22,5°
+
+
+def test_pose_d_une_image_a_l_instant_de_sa_prise(page):
+    r = page.js("""(() => {
+        mouvement.anneau = [{ quand: 1000, deroule: 350, cap: 350, lacet: 10, elevation: -10, roulis: 0 },
+                            { quand: 1100, deroule: 370, cap: 10, lacet: 30, elevation: -20, roulis: 2 }];
+        const p = poseA(1050);
+        mouvement.anneau = [];
+        return p; })()""")
+    assert r["deroule"] == 360 and r["elevation"] == -15
+    assert round(r["cap"]) % 360 == 0 and round(r["lacet"]) == 20  # 350 + 10 (rotation depuis la mesure) : le nord
+
+
+
+def test_serveur_pas_relance_signale(page):
+    # Premier essai de Noah du 23/10 : la page était nouvelle, le serveur ancien (il ignorait la mission).
+    page.js("(() => { choisirMission('amiante'); recevoir({type: 'statut', session: 'x', options: {}, cerveau: '', transcription: ''}); return true; })()")
+    assert "relancer" in page.js("$('alerte').textContent") and page.js("$('alerte').hidden") is False
+    page.js("recevoir({type: 'statut', session: 'x', mission: 'amiante', options: {}, cerveau: '', transcription: ''})")
+    assert page.js("$('alerte').hidden") is True
+
+
+def test_plan_vide_dit_quoi_faire_et_annonce_garde_l_indication(page):
+    page.js("(() => { choisirMission('amiante'); etat.croquis = null; afficherCroquis(null); return true; })()")
+    page.toucher("#voir-fiche")  # « 🗺️ Plan » avant la première pièce
+    assert "faites-en le tour" in page.js("$('plan-pieces').textContent")
+    page.js("(() => { $('fermer-plan').onclick(); recevoir({type: 'piece_reconnue', nom: 'Cuisine', nouvelle: true});"
+            " recevoir({type: 'dire', id: 1, texte: 'Nouvelle pièce : Cuisine.', muet: true, latence_s: null}); return true; })()")
+    assert "Touchez le croquis pour corriger" in page.js("$('latence').textContent")
+
+
+def test_mission_figee_pendant_l_ouverture_de_la_camera(page):
+    page.js("(() => { choisirMission('dpe'); etat.demarrage = true; choisirMission('amiante'); return true; })()")
+    assert page.js("etat.mission") == "dpe"  # la caméra s'ouvre : la mission ne change plus
+
+
+def test_grand_croquis_au_dessus_du_bas(page):
+    croquis = {"oriente": False, "courante": "a", "portes": [], "ouvertures": [],
+               "pieces": [{"cle": "a", "nom": "Séjour", "source": "image", "x": 0, "y": 0, "murs": {"sud": "A", "ouest": "B", "nord": "C", "est": "D"}}]}
+    page.js(f"(() => {{ choisirMission('plomb'); $('question').hidden = false; $('question').textContent = 'Je dessine le croquis : entrez dans chaque pièce et faites-en le tour.';"
+            f" afficherCroquis({json.dumps(croquis)}); return true; }})()")
+    time.sleep(0.3)  # ResizeObserver
+    assert page.js("$('croquis').getBoundingClientRect().bottom <= document.querySelector('.bas').getBoundingClientRect().top + 1")

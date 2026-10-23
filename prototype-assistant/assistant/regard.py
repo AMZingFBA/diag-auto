@@ -44,7 +44,8 @@ diagnostiqueur qui confirme. Réponds uniquement par un JSON sur une ligne : \
 # Pièces reconnues sur la vidéo (croquis pour le plomb et l'amiante, Noah, 23/10 : « il faut qu'il reconnaisse lui-même
 # quand on change de pièce, et quelle pièce c'est »).
 TYPES_PIECES = ["Entrée", "Séjour", "Salle à manger", "Cuisine", "Chambre", "Salle de bains", "Salle d'eau", "WC", "Couloir",
-                "Dégagement", "Bureau", "Buanderie", "Cellier", "Garage", "Escalier", "Cave", "Grenier", "Véranda", "Pièce"]
+                "Dégagement", "Bureau", "Buanderie", "Cellier", "Garage", "Escalier", "Palier", "Cave", "Grenier", "Combles",
+                "Sous-sol", "Véranda", "Placard", "Dressing", "Débarras", "Chaufferie", "Mezzanine", "Pièce"]
 
 CONSIGNES_PIECE = (
     "Tu aides un diagnostiqueur immobilier qui filme tout un logement en une seule vidéo, pièce par pièce. On te donne le "
@@ -160,13 +161,11 @@ class RegardClaude:
         self.delai_s = delai_s
         self.mesures: dict = {}
 
-    async def demarrer(self, propositions: bool = True) -> None:
-        """``propositions=False`` (amiante, plomb : aucune question, donc rien à proposer) : seul le processus qui reconnaît
-        les pièces est lancé, le croquis démarre plus tôt (rejeu du 23/10 : 22 s pour lancer les deux sur un PC chargé)."""
-        if propositions:
-            await asyncio.gather(self._cerveau.demarrer(), self._pieces.demarrer())
-        else:
-            await self._pieces.demarrer()
+    async def demarrer(self, propositions: bool = True, pieces: bool = True) -> None:
+        """Seuls les processus utiles sont lancés (un autre partirait à la demande) : amiante et plomb, les pièces seules
+        (aucune question, donc rien à proposer ; rejeu du 23/10 : 22 s pour lancer les deux sur un PC chargé) ; DPE, les
+        propositions seules (les pièces n'y sont pas regardées)."""
+        await asyncio.gather(*([self._cerveau.demarrer()] if propositions else []), *([self._pieces.demarrer()] if pieces else []))
 
     async def reconnaitre(self, images: list[ImageInstant], references: dict[str, list[bytes]], courante: str | None) -> AvisPiece | None:
         """Dans quelle pièce est-on, d'après les dernières images comparées à une image de chaque pièce déjà vue ?"""

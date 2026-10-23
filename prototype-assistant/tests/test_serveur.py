@@ -38,6 +38,8 @@ def test_statut(client):
     statut = client.get("/api/statut").json()
     assert statut["mode_cerveau"] == "simulation" and not statut["code_requis"]
     assert client.get("/").status_code == 200 and "Assistant de visite" in client.get("/").text
+    # « Démarrer » grisé tant que la mission n'est pas choisie (Noah, 23/10), dès la page servie.
+    assert '<button id="demarrer" class="principal" disabled>' in client.get("/").text
 
 
 def test_mission_plomb_croquis_sans_question_du_dpe(client, tmp_path):

@@ -45,6 +45,15 @@
     return capVecteur(matrice(alpha, beta, gamma), CAMERA);
   }
 
+  // Élévation de la caméra (0 = horizontale, positive vers le plafond) et roulis de l'image (où se trouve le haut du monde
+  // dans l'image, en degrés depuis le haut de l'image vers sa droite : 0 = image droite, ±90 = téléphone en paysage).
+  // Justes en portrait comme en paysage (beta seul ne l'est qu'en portrait). Ne dépendent pas d'alpha (iPhone : relatif).
+  function poseCamera(alpha, beta, gamma) {
+    const R = matrice(alpha, beta, gamma);
+    const haut = Math.max(-1, Math.min(1, appliquer(R, CAMERA)[2]));
+    return { elevation: Math.asin(haut) / RAD, roulis: Math.atan2(R[2][0], R[2][1]) / RAD };
+  }
+
   // iPhone : recale l'alpha relatif sur le nord grâce à webkitCompassHeading (cap du haut du téléphone).
   function CapIphone(inclinaisonCalibrage = 60) {
     this.horizontaliteMin = Math.cos(inclinaisonCalibrage * RAD); // haut à moins de 60° de l'horizontale
@@ -63,7 +72,7 @@
     return this.ecart == null || cameraRelative == null ? null : (cameraRelative + this.ecart) % 360;
   };
 
-  const exporte = { matrice, capVecteur, capCamera, CapIphone, CAMERA, HAUT };
+  const exporte = { matrice, capVecteur, capCamera, poseCamera, CapIphone, CAMERA, HAUT };
   if (typeof module !== "undefined" && module.exports) module.exports = exporte;
   else racine.Boussole = exporte;
 })(this);

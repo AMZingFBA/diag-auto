@@ -3,7 +3,10 @@ voix ou au doigt (demande de Noah du 23/10 pour le plomb et l'amiante)."""
 
 import asyncio
 
+import pytest
+
 from assistant.regard import AvisPiece
+from assistant.session import Session
 from test_conversation import CerveauScenario, poli
 from test_fluidite import attendre, ouvrir, parler
 
@@ -15,8 +18,8 @@ class ClaudeQuiVoitLesPieces:
         self.avis = avis
         self.references: list[list[str]] = []
 
-    async def demarrer(self, propositions=True):
-        self.propositions = propositions
+    async def demarrer(self, propositions=True, pieces=True):
+        self.propositions, self.pieces = propositions, pieces
 
     async def fermer(self):
         pass
@@ -27,6 +30,14 @@ class ClaudeQuiVoitLesPieces:
     async def reconnaitre(self, images, references, courante):
         self.references.append(list(references))
         return self.avis.get(images[-1].t)
+
+
+@pytest.fixture(autouse=True)
+def sans_boucle_de_fond(monkeypatch):
+    async def rien(self):
+        return None
+
+    monkeypatch.setattr(Session, "_boucle_pieces", rien)
 
 
 async def filmer(session, t: float, cap: float) -> None:
@@ -44,7 +55,7 @@ def test_croquis_dessine_en_marchant_et_corrige(tmp_path):
     claude = ClaudeQuiVoitLesPieces(avis)
 
     async def scenario():
-        session, recus = await ouvrir(tmp_path, CerveauScenario(poli()))
+        session, recus = await ouvrir(tmp_path, CerveauScenario(poli()), mission="amiante")
         session.regard = claude
         await filmer(session, 1.0, 0.0)  # l'entrée, première pièce : décidée tout de suite
         await filmer(session, 8.0, 2.0)  # un avis « moyen » : on attend le second
@@ -70,7 +81,8 @@ def test_croquis_dessine_en_marchant_et_corrige(tmp_path):
     assert list(session.checklist.pieces) == ["couloir", "sejour", "buanderie"]  # les pièces du Carrez et du repérage
     assert [m["nom"] for m in recus if m["type"] == "piece_reconnue"] == ["Entrée", "Séjour", "Cuisine", "Séjour"]
     assert claude.references[-1] == ["Entrée", "Séjour", "Buanderie"]  # une image de chaque pièce, sous son nom du moment
-    assert not [m for m in recus if m["type"] == "dire" and "pièce" in m["texte"].lower()]  # jamais demandée
+    # Jamais demandée : seulement annoncée (« Nouvelle pièce : … »), pour être corrigée aussitôt.
+    assert all(m["texte"].startswith("Nouvelle pièce : ") for m in recus if m["type"] == "dire" and "pièce" in m["texte"].lower())
 
 
 def test_coin_du_sejour_reconnu_a_tort_puis_corrige_a_la_voix(tmp_path):
@@ -80,7 +92,7 @@ def test_coin_du_sejour_reconnu_a_tort_puis_corrige_a_la_voix(tmp_path):
     claude = ClaudeQuiVoitLesPieces(avis)
 
     async def scenario():
-        session, recus = await ouvrir(tmp_path, CerveauScenario(poli()))
+        session, recus = await ouvrir(tmp_path, CerveauScenario(poli()), mission="amiante")
         session.regard = claude
         await filmer(session, 1.0, 0.0)
         await filmer(session, 40.0, 90.0)
@@ -103,7 +115,7 @@ def test_salle_a_manger_apres_la_salle_de_bains_est_une_autre_piece(tmp_path):
     claude = ClaudeQuiVoitLesPieces(avis)
 
     async def scenario():
-        session, recus = await ouvrir(tmp_path, CerveauScenario(poli()))
+        session, recus = await ouvrir(tmp_path, CerveauScenario(poli()), mission="amiante")
         session.regard = claude
         await filmer(session, 1.0, 0.0)
         await filmer(session, 20.0, 90.0)

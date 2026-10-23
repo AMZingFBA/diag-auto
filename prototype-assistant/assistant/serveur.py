@@ -224,6 +224,14 @@ def creer_app(reglages: Reglages | None = None) -> FastAPI:
                             await session.recevoir_audio(t, donnees[9:])
                         elif donnees[0] == 2:
                             await session.recevoir_image(t, donnees[9:])
+                        elif donnees[0] == 3 and len(donnees) >= 11:
+                            # Image avec sa pose (étape 15) : [3][t][longueur u16][pose en JSON][JPEG].
+                            n = struct.unpack("<H", donnees[9:11])[0]
+                            try:
+                                pose = json.loads(donnees[11:11 + n].decode("utf-8"))
+                            except (ValueError, UnicodeDecodeError):
+                                pose = None
+                            await session.recevoir_image(t, donnees[11 + n:], pose if isinstance(pose, dict) else None)
                     elif message.get("text"):
                         controle = json.loads(message["text"])
                         if controle.get("type") == "ping":

@@ -88,7 +88,10 @@ def appliquer_action(checklist: Checklist, action: dict, t: float, phrases: list
             actuelle = checklist.pieces.get(checklist.piece_courante or "")
             correction = confirme and actuelle is not None and actuelle.source == "image" and not _DEPLACEMENT.search(cle_texte(citation))
             existante = checklist.trouver_piece(nom)
-            if correction and existante is None:
+            if _texte(action, "nouvelle") == "oui":
+                # « C'est une autre chambre » : jamais la chambre déjà vue, une nouvelle (« Chambre 2 »).
+                checklist.definir_piece(checklist.nom_libre(_texte(action, "nom")), t, citation if confirme else "")
+            elif correction and existante is None:
                 # « Non, c'est la chambre » dans une pièce reconnue sur l'image : la même pièce, mal nommée (croquis).
                 checklist.renommer_piece(checklist.piece_courante, nom)
             elif correction and existante != checklist.piece_courante:

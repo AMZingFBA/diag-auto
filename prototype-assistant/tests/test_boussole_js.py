@@ -100,3 +100,26 @@ def test_seuils_dans_le_fichier_de_reglages(tmp_path):
     reglages = lire_reglages(fichier)
     assert reglages["precision"] == {"bonne": 10.0, "faible": 30.0}  # le reste garde sa valeur par défaut
     assert lire_reglages(tmp_path / "absent.toml")["dispersion"]["faible"] == 25.0
+
+
+
+def test_elevation_et_roulis_de_la_camera():
+    # Étape 15 (tours de pièce) : l'élévation et le roulis de chaque image, justes en portrait comme en paysage.
+    cas = node("console.log(JSON.stringify([[0, 90, 0], [0, 70, 0], [0, 110, 0], [0, 0, -90], [0, 0, 90], [0, 0, 0]]"
+               ".map(([a, b, g]) => B.poseCamera(a, b, g))))")
+    arrondis = [(round(p["elevation"]), round(p["roulis"])) for p in cas]
+    assert arrondis[0] == (0, 0)  # portrait, droit
+    assert arrondis[1] == (-20, 0) and arrondis[2] == (20, 0)  # penché vers le sol, vers le plafond
+    assert arrondis[3] == (0, 90) and arrondis[4] == (0, -90)  # paysage (dans un sens, dans l'autre) : caméra horizontale
+    assert arrondis[5][0] == -90  # à plat sur la table : la caméra vise le sol
+
+
+def test_elevation_et_roulis_egaux_a_la_reference():
+    hasard = random.Random(11)
+    poses = [(hasard.uniform(0, 360), hasard.uniform(-180, 180), hasard.uniform(-90, 90)) for _ in range(200)]
+    resultats = node(f"console.log(JSON.stringify({json.dumps(poses)}.map(([a, b, g]) => B.poseCamera(a, b, g))))")
+    for (a, b, g), pose in zip(poses, resultats):
+        r = rotation(a, b, g)
+        camera_haut = -r[2][2]  # composante verticale de R·(0, 0, -1)
+        assert abs(pose["elevation"] - math.degrees(math.asin(max(-1, min(1, camera_haut))))) < 1e-6
+        assert ecart(pose["roulis"], math.degrees(math.atan2(r[2][0], r[2][1]))) < 1e-6
