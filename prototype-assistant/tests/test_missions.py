@@ -334,3 +334,123 @@ def test_amiante_piece_montree_puis_entree_sans_doublon(tmp_path, monkeypatch):
     assert [p.nom for p in session.checklist.pieces.values()] == ["Séjour", "Chambre"]
     assert session.checklist.nom_piece(session.checklist.piece_courante) == "Chambre"
     assert "Nouvelle pièce : Chambre 2." not in [m["texte"] for m in recus if m["type"] == "dire"]
+
+
+def test_amiante_espace_montre_qui_est_celui_ou_l_on_est(tmp_path, monkeypatch):
+    # « C'est la cuisine », dit dans la cuisine, que Claude prend parfois pour « montrée » : rien ne change, la cuisine
+    # n'est pas posée devant elle-même sur le plan.
+    from assistant.voix_croquis import GesteVoix
+
+    monkeypatch.setattr(module_session, "INTERVALLE_PIECES_S", 1000.0)
+
+    class ClaudeQuiVoitEtComprend(ClaudeQuiVoitLesPieces):
+        async def comprendre_voix(self, phrase, courante, pieces):
+            return GesteVoix("vue", "Cuisine")
+
+    claude = ClaudeQuiVoitEtComprend({1.0: AvisPiece(None, "Cuisine", "forte")})
+
+    async def scenario():
+        session, recus = await ouvrir(tmp_path, CerveauScenario(poli()), mission="amiante")
+        session.regard = claude
+        await filmer(session, 1.0, 0.0)
+        await parler(session, "Bas c'est la cuisine.")
+        await attendre(session)
+        await session.terminer()
+        return session
+
+    session = asyncio.run(scenario())
+    assert [p.nom for p in session.checklist.pieces.values()] == ["Cuisine"]
+    assert session.croquis.vues == []
+
+
+def test_amiante_nom_invente_par_claude_refuse(tmp_path, monkeypatch):
+    # Rejeu du 2e test (12:46) : « là je suis au séjour, tu m'as mis… » mal transcrit (« tu m'as mis l'emploi ») ; Claude
+    # avait compris « correction : Entrée », absente de la phrase : le séjour où était Noah avait été renommé « Entrée ».
+    from assistant.voix_croquis import GesteVoix
+
+    monkeypatch.setattr(module_session, "INTERVALLE_PIECES_S", 1000.0)
+
+    class ClaudeQuiInvente(ClaudeQuiVoitLesPieces):
+        async def comprendre_voix(self, phrase, courante, pieces):
+            return GesteVoix("correction", "Entrée", "Séjour", "D'accord, entrée.")
+
+    claude = ClaudeQuiInvente({1.0: AvisPiece(None, "Séjour", "forte")})
+
+    async def scenario():
+        session, recus = await ouvrir(tmp_path, CerveauScenario(poli()), mission="amiante")
+        session.regard = claude
+        await filmer(session, 1.0, 0.0)
+        await parler(session, "Tu continues au bout du séjour, là je suiseux s jour, tu m'as mis l'emploi.")
+        await attendre(session)
+        await session.terminer()
+        return session, recus
+
+    session, recus = asyncio.run(scenario())
+    assert [p.nom for p in session.checklist.pieces.values()] == ["Séjour"]
+    assert "D'accord, entrée." not in [m["texte"] for m in recus if m["type"] == "dire"]
+
+
+def test_amiante_piece_devinee_par_la_porte_puis_dite(tmp_path, monkeypatch):
+    # Rejeu du 2e test (12:46) : depuis le couloir, Claude voit le séjour par la porte (« nouvelle pièce : Séjour ») ; 1 s
+    # plus tard, sans avoir marché : « j'y suis, je suis dans le couloir ». La pièce devinée sur l'image était le couloir
+    # (comme pour une phrase comprise par les règles).
+    from assistant.voix_croquis import GesteVoix
+
+    monkeypatch.setattr(module_session, "INTERVALLE_PIECES_S", 1000.0)
+
+    class ClaudeQuiVoitEtComprend(ClaudeQuiVoitLesPieces):
+        async def comprendre_voix(self, phrase, courante, pieces):
+            return GesteVoix("ici", "Couloir")
+
+    claude = ClaudeQuiVoitEtComprend({1.0: AvisPiece(None, "Cuisine", "forte"), 20.0: AvisPiece(None, "Séjour", "forte")})
+    marche = {"m": 5.0}
+
+    async def scenario():
+        session, recus = await ouvrir(tmp_path, CerveauScenario(poli()), mission="amiante")
+        session.regard = claude
+        monkeypatch.setattr(session.trajectoire, "avec_pas", lambda: True)
+        monkeypatch.setattr(session.trajectoire, "distance", lambda t1, t2: marche["m"])
+        await filmer(session, 1.0, 0.0)
+        await filmer(session, 20.0, 90.0)  # 5 m marchés depuis la cuisine : le séjour vu sur l'image est accepté
+        marche["m"] = 0.0  # puis, sans avoir marché
+        await parler(session, "J'y suis, je suis dans le couir.")
+        await attendre(session)
+        await session.terminer()
+        return session
+
+    session = asyncio.run(scenario())
+    assert [p.nom for p in session.checklist.pieces.values()] == ["Cuisine", "Couloir"]
+    assert session.checklist.nom_piece(session.checklist.piece_courante) == "Couloir"
+
+
+def test_amiante_correction_n_efface_jamais_une_piece_deja_vecue(tmp_path, monkeypatch):
+    # Rejeu du 23/10 (11:44) : de retour dans la cuisine (reconnue sur l'image), « remplace, t'as mis séjour à la place de
+    # cuisine » mal transcrit (« t'a mi séjoure à le b de cuisine ») et compris à l'envers (« c'est le séjour ») : la cuisine
+    # avait été fondue dans le salon. Une pièce où l'on était déjà passé reste ; on va dans la pièce nommée.
+    from assistant.voix_croquis import GesteVoix
+
+    monkeypatch.setattr(module_session, "INTERVALLE_PIECES_S", 1000.0)
+
+    class ClaudeQuiComprendALEnvers(ClaudeQuiVoitLesPieces):
+        async def comprendre_voix(self, phrase, courante, pieces):
+            return GesteVoix("correction", "Séjour", "Cuisine", "D'accord, séjour.")
+
+    claude = ClaudeQuiComprendALEnvers({1.0: AvisPiece(None, "Cuisine", "forte"), 30.0: AvisPiece("Cuisine", "", "forte")})
+
+    async def scenario():
+        session, recus = await ouvrir(tmp_path, CerveauScenario(poli()), mission="amiante")
+        session.regard = claude
+        monkeypatch.setattr(session.trajectoire, "avec_pas", lambda: True)
+        monkeypatch.setattr(session.trajectoire, "distance", lambda t1, t2: 5.0)  # il marche d'une pièce à l'autre
+        await filmer(session, 1.0, 0.0)
+        await parler(session, "Ici c'est le salon.")
+        await attendre(session)
+        await filmer(session, 30.0, 180.0)  # de retour dans la cuisine
+        await parler(session, "Remplacer t'a mi séjoure à le b de cuisine.")
+        await attendre(session)
+        await session.terminer()
+        return session
+
+    session = asyncio.run(scenario())
+    assert [p.nom for p in session.checklist.pieces.values()] == ["Cuisine", "Salon"]
+    assert session.checklist.nom_piece(session.checklist.piece_courante) == "Salon"

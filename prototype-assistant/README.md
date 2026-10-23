@@ -1184,7 +1184,7 @@ image : pièce « U », cuisine, U, chambre, U), un coup d'œil toutes les 8 s :
 du séjour reconnu à tort), `tests/test_page_navigateur.py` (le croquis dessiné dans le coin, agrandi, renommer, réunir,
 déplacer).
 
-Le prototype compte 340 tests (et le projet, à la racine, 654) à cette étape ; 353 avec le choix de la mission ; 393 avec la capture du tour (étape 15) ; 408 avec le plan dans un repère commun ; 411 avec le plan dans le sens de la marche.
+Le prototype compte 340 tests (et le projet, à la racine, 654) à cette étape ; 353 avec le choix de la mission ; 393 avec la capture du tour (étape 15) ; 408 avec le plan dans un repère commun ; 411 avec le plan dans le sens de la marche ; 416 avec les gardes de la voix (rien d'inventé, rien d'effacé).
 
 ## Choix de la mission avant de filmer (23/10/2026)
 
@@ -1364,7 +1364,29 @@ choses dans le mauvais sens ».
 - **une correction n'efface plus une pièce qu'il a nommée** : « je suis au séjour, tu m'as mis dans le couloir » le met au
   séjour, le couloir reste ; seule une pièce devinée sur l'image est fondue dans la bonne ;
 - **une pièce montrée depuis une porte, puis où l'on entre, reste la même pièce** : la « nouvelle chambre » vue par Claude
-  est la chambre déjà nommée et jamais filmée de l'intérieur (plus de « Chambre 2 »).
+  est la chambre déjà nommée et jamais filmée de l'intérieur (plus de « Chambre 2 ») ;
+- **montrer n'est pas entrer** : « ici il y a la salle de bain », dit depuis le couloir, est un espace montré (consigne de
+  Claude : « ça c'est… », « il y a… », « on a… » montrent ; dans le doute, montré : s'il y entre, la vidéo le verra) ; avant,
+  pris pour « je suis dans la salle de bain », il faisait une fausse porte entre la salle de bain et le séjour ;
+- **Claude n'invente plus de pièce** : le nom qu'il donne doit être dans la phrase, même mal transcrite (« couir » pour
+  couloir, « ses jours » pour séjour) ; « tu m'as mis l'emploi », compris « Entrée », avait renommé le séjour ;
+- **une pièce devinée par une porte** (Claude voit le séjour depuis le couloir) puis « j'y suis, je suis dans le couloir »
+  sans avoir marché : la pièce devinée était le couloir (comme pour les phrases comprises par les règles) ;
+- **une correction n'efface jamais une pièce où l'on était déjà passé** : seule une pièce juste devinée sur l'image (ou
+  qu'il vient de nommer sans bouger) change de nom ; sinon on va dans la pièce nommée et l'autre reste. Rejeu de 11:44 :
+  « t'as mis séjour à la place de cuisine », mal transcrit et compris à l'envers, avait fondu la cuisine dans le salon.
+
+**Vérifié par rejeu** (serveur d'essai, vrai Claude, transcription en direct) :
+- 12:46 : 5 pièces (cuisine, couloir, séjour, salle de bain, chambre), portes cuisine–couloir, couloir–salle de bain,
+  couloir–séjour, séjour–chambre : exactement ce que Noah a dit ; plus de « Chambre 2 », plus d'« Entrée » inventée ;
+- 11:44 : plus aucune pièce effacée (la cuisine reste) ; la correction « t'as mis séjour à la place de cuisine », rejouée
+  hors de son contexte (le rejeu affichait déjà « Cuisine »), envoie encore au salon ;
+- les 16 vraies phrases de Noah (11:44 et 12:46, telles que transcrites en direct) données au vrai Claude avec la
+  nouvelle consigne : toutes comprises comme prévu ou sans effet (« c'est la cuisine », dit dans la cuisine et pris pour
+  « montrée », ne change rien).
+
+La transcription en direct reste le point faible (« Tu ms à c'est la cuisine ? » pour « c'est bon, c'est la cuisine ») ;
+d'un rejeu à l'autre, les phrases ne sont pas transcrites pareil et Claude ne répond pas toujours pareil.
 
 **Ce qui reste incertain, honnêtement** : sans LiDAR, aucune méthode automatique sur un téléphone n'est sûre en direct. La
 position vient des pas et du gyroscope (0,5 à 2 m d'erreur) ; le plan en direct est une esquisse qui suit les pas et ce que
@@ -1373,7 +1395,9 @@ reconstruite en 3D après la visite (COLMAP/GLOMAP, licence BSD : les pièces pl
 pas), et en fin de visite 1 à 3 questions sur ce qui reste douteux, avec déplacement d'une pièce au doigt.
 
 **Tests** : `tests/test_missions.py` (correction qui garde le couloir, relation dite, pièce montrée puis entrée sans
-doublon), `tests/test_page_navigateur.py` (plan dans le sens de la marche, flèche du nord, « vous êtes ici »).
+doublon, espace montré qui est celui où l'on est, nom inventé refusé, pièce devinée par la porte puis dite, correction qui
+n'efface jamais une pièce déjà vécue), `tests/test_voix_croquis.py` (nom entendu même mal transcrit),
+`tests/test_page_navigateur.py` (plan dans le sens de la marche, flèche du nord, « vous êtes ici »).
 
 ## Correction : vidéos d'iPhone lues à l'envers après la visite (23/10/2026)
 

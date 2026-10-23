@@ -35,6 +35,7 @@ from .plan import construire as construire_plan, vers_dict as plan_vers_dict
 from .tour import DetecteurTour
 from .trajectoire import Trajectoire
 from .vision import image_noire
+from .voix_croquis import nom_entendu
 from .decor import Decor
 from .repetition import mots_repetes, reformulation
 from .regard import visible
@@ -1466,14 +1467,20 @@ class Session:
             # Amiante, plomb (Noah, 23/10 : « quand on fait l'amiante, ne me parle pas de DPE ») : seules les pièces
             # comptent (« on est dans la cuisine », « non, c'est la buanderie ») ; rien n'est noté pour le DPE.
             actions, invraisemblables = [a for a in actions if a.get("outil") == "piece_courante"], []
-        actuelle = self.checklist.pieces.get(self.checklist.piece_courante or "")
-        if (self.trajectoire.avec_pas() and actuelle is not None and actuelle.source == "image"
+        devinee = self._devinee_a_l_entree(self.checklist.piece_courante)
+        if (self.trajectoire.avec_pas() and devinee
                 and self.trajectoire.distance(self._t_entree_piece, lot[-1]["t_fin"]) < DEPLACEMENT_MIN_M):
             # « Ici c'est le salon » sans avoir marché depuis que la pièce a été reconnue sur l'image : c'est son vrai nom
             # (une correction) ; après avoir marché, c'est la pièce où l'on vient d'arriver.
             for a in actions:
                 if a.get("outil") == "piece_courante" and not a.get("nouvelle"):
                     a["correction"] = "oui"
+        elif not devinee:
+            # « Non, c'est la buanderie » dans une pièce où l'on était déjà passé : il est ailleurs, elle reste (jamais
+            # renommée ni fondue : rejeu du 23/10, 11:44).
+            for a in actions:
+                if a.get("outil") == "piece_courante":
+                    a.pop("correction", None)
         resultats = appliquer(self.checklist, actions, contexte.t, self._phrases_recentes(contexte) + [texte])
         if not self.croquis_seul:
             resultats += self._designer_murs(texte, lot, contexte, resultats)
@@ -1902,25 +1909,48 @@ class Session:
         self.journaliser("geste_voix", texte=texte, geste=geste.__dict__ if geste else None, duree_s=round(time.perf_counter() - debut, 2))
         if geste is None or geste.geste == "rien":
             return []
+        if geste.geste in ("ici", "vue", "retour", "correction", "relation") and not nom_entendu(geste.nom, texte):
+            self.journaliser("geste_refuse", texte=texte, nom=geste.nom, raison="nom absent de la phrase")
+            return []
+        if geste.geste == "relation":
+            geste.avec = tuple(n for n in geste.avec if nom_entendu(n, texte))
+            if not geste.avec:
+                geste.geste = "vue"
         if geste.geste in ("ici", "retour"):
             existante = self.checklist.trouver_piece(geste.nom)
-            self.checklist.definir_piece(self.checklist.nom_piece(existante) if existante else geste.nom, t_debut, citation=texte)
-        elif geste.geste in ("vue", "inconnu"):
+            if (existante != cle and self._devinee_a_l_entree(cle) and self.trajectoire.avec_pas()
+                    and self.trajectoire.distance(self._t_entree_piece, t_fin) < DEPLACEMENT_MIN_M):
+                # Comme pour les règles (_noter) : « j'y suis, je suis dans le couloir » sans avoir marché depuis que Claude
+                # a vu le séjour par la porte (rejeu du 23/10 : le séjour, vu 1 s plus tôt, restait sur le trajet) : la pièce
+                # devinée sur l'image était celle-là.
+                geste.geste = "correction"
+            else:
+                self.checklist.definir_piece(self.checklist.nom_piece(existante) if existante else geste.nom, t_debut, citation=texte)
+        if geste.geste in ("vue", "inconnu"):
             nom = geste.nom if geste.geste == "vue" else self.checklist.nom_libre(geste.nom or "Local à préciser")
             existante = self.checklist.trouver_piece(nom)
-            cle_vue = existante or self.checklist.piece_pour(nom, t_debut)
-            self.croquis.voir(cle_vue, self.checklist.nom_piece(cle_vue), "dit", (t_debut + t_fin) / 2)
+            if existante is None or existante != cle:  # « c'est la cuisine », dit dans la cuisine : rien à montrer
+                cle_vue = existante or self.checklist.piece_pour(nom, t_debut)
+                self.croquis.voir(cle_vue, self.checklist.nom_piece(cle_vue), "dit", (t_debut + t_fin) / 2)
         elif geste.geste == "correction" and cle is not None:
             existante = self.checklist.trouver_piece(geste.nom)
+            # Seule une pièce juste devinée sur l'image (ou qu'il vient de nommer, sans avoir bougé) change de nom ou rejoint
+            # la bonne ; une pièce où il était déjà passé reste toujours (rejeu du 23/10, 11:44 : « t'as mis séjour à la
+            # place de cuisine », mal transcrit, compris à l'envers, avait fondu la cuisine dans le salon).
+            corrigeable = self._devinee_a_l_entree(cle) or (
+                self._premiere_entree(cle) and self.trajectoire.avec_pas()
+                and self.trajectoire.distance(self._t_entree_piece, t_fin) < DEPLACEMENT_MIN_M)
             try:
-                if existante and existante != cle and self.checklist.pieces[cle].source == "image":
+                if existante and existante != cle and self._devinee_a_l_entree(cle):
                     self.checklist.fusionner_pieces(cle, existante)  # la pièce vue sur l'image était celle-là
                 elif existante and existante != cle:
                     # « Je suis au séjour, tu m'as mis dans le couloir » : il est dans le séjour ; le couloir, qu'il avait
                     # nommé, reste une pièce (2e test du 23/10 : il avait été fondu dans le séjour).
                     self.checklist.definir_piece(self.checklist.nom_piece(existante), t_debut, citation=texte)
-                elif not existante:
+                elif not existante and corrigeable:
                     self.checklist.renommer_piece(cle, geste.nom, "dit")
+                elif not existante:
+                    self.checklist.definir_piece(geste.nom, t_debut, citation=texte)  # il est ailleurs ; la pièce d'avant reste
             except ErreurChecklist:
                 return []
         elif geste.geste == "relation":
@@ -2020,6 +2050,19 @@ class Session:
         vus = {cle_texte(type_vu)} | ({SYNONYMES_PIECES[cle_texte(type_vu)]} if cle_texte(type_vu) in SYNONYMES_PIECES else set())
         noms = {cle_texte(courante)} | (self._types_vus.get(cle, set()) if cle else set())
         return any(f"{nom} ".startswith(f"{vu} ") for nom in noms for vu in vus)
+
+    def _premiere_entree(self, cle: str | None) -> bool:
+        """On est dans la pièce `cle` pour la première fois (aucun passage avant celui-ci)."""
+        if cle is None or cle not in self.checklist.pieces:
+            return False
+        passages = sum(1 for p in self.croquis.passages if p.vers == cle)
+        return (passages - 1 if self.croquis.courante == cle else passages) <= 0
+
+    def _devinee_a_l_entree(self, cle: str | None) -> bool:
+        """La pièce où l'on est n'a été que devinée sur l'image, à cette entrée-ci : une correction peut la renommer ou la
+        fondre dans la bonne. Une pièce où l'on était déjà passé n'est jamais effacée."""
+        piece = self.checklist.pieces.get(cle or "")
+        return piece is not None and piece.source == "image" and self._premiere_entree(cle)
 
     def _piece_nommee_du_type(self, type_vu: str, cle: str | None) -> str | None:
         """Une pièce de ce type déjà nommée (montrée depuis une porte, citée dans une phrase) mais jamais filmée de
