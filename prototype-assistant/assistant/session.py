@@ -27,9 +27,10 @@ from . import parcours, plausibilite
 from .actions import appliquer
 from .citations import citation_trouvee
 from .cerveau import Contexte, Decision, ImageInstant, phrases_finies
-from .checklist import ORIENTABLES, TOUJOURS_PRESENTS, Checklist, Element, cle_texte, horodatage
+from .checklist import ORIENTABLES, TOUJOURS_PRESENTS, Checklist, Element, ErreurChecklist, cle_texte, horodatage
 from .extraction import VOCABULAIRE, Cible, confirme_meme, extraire, normaliser, question_posee, valeur_normalisee
 from .boussole import CAP_DU_POINT, MEME_COTE, Boussole, Mesure, Visee, ecart, visee_decalee
+from .croquis import Croquis
 from .decor import Decor
 from .repetition import mots_repetes, reformulation
 from .regard import visible
@@ -124,6 +125,8 @@ ACCUSES = ("Noté.", "C'est noté.", "D'accord, noté.")
 RELANCES = ("Alors…", "Voyons…")
 RELANCE_S = 1.4
 RATTRAPAGE_S = 60.0  # étape 10 : une phrase non remise pendant une coupure est redite si elle a moins d'une minute
+REFERENCES_PAR_PIECE = 3  # images de chaque pièce montrées à Claude pour la reconnaître
+INTERVALLE_PIECES_S = 6.0  # croquis : Claude regarde dans quelle pièce on est toutes les 6 s
 ATTENTE_NORD_S = 60.0  # gyroscope sans nord (iPhone tenu droit) : orientation demandée à l'oral seulement après 1 min
 # « Ce mur, ce mur et ce mur », « un mur ici, un mur ici » : des murs montrés un par un (texte normalisé).
 _DESIGNATION_MUR = re.compile(r"\b(?:(?:ce|cet)\s+mur(?:\s+(?:ici|la))?|un\s+mur\s+(?:ici|la))\b"
@@ -235,6 +238,13 @@ class Session:
         self._compteur_accuses = 0
         self._compteur_relances = 0
         self.decor = Decor()  # nouveau décor filmé : Claude vérifie la pièce au prochain silence
+        # Croquis du logement en direct (plomb, amiante ; Noah, 23/10) : pièces reconnues sur la vidéo (assistant/regard.py)
+        # ou dites, posées dans la direction où l'on marchait (assistant/croquis.py).
+        self.croquis = Croquis()
+        self._references: dict[str, list[tuple[float, bytes]]] = {}  # quelques images de chaque pièce, prises au fil du temps
+        self._avis_piece = ""  # dernier avis de Claude sur la pièce : un changement doit être vu deux fois
+        self._t_passage: float | None = None  # instant du passage dans la pièce reconnue (le cap de la caméra à cet instant)
+        self._renommages_vus = 0
         self._dits: list[str] = []  # tout ce que l'assistant a dit (pour compter les mots répétés)
         self._doublon_propose: tuple[str, str] | None = None
         self._non_remis: deque = deque(maxlen=6)  # phrases dites pendant une coupure (étape 10)
@@ -302,6 +312,7 @@ class Session:
             asyncio.create_task(self._boucle_reponses()),
             asyncio.create_task(self._boucle_conversation()),
             asyncio.create_task(self._boucle_veille()),
+            asyncio.create_task(self._boucle_pieces()),
         ]
 
     async def ouvrir_visite(self) -> None:
@@ -389,9 +400,31 @@ class Session:
         provisoire.write_text(json.dumps(etat, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(provisoire, self.dossier / "etat.json")
 
+    def _suivre_croquis(self) -> dict:
+        """Le croquis suit la checklist : pièces renommées, pièce où l'on est (avec le cap de la caméra au passage)."""
+        for ancienne, nouvelle in self.checklist.renommages[self._renommages_vus:]:
+            if nouvelle in self.croquis.pieces and ancienne != nouvelle:
+                self.croquis.fusionner(ancienne, nouvelle)
+            else:
+                self.croquis.renommer(ancienne, nouvelle, self.checklist.nom_piece(nouvelle), self.checklist.pieces[nouvelle].source)
+            if ancienne in self._references:  # renommée, ou fusionnée dans une autre pièce : ses images la suivent
+                self._references[nouvelle] = (self._references.get(nouvelle, []) + self._references.pop(ancienne))[-REFERENCES_PAR_PIECE:]
+        self._renommages_vus = len(self.checklist.renommages)
+        cle = self.checklist.piece_courante
+        if cle is not None and cle != self.croquis.courante:
+            t = self._t_passage if self._t_passage is not None else self.t_video
+            visee = self.boussole.visee(t - 1.5, t + 0.5)
+            self.croquis.entrer(cle, self.checklist.nom_piece(cle), self.checklist.pieces[cle].source, t,
+                                cap=visee.cap if visee else None, lacet=visee.lacet if visee else None)
+        self._t_passage = None
+        ouvertures = [{"piece": e.pieces[0], "cote": e.orientation, "type": e.type, "nombre": e.nombre}
+                      for e in self.checklist.enveloppe() if e.type in ("fenetre", "porte") and e.pieces and e.orientation]
+        return self.croquis.vers_dict(self.checklist.correction_cap, ouvertures)
+
     async def envoyer_etat(self) -> None:
         manques = self.checklist.manques_visite()  # étape 13 : ce qui manque au DPE du logement, pas à une pièce
         etat = self.checklist.vers_dict()
+        etat["croquis"] = self._suivre_croquis()
         self._sauver_etat(etat)
         await self._envoyer({
             "type": "etat",
@@ -485,6 +518,28 @@ class Session:
                                           "precision": mesure.precision, "inclinaison": mesure.inclinaison}) + "\n")
             self.checklist.regler_boussole(self.boussole.correction(), self.boussole.fiabilite(), self.boussole.gyroscope)
             self.checklist.attente_boussole = self.boussole.gyroscope and self.checklist.correction_cap is None and mesure.t < ATTENTE_NORD_S
+        elif genre == "deplacer_piece" and message.get("cle") in self.checklist.pieces and message.get("vers") in ("nord", "est", "sud", "ouest"):
+            # Croquis : la pièce n'est pas à la bonne place (deux portes du même côté d'une grande pièce, par exemple).
+            self.croquis.deplacer(str(message["cle"]), str(message["vers"]), self.checklist.correction_cap)
+            self.journaliser("piece_deplacee", cle=message["cle"], vers=message["vers"])
+            await self.envoyer_etat()
+        elif genre == "fusionner_pieces" and message.get("cle") in self.checklist.pieces and message.get("dans") in self.checklist.pieces:
+            # Croquis : « ce n'est pas une autre pièce, c'est le séjour » (reconnue à tort sur la vidéo).
+            self.checklist.fusionner_pieces(str(message["cle"]), str(message["dans"]))
+            self.journaliser("pieces_fusionnees", cle=message["cle"], dans=message["dans"])
+            await self.envoyer_etat()
+        elif genre == "renommer_piece" and message.get("cle") in self.checklist.pieces and str(message.get("nom") or "").strip():
+            # Croquis : « ce n'est pas la cuisine, c'est la chambre », touché sur le téléphone.
+            nom = " ".join(str(message["nom"]).split())
+            existants = {cle_texte(p.nom) for k, p in self.checklist.pieces.items() if k != message["cle"]}
+            if cle_texte(nom) in existants:  # une deuxième chambre : « Chambre 2 »
+                nom = next(f"{nom} {n}" for n in range(2, 50) if cle_texte(f"{nom} {n}") not in existants)
+            try:
+                self.checklist.renommer_piece(str(message["cle"]), nom, "tapé")
+                self.journaliser("piece_renommee", cle=message["cle"], nom=message["nom"])
+            except ErreurChecklist as e:
+                await self._envoyer({"type": "erreur", "message": str(e)})
+            await self.envoyer_etat()
         elif genre == "fin":
             await self.fin_visite()
 
@@ -1655,6 +1710,76 @@ class Session:
         return f"/api/sessions/{self.id}/images/{element.image}" if element.image else None
 
     # --- Veille ---------------------------------------------------------------------------------
+
+    async def _boucle_pieces(self) -> None:
+        """Toutes les quelques secondes, Claude dit dans quelle pièce on est (assistant/regard.py) : le croquis se dessine
+        en même temps que la vidéo, sans que la pièce soit jamais demandée."""
+        if self.regard is None:
+            return
+        await self._pret.wait()
+        derniere = None
+        while True:
+            await asyncio.sleep(INTERVALLE_PIECES_S)
+            if not self.images or self.images[-1].t == derniere or self.en_pause:
+                continue
+            derniere = self.images[-1].t
+            try:
+                await self._reconnaitre_piece()
+            except Exception as e:
+                log.exception("Pièce vue sur la vidéo")
+                self.journaliser("erreur", etape="pieces", message=str(e))
+
+    async def _reconnaitre_piece(self) -> None:
+        images = [i for i in self.images if i.t >= self.t_video - 3.0][-2:]
+        if not images:
+            return
+        cle = self.checklist.piece_courante
+        courante = self.checklist.nom_piece(cle) if cle else None
+        if cle is not None and cle not in self._references:
+            self._referencer(cle, images[-1])  # pièce dite à la voix : ses premières images
+        references = {self.checklist.nom_piece(k): [jpeg for _, jpeg in refs] for k, refs in self._references.items()
+                      if k in self.checklist.pieces}
+        debut = time.perf_counter()
+        avis = await self.regard.reconnaitre(images, references, courante)
+        self.journaliser("piece_vue", piece=avis.piece if avis else None, type=avis.type if avis else None,
+                         confiance=avis.confiance if avis else None, courante=courante, duree_s=round(time.perf_counter() - debut, 2))
+        if (avis is not None and avis.piece is None and courante is not None
+                and cle_texte(courante).split(" ")[0] == cle_texte(avis.type).split(" ")[0]):
+            # « Nouvelle cuisine » juste après être entré dans la cuisine (essai sur la visite du 22/10 : « Cuisine 2 ») :
+            # un autre coin de la même pièce.
+            avis = type(avis)(courante, "", avis.confiance)
+        if avis is None or avis.confiance == "faible" or (avis.piece and avis.piece == courante):
+            self._avis_piece = ""
+            if cle is not None and avis is not None and avis.piece == courante:
+                self._referencer(cle, images[-1])  # d'autres coins de la pièce, pour la reconnaître au retour
+            return
+        cle_avis = avis.piece or f"nouvelle:{avis.type}"
+        if cle is not None and avis.confiance != "forte" and self._avis_piece != cle_avis:
+            self._avis_piece = cle_avis  # vu une fois : on attend un second avis (une porte filmée n'est pas un passage)
+            return
+        self._avis_piece = ""
+        if avis.piece:
+            nom = avis.piece
+        else:
+            existants = [p.nom for p in self.checklist.pieces.values()]
+            nom = avis.type if avis.type not in existants else next(
+                f"{avis.type} {n}" for n in range(2, 50) if f"{avis.type} {n}" not in existants)
+        self._t_passage = images[0].t
+        piece = self.checklist.definir_piece(nom, images[0].t, citation="reconnue sur la vidéo")
+        if not avis.piece:
+            piece.source = "image"
+        self._referencer(self.checklist.piece_courante, images[-1])
+        self.journaliser("piece_reconnue", nom=piece.nom, nouvelle=not avis.piece)
+        await self._envoyer({"type": "piece_reconnue", "nom": piece.nom, "nouvelle": not avis.piece})
+        await self.envoyer_etat()
+
+    def _referencer(self, cle: str, image) -> None:
+        """Garde une image de la pièce, si la dernière gardée date d'au moins 20 s : un autre coin (un grand séjour a
+        son coin repas, son coin salon ; essai du 22/10 : le coin repas pris pour une « salle à manger »)."""
+        refs = self._references.setdefault(cle, [])
+        if not refs or image.t - refs[-1][0] >= 20.0:
+            refs.append((image.t, image.jpeg))
+            del refs[:-REFERENCES_PAR_PIECE]
 
     async def _boucle_veille(self) -> None:
         await self._pret.wait()

@@ -3,7 +3,7 @@
 // (16 kHz) et une image par seconde, et lit à voix haute les questions de l'assistant.
 
 // Version de la page, comparée à celle du serveur (test du 23/10 : l'iPhone gardait l'ancienne page en mémoire).
-const VERSION_PAGE = "2026-10-23-4";
+const VERSION_PAGE = "2026-10-23-6";
 const $ = (id) => document.getElementById(id);
 const TAUX = 16000;
 const TYPE_SON = 1;
@@ -251,6 +251,7 @@ function recevoir(m) {
       majEtat(m);
       etat.dernierEtat = m;
       if (!$("fiche").hidden) afficherFiche();
+      afficherCroquis(m.checklist && m.checklist.croquis);
       break;
     case "actions":
       majActions(m.resultats);
@@ -258,6 +259,9 @@ function recevoir(m) {
     case "erreur":
       alerte(m.message);
       setTimeout(() => alerte(""), 6000);
+      break;
+    case "piece_reconnue":
+      $("latence").textContent = `📷 Pièce : ${m.nom}${m.nouvelle ? " (nouvelle)" : ""}. Touchez le croquis pour corriger.`;
       break;
     case "proposition":
       proposerDapresImage(m);
@@ -351,6 +355,100 @@ function proposerDapresImage(m) {
 function afficherChoix(cible, options) {
   etat.cibleAffichee = cible;
   boutonsReponse($("choix"), options, (o) => envoyerJson({ type: "reponse", cible, valeur: o.valeur, libelle: o.libelle, saisie: o.saisie, t: maintenant() }));
+}
+
+// --- Croquis du logement (assistant/croquis.py) ------------------------------------------------------------
+// Sans mesures : chaque pièce est une case ; portes entre pièces, fenêtres et portes du logement sur leur mur ; murs A à D.
+const TYPES_PIECES = ["Entrée", "Séjour", "Salle à manger", "Cuisine", "Chambre", "Salle de bains", "Salle d'eau", "WC", "Couloir",
+  "Dégagement", "Bureau", "Buanderie", "Cellier", "Garage", "Escalier", "Cave", "Grenier", "Véranda"];
+const SVG = "http://www.w3.org/2000/svg";
+
+function dessinerCroquis(svg, c, grand) {
+  const largeur = svg.clientWidth || 132, hauteur = svg.clientHeight || 132;
+  svg.setAttribute("viewBox", `0 0 ${largeur} ${hauteur}`);
+  svg.replaceChildren();
+  const xs = c.pieces.map((p) => p.x), ys = c.pieces.map((p) => p.y);
+  const [x0, y0] = [Math.min(...xs), Math.min(...ys)];
+  const colonnes = Math.max(...xs) - x0 + 1, lignes = Math.max(...ys) - y0 + 1;
+  const marge = grand ? 24 : 8;
+  const case_ = Math.min((largeur - 2 * marge) / colonnes, (hauteur - 2 * marge) / lignes);
+  const ox = (largeur - case_ * colonnes) / 2, oy = (hauteur - case_ * lignes) / 2;
+  const el = (nom, attributs, texte) => {
+    const e = document.createElementNS(SVG, nom);
+    for (const [k, v] of Object.entries(attributs)) e.setAttribute(k, v);
+    if (texte != null) e.textContent = texte;
+    svg.append(e);
+    return e;
+  };
+  const coin = (p) => [ox + (p.x - x0) * case_, oy + (p.y - y0) * case_];
+  // Segment du milieu d'un mur (un tiers de sa longueur), pour une porte ou une fenêtre.
+  const milieu = (p, cote, part = 1 / 3) => {
+    const [x, y] = coin(p);
+    const debut = case_ * (0.5 - part / 2), fin = case_ * (0.5 + part / 2);
+    return { nord: [x + debut, y, x + fin, y], sud: [x + debut, y + case_, x + fin, y + case_],
+             ouest: [x, y + debut, x, y + fin], est: [x + case_, y + debut, x + case_, y + fin] }[cote];
+  };
+  for (const p of c.pieces) {
+    const [x, y] = coin(p);
+    el("rect", { x, y, width: case_, height: case_, fill: p.cle === c.courante ? "#d6ebff" : "#fafafa", stroke: "#222",
+                 "stroke-width": grand ? 3 : 2, "stroke-dasharray": p.source === "image" ? "6 3" : "" });
+    el("text", { x: x + case_ / 2, y: y + case_ / 2, "text-anchor": "middle", "dominant-baseline": "middle",
+                 "font-size": grand ? Math.min(16, case_ / 6) : Math.max(8, Math.min(11, case_ / 5)), "font-weight": "700" },
+       grand || case_ > 40 ? p.nom : p.nom.slice(0, 3));
+    if (grand) {
+      for (const [cote, lettre] of Object.entries(p.murs)) {
+        const d = 12;
+        const pos = { nord: [x + case_ / 2, y + d], sud: [x + case_ / 2, y + case_ - d / 2], ouest: [x + d / 1.5, y + case_ / 2],
+                      est: [x + case_ - d / 1.5, y + case_ / 2] }[cote];
+        el("text", { x: pos[0], y: pos[1], "text-anchor": "middle", "dominant-baseline": "middle", "font-size": 12, fill: "#b00" }, lettre);
+      }
+    }
+  }
+  const parCle = Object.fromEntries(c.pieces.map((p) => [p.cle, p]));
+  for (const porte of c.portes) {  // une ouverture dans le mur commun
+    const [a, b, c2, d] = milieu(parCle[porte.a], porte.cote);
+    el("line", { x1: a, y1: b, x2: c2, y2: d, stroke: "#fafafa", "stroke-width": grand ? 6 : 4 });
+    el("line", { x1: a, y1: b, x2: c2, y2: d, stroke: "#c0782a", "stroke-width": 1.5 });
+  }
+  for (const o of c.ouvertures) {  // fenêtre en bleu, porte du logement en marron
+    const p = parCle[o.piece];
+    if (!p) continue;
+    const [a, b, c2, d] = milieu(p, o.cote, 0.5);
+    el("line", { x1: a, y1: b, x2: c2, y2: d, stroke: o.type === "fenetre" ? "#1a73e8" : "#8b4513", "stroke-width": grand ? 6 : 4 });
+  }
+  if (c.oriente) el("text", { x: largeur - 10, y: 12, "text-anchor": "end", "font-size": grand ? 14 : 9, fill: "#b00", "font-weight": "700" }, "N ↑");
+}
+
+function afficherCroquis(c) {
+  if (c) etat.croquis = c;
+  c = etat.croquis;
+  $("croquis").hidden = !c || !c.pieces.length;
+  if ($("croquis").hidden) return;
+  dessinerCroquis($("croquis-petit"), c, false);
+  if ($("plan").hidden) return;
+  dessinerCroquis($("croquis-grand"), c, true);
+  // Corriger une pièce : un autre nom, « c'est la même pièce que… » (reconnue à tort), ou la déplacer d'une case.
+  $("plan-pieces").replaceChildren(...c.pieces.map((p) => {
+    const bloc = Object.assign(document.createElement("div"), { className: "bloc-piece" });
+    const ligne = Object.assign(document.createElement("div"), { className: "ligne-piece" });
+    const choix = document.createElement("select");
+    choix.append(new Option(p.source === "image" ? "📷 reconnue : corriger ?" : "Renommer", ""),
+                 ...TYPES_PIECES.map((t) => new Option(t, t)));
+    choix.onchange = () => { if (choix.value) envoyerJson({ type: "renommer_piece", cle: p.cle, nom: choix.value }); };
+    ligne.append(Object.assign(document.createElement("span"), { textContent: p.nom }), choix);
+    const outils = Object.assign(document.createElement("div"), { className: "ligne-piece" });
+    const meme = document.createElement("select");
+    meme.append(new Option("Même pièce que…", ""), ...c.pieces.filter((q) => q.cle !== p.cle).map((q) => new Option(q.nom, q.cle)));
+    meme.onchange = () => { if (meme.value) envoyerJson({ type: "fusionner_pieces", cle: p.cle, dans: meme.value }); };
+    outils.append(meme, ...[["←", "ouest"], ["↑", "nord"], ["↓", "sud"], ["→", "est"]].map(([fleche, vers]) => {
+      const b = Object.assign(document.createElement("button"), { type: "button", className: "fleche", textContent: fleche,
+                                                                 title: `Déplacer ${p.nom}` });
+      b.onclick = () => envoyerJson({ type: "deplacer_piece", cle: p.cle, vers });
+      return b;
+    }));
+    bloc.append(ligne, outils);
+    return bloc;
+  }));
 }
 
 function afficherFiche() {
@@ -723,6 +821,8 @@ function envoyerVideo(blob) {
 
 $("demarrer").onclick = demarrer;
 $("voir-fiche").onclick = () => { $("fiche").hidden = false; afficherFiche(); };
+$("croquis").onclick = () => { $("plan").hidden = false; afficherCroquis(etat.croquis); };
+$("fermer-plan").onclick = () => ($("plan").hidden = true);
 $("fermer-fiche").onclick = () => ($("fiche").hidden = true);
 $("terminer").onclick = terminer;
 $("nouvelle").onclick = () => location.reload();

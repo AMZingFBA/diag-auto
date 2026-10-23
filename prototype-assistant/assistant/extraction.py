@@ -396,7 +396,11 @@ _PIECE = re.compile(
     r"|la c est|(?:apres|ensuite|puis)\s*,?\s*(?:la\s*,?\s*)?(?:il y a|c est|on a|on arrive dans))\s+"
     r"(?:la |le |l |les |a la |au |un |une )?(" + _NOMS_PIECES + r")(?:\s+(\d+))?\b"
 )
-_NOM_PIECE = re.compile(r"\b(" + _NOMS_PIECES + r")(?:\s+(\d+))?\b")  # réponse à « Quelle est la pièce suivante ? »
+_NOM_PIECE = re.compile(r"\b(" + _NOMS_PIECES + r")(?:\s+(\d+))?\b")
+# « Non, c'est la buanderie », « c'est pas la cuisine, c'est la chambre » : la pièce où l'on est, nommée ou corrigée
+# (croquis : une pièce reconnue à tort sur la vidéo est renommée). La dernière nommée l'emporte.
+_PIECE_CORRIGEE = re.compile(r"(?:^|\bnon\b|\ben fait\b|\bpas (?:la |le |l |les )\w+)\s*,?\s*c est (?:bien )?(?:la |le |l |les )(" + _NOMS_PIECES
+                             + r")(?:\s+(\d+))?\b")  # réponse à « Quelle est la pièce suivante ? »
 _ANNEE = re.compile(r"\b(19[3-9]\d|20[0-3]\d)\b")
 
 # --- Groupes, exceptions, références (étape 4 de Noah) ---
@@ -997,7 +1001,8 @@ def extraire(phrase: str, checklist: Checklist, cible: Cible | None = None) -> E
         resultat.demande = _demande(texte)  # « il te faut quoi d'autre ? » : le serveur sait y répondre
         return resultat
 
-    piece = _PIECE.search(texte) or (_NOM_PIECE.search(texte) if cible and cible.genre == "piece" else None)
+    piece = (_PIECE.search(texte) or next(reversed(list(_PIECE_CORRIGEE.finditer(texte))), None)
+             or (_NOM_PIECE.search(texte) if cible and cible.genre == "piece" else None))
     if piece:
         action("piece_courante", nom=_PIECES[piece.group(1)] + (f" {piece.group(2)}" if piece.group(2) else ""))
         texte = texte[: piece.start()] + texte[piece.end():]

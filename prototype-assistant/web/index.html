@@ -49,6 +49,9 @@
       <span id="cap">pas de boussole</span>
       <span id="calibrer" class="calibrer" hidden>Faites un 8 avec le téléphone</span>
     </div>
+    <!-- Croquis du logement (plomb, amiante ; Noah, 23/10) : dessiné en direct, pièces reconnues sur la vidéo. Le toucher
+         l'agrandit, et permet de renommer une pièce mal reconnue. -->
+    <div id="croquis" class="croquis" hidden><svg id="croquis-petit"></svg></div>
     <div id="alerte" class="alerte" hidden></div>
     <div class="bas">
       <div class="ligne-question">
@@ -79,6 +82,13 @@
       </div>
     </div>
     <!-- Fiche du DPE du logement, par côté : chaque information, à compléter ou corriger d'un appui (comme à l'oral). -->
+    <section id="plan" class="fiche" hidden>
+      <header class="fiche-titre"><span>Croquis du logement</span><button id="fermer-plan" class="petit-bouton">Fermer</button></header>
+      <svg id="croquis-grand" class="croquis-grand"></svg>
+      <p class="petit">Murs A, B, C, D : A est le mur de la porte par laquelle on entre, puis dans le sens des aiguilles d'une
+        montre. Pointillés : pièce reconnue sur la vidéo, à corriger ci-dessous si besoin. Bleu : fenêtre ; marron : porte.</p>
+      <div id="plan-pieces"></div>
+    </section>
     <section id="fiche" class="fiche" hidden>
       <header class="fiche-titre"><span id="fiche-piece">DPE du logement</span><button id="fermer-fiche" class="petit-bouton">Fermer</button></header>
       <div id="fiche-contenu"></div>

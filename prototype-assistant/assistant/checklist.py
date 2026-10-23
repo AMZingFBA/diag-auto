@@ -395,6 +395,7 @@ class Piece:
     absences: dict[str, Valeur] = field(default_factory=dict)  # type -> « pas de fenêtre » cité
     clos: dict[str, Valeur] = field(default_factory=dict)  # type -> « pas d'autre mur » cité
     nombre_murs: Valeur | None = None  # « cette pièce fait 4 murs »
+    source: str = "dit"  # « image » : reconnue sur la vidéo (croquis) ; un nom dit ensuite la renomme
 
 
 @dataclass
@@ -501,6 +502,7 @@ class Checklist:
         # Élément réuni à un autre (étape 13 : un mur rejoint le mur de même orientation ; étape 9 : doublon confirmé) :
         # son identifiant mène à l'élément gardé.
         self.alias: dict[str, str] = {}
+        self.renommages: list[tuple[str, str]] = []  # (ancienne clé, nouvelle) : le croquis suit
         self.clos: dict[str, Valeur] = {}  # « pas d'autre mur » : les côtés du logement sont tous dits (étape 13)
         for type_element in TOUJOURS_PRESENTS:  # le plafond et le plancher du logement, toujours là
             self.signaler_element(type_element, TYPES[type_element].designation, 0.0, source="auto")
@@ -521,6 +523,48 @@ class Checklist:
         """Change de pièce. Revenir dans une pièce déjà vue la reprend, sans doublon."""
         self.piece_courante = self._creer_piece(nom, t, citation)
         return self.pieces[self.piece_courante]
+
+    def renommer_piece(self, cle: str, nom: str, source: str = "dit") -> str:
+        """« Non, c'est la chambre » : la même pièce, un autre nom (reconnue à tort sur l'image). Renvoie la nouvelle clé."""
+        nom = " ".join(nom.split())
+        nouvelle = cle_texte(nom)
+        if cle not in self.pieces or not nom or (nouvelle in self.pieces and nouvelle != cle):
+            raise ErreurChecklist(f"renommage impossible : {cle!r} → {nom!r}")
+        piece = self.pieces[cle]
+        piece.nom, piece.source = nom[0].upper() + nom[1:], source
+        self.renommages.append((cle, nouvelle))
+        self.pieces = {(nouvelle if k == cle else k): v for k, v in self.pieces.items()}
+        self.piece_courante = nouvelle if self.piece_courante == cle else self.piece_courante
+        for e in self.elements:
+            e.piece = nouvelle if e.piece == cle else e.piece
+            e.pieces = [nouvelle if p == cle else p for p in e.pieces]
+            e.vu_a = {(nouvelle if p == cle else p): t for p, t in e.vu_a.items()}
+            e.piece_propre = nouvelle if e.piece_propre == cle else e.piece_propre
+            for historique in e.valeurs.values():
+                for v in historique:
+                    v.piece = nouvelle if v.piece == cle else v.piece
+        for r in self.regles:
+            r.piece = nouvelle if r.piece == cle else r.piece
+        return nouvelle
+
+    def fusionner_pieces(self, cle: str, dans: str) -> str:
+        """« Ce n'est pas une autre pièce, c'est le séjour » : la pièce `cle` (reconnue à tort sur la vidéo) rejoint `dans` ;
+        ce qui y a été vu est rangé dans `dans`."""
+        if cle not in self.pieces or dans not in self.pieces or cle == dans:
+            raise ErreurChecklist(f"fusion impossible : {cle!r} → {dans!r}")
+        for e in self.elements:
+            e.piece = dans if e.piece == cle else e.piece
+            e.pieces = list(dict.fromkeys(dans if p == cle else p for p in e.pieces))
+            if cle in e.vu_a:
+                e.vu_a[dans] = min(e.vu_a.pop(cle), e.vu_a.get(dans, float("inf")))
+            e.piece_propre = dans if e.piece_propre == cle else e.piece_propre
+            for historique in e.valeurs.values():
+                for v in historique:
+                    v.piece = dans if v.piece == cle else v.piece
+        del self.pieces[cle]
+        self.piece_courante = dans if self.piece_courante == cle else self.piece_courante
+        self.renommages.append((cle, dans))
+        return dans
 
     def trouver_piece(self, nom: str) -> str | None:
         """« la chambre » → « chambre », ou « chambre 1 » si c'est la seule chambre ; None si inconnue ou ambiguë."""

@@ -36,6 +36,7 @@
    - **Pas de clé API (correction de Noah, 22/10/2026)** : le prototype appelle le Claude Code connecté sur le PC (abonnement Claude Max) en mode headless ; ne jamais lire ANTHROPIC_API_KEY. L'abonnement est prévu pour un usage personnel/développement : l'accès pour un usage commercial à grande échelle sera à revoir plus tard (non décidé).
    - Hors réseau : enregistrement local, puis questions a posteriori.
    - Le rattachement définitif des réponses aux murs et tout le calcul 3D restent faits ensuite sur le serveur.
+4 bis. **Croquis en direct pour le plomb et l'amiante (décision de Noah, 23/10/2026)** : pendant le tournage, un croquis du logement se dessine dans un coin du téléphone. **Sans mesures** ; les pièces sont **reconnues seules sur la vidéo** (Claude), jamais demandées, et corrigeables à la voix ou au doigt ; murs **A, B, C, D, A = mur de la porte d'entrée de la pièce, puis sens horaire** (prototype-assistant/assistant/croquis.py, regard.py).
 5. **Précision visée ~3–5 %** : suffisante pour le DPE. **Pour le Carrez/Boutin, la mesure laser fait foi** (télémètre filmé ou dicté) ; la vidéo sert de contrôle et de plan.
 6. **Écran de validation** par le diagnostiqueur : chaque valeur proposée montre sa preuve ; une donnée invisible non dite reste vide, l'IA ne la devine jamais.
 7. **Sortie vers LICIEL** par génération des tables XML du dossier (paquet `diagauto.liciel_xml`) : pièces + Carrez d'abord, DPE ensuite.

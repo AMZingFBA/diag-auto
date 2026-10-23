@@ -12,6 +12,7 @@ Claude par l'abonnement (Claude Code, sans clé API), un processus à part, pour
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -38,6 +39,65 @@ avec ses tuyaux, une chaudière murale gaz, un ballon d'eau chaude, une bouche d
 à l'image, si c'est flou, ou si tu hésites entre deux réponses, ne choisis rien : ne devine jamais, c'est le \
 diagnostiqueur qui confirme. Réponds uniquement par un JSON sur une ligne : \
 {"valeur": "<une des valeurs proposées, exactement, ou vide>", "raison": "<ce qui se voit, en 8 mots au plus>"}"""
+
+
+# Pièces reconnues sur la vidéo (croquis pour le plomb et l'amiante, Noah, 23/10 : « il faut qu'il reconnaisse lui-même
+# quand on change de pièce, et quelle pièce c'est »).
+TYPES_PIECES = ["Entrée", "Séjour", "Salle à manger", "Cuisine", "Chambre", "Salle de bains", "Salle d'eau", "WC", "Couloir",
+                "Dégagement", "Bureau", "Buanderie", "Cellier", "Garage", "Escalier", "Cave", "Grenier", "Véranda", "Pièce"]
+
+CONSIGNES_PIECE = (
+    "Tu aides un diagnostiqueur immobilier qui filme tout un logement en une seule vidéo, pièce par pièce. On te donne le "
+    "nom de la pièce où il était, quelques images de chaque pièce déjà vue, puis les dernières images de sa caméra. Dis dans "
+    "quelle pièce il est maintenant. Une pièce déjà vue (mêmes meubles, mêmes murs, même sol) : donne son nom exact. Une "
+    "autre pièce : réponds « nouvelle » et donne son type parmi : " + ", ".join(TYPES_PIECES) + ". S'il filme une porte ou "
+    "un passage sans être encore entré, ou si l'image est floue, au plafond ou au sol, réponds la pièce où il était. Les "
+    "images d'une pièce n'en montrent qu'une partie : un autre coin de la même pièce reste cette pièce (un grand séjour a "
+    "son coin repas et son coin salon : c'est une seule pièce). Une nouvelle pièce se voit à son sol, ses murs et ses "
+    "meubles différents, souvent après une porte. Réponds uniquement par un JSON sur une ligne : {\"piece\": \"<nom d'une "
+    "pièce déjà vue, ou nouvelle>\", \"type\": \"<type, pour une nouvelle pièce>\", \"confiance\": \"<forte, moyenne ou "
+    "faible>\"}")
+
+
+@dataclass
+class AvisPiece:
+    piece: str | None  # le nom d'une pièce déjà vue ; None : une nouvelle pièce
+    type: str  # pour une nouvelle pièce
+    confiance: str  # « forte », « moyenne » ou « faible »
+
+
+def analyser_piece(texte: str, connues: list[str]) -> AvisPiece | None:
+    """La réponse de Claude : une pièce déjà vue (son nom exact), ou une nouvelle d'un type connu ; sinon rien."""
+    m = re.search(r"\{.*\}", texte or "", re.DOTALL)
+    if not m:
+        return None
+    try:
+        donnees = json.loads(m.group(0))
+    except ValueError:
+        return None
+    confiance = str(donnees.get("confiance") or "faible").strip().lower()
+    confiance = confiance if confiance in ("forte", "moyenne", "faible") else "faible"
+    piece = " ".join(str(donnees.get("piece") or "").split())
+    connue = next((n for n in connues if n.lower() == piece.lower()), None)
+    if connue:
+        return AvisPiece(connue, "", confiance)
+    type_piece = " ".join(str(donnees.get("type") or "").split())
+    type_connu = next((t for t in TYPES_PIECES if t.lower() == type_piece.lower()), None)
+    if piece.lower() == "nouvelle" and type_connu:
+        return AvisPiece(None, type_connu, confiance)
+    return None
+
+
+def contenu_piece(courante: str | None, references: dict[str, list[bytes]], images: list[ImageInstant]) -> list[dict]:
+    def image(jpeg: bytes) -> dict:
+        return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(jpeg).decode()}}
+
+    blocs: list[dict] = [{"type": "text", "text": f"Pièce où il était : « {courante or 'aucune encore'} »."}]
+    for nom, jpegs in references.items():
+        blocs += [{"type": "text", "text": f"Pièce déjà vue « {nom} » :"}, *(image(j) for j in jpegs)]
+    blocs.append({"type": "text", "text": "Dernières images de la caméra (la plus récente en dernier) :"})
+    blocs += [image(i.jpeg) for i in images]
+    return blocs
 
 
 @dataclass
@@ -95,11 +155,25 @@ class RegardClaude:
                     "--model", modele, "--effort", "low", "--safe-mode", "--no-session-persistence",
                     "--permission-prompts", "none", "--system-prompt", CONSIGNES_REGARD, "--tools", ""]
         self._cerveau = CerveauClaudeCode(dossier, modele=modele, tours_max=10, delai_s=delai_s, commande=commande)
+        pieces = [*commande[: commande.index("--system-prompt") + 1], CONSIGNES_PIECE, *commande[commande.index("--system-prompt") + 2:]]
+        self._pieces = CerveauClaudeCode(dossier / "pieces", modele=modele, tours_max=10, delai_s=delai_s, commande=pieces)
         self.delai_s = delai_s
         self.mesures: dict = {}
 
     async def demarrer(self) -> None:
-        await self._cerveau.demarrer()
+        await asyncio.gather(self._cerveau.demarrer(), self._pieces.demarrer())
+
+    async def reconnaitre(self, images: list[ImageInstant], references: dict[str, list[bytes]], courante: str | None) -> AvisPiece | None:
+        """Dans quelle pièce est-on, d'après les dernières images comparées à une image de chaque pièce déjà vue ?"""
+        if not images:
+            return None
+        try:
+            processus = await self._pieces._processus()
+            texte, _, self.mesures = await processus.demander(contenu_piece(courante, references, images), None, self.delai_s)
+        except (RuntimeError, TimeoutError, OSError) as e:
+            log.warning("Pièce vue par Claude : %s", e)
+            return None
+        return analyser_piece(texte, list(references))
 
     async def proposer(self, question: str, options: list[dict], images: list[ImageInstant]) -> Proposition | None:
         if not images:
@@ -114,3 +188,4 @@ class RegardClaude:
 
     async def fermer(self) -> None:
         await self._cerveau.fermer()
+        await self._pieces.fermer()

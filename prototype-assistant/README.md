@@ -1133,7 +1133,55 @@ de téléphone, touchée au doigt (écran tactile simulé) ; on vérifie ce qui 
 - tests : `tests/test_regard.py` (questions regardées ou non, réponse de Claude jamais inventée, bouton proposé jamais
   noté) et `tests/test_page_navigateur.py` (le bouton s'allume, un appui confirme).
 
-Le prototype compte 329 tests (et le projet, à la racine, 654).
+## Étape 14 : croquis du logement en direct, pour le plomb et l'amiante (23/10/2026)
+
+**Ce que Noah a demandé** : pendant qu'il filme, un croquis du logement se dessine tout seul dans un coin du téléphone ;
+s'il est faux, il le corrige en direct. Ses choix : **sans mesures** ; les pièces **reconnues seules** sur la vidéo (jamais
+demandées) ; murs **A, B, C, D**, A étant le mur de la porte par laquelle on entre, puis dans le sens des aiguilles d'une
+montre (convention du repérage plomb ; cas particuliers à confirmer avec la norme NF X46-030 : hypothèse).
+
+**Comment ça marche** :
+- **pièces reconnues** (`assistant/regard.py`) : toutes les 6 s, Claude (Sonnet, par l'abonnement, un processus à part)
+  compare les 2 dernières images à quelques images de chaque pièce déjà vue (prises au fil du temps, jusqu'à 3 par pièce,
+  à 20 s d'écart) : même pièce, pièce déjà vue (revisite), ou nouvelle pièce d'un type connu (cuisine, chambre…). Un
+  changement doit être vu deux fois de suite (sauf avis « fort ») : une porte filmée n'est pas un passage. Une « nouvelle
+  cuisine » juste après être entré dans la cuisine est un autre coin de la même pièce. Les pièces reconnues sont celles de
+  la visite (Carrez, repérage, pont LICIEL) ;
+- **croquis** (`assistant/croquis.py`) : chaque pièce est une case ; une nouvelle pièce est posée à côté de celle d'où l'on
+  vient, du côté où l'on marchait (cap de la caméra au passage : boussole, sinon gyroscope ; tout se remet d'aplomb quand le
+  nord est connu), avec la porte entre les deux ; les fenêtres (bleu) et portes du logement (marron) notées pendant la
+  visite sont sur leur mur ; murs A à D ; nord en haut quand il est connu ;
+- **sur le téléphone** : le croquis en petit en haut à gauche ; touché, il s'agrandit (murs A à D, légende) avec, pour
+  chaque pièce : « Renommer », « Même pièce que… » (reconnue à tort : les deux sont réunies) et quatre flèches pour la
+  déplacer d'une case ;
+- **à la voix** : « non, c'est la buanderie » dans une pièce reconnue sur la vidéo la renomme ; « non, c'est le séjour »
+  (une pièce déjà vue) la réunit au séjour ; « on passe dans la cuisine » reste un changement de pièce.
+
+**Essai sur la vraie visite de Noah du 22/10 après-midi** (images à 1 par seconde, boussole ; vérité relevée image par
+image : pièce « U », cuisine, U, chambre, U), un coup d'œil toutes les 8 s :
+
+| | Première version | Version finale |
+|---|---|---|
+| Coups d'œil dans la bonne pièce | 40 sur 88 | **87 sur 88** (le seul faux : 3 s de retard à une porte) |
+| Pièces créées | 6 (« Cuisine 2 », « Chambre 2 », le coin repas pris pour une « salle à manger ») | **3** : séjour, cuisine, chambre ; revisites reconnues |
+| Calcul | 176 s | 163 s pour 88 coups d'œil (2 s chacun environ) |
+
+**Limites, honnêtement** :
+- **Sans mesures, la place d'une pièce vient du seul sens de la marche** : deux portes du même côté d'une grande pièce (la
+  cuisine et la chambre, toutes deux vers l'est, chez Noah) mettent la seconde pièce derrière la première. Il faut la
+  déplacer avec les flèches. Le plan coté viendra de la reconstruction 3D après la visite (docs/02-capture-video.md).
+- Une pièce traversée en moins de 6 à 12 s (un couloir) peut ne pas être vue ; deux pièces très semblables (deux chambres
+  identiques) peuvent être confondues : à corriger d'un appui.
+- Chaque coup d'œil est un appel à Claude (Sonnet) : environ 10 par minute de visite, sur l'abonnement.
+- Le croquis n'est pas encore écrit dans LICIEL (tables `General_Plan*`) : étape suivante.
+- Pas encore essayé en vrai par Noah.
+
+**Tests** : `tests/test_croquis.py` (disposition, murs A à D, nord connu ensuite, déplacer, réunir),
+`tests/test_croquis_visite.py` (visite avec un faux Claude : pièces vues deux fois, corrections à la voix et au doigt, coin
+du séjour reconnu à tort), `tests/test_page_navigateur.py` (le croquis dessiné dans le coin, agrandi, renommer, réunir,
+déplacer).
+
+Le prototype compte 340 tests (et le projet, à la racine, 654).
 
 ## Réglages (variables d'environnement)
 

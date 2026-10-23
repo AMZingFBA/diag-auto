@@ -13,6 +13,8 @@ from .checklist import Checklist, ErreurChecklist, cle_texte
 from .citations import citation_trouvee
 
 # « C'est la première pièce » : Claude l'avait appelée « U » (test de Noah du 22/10 après-midi : « la pièce U »).
+# « On passe dans la cuisine », « je vais dans la chambre » : un déplacement, pas un nouveau nom pour la pièce où l'on est.
+_DEPLACEMENT = re.compile(r"\b(?:pass\w*|va|vais|allons|allez|aller|entr\w*|rentr\w*|sor\w*|arriv\w*|mainten\w*|ensuite|apres)\b")
 _PREMIERE_PIECE = re.compile(r"^(?:la\s+)?(?:pi[eè]ce\s+)?(?:u|un|une|1|premi[eè]re)(?:\s+pi[eè]ce)?$", re.IGNORECASE)
 
 
@@ -82,7 +84,18 @@ def appliquer_action(checklist: Checklist, action: dict, t: float, phrases: list
             raise ErreurChecklist("citation introuvable dans ce qui a été dit")
         if outil == "piece_courante":
             confirme = bool(citation) and citation_trouvee(citation, phrases)
-            checklist.definir_piece(_nom_piece(checklist, _texte(action, "nom")), t, citation if confirme else "")
+            nom = _nom_piece(checklist, _texte(action, "nom"))
+            actuelle = checklist.pieces.get(checklist.piece_courante or "")
+            correction = confirme and actuelle is not None and actuelle.source == "image" and not _DEPLACEMENT.search(cle_texte(citation))
+            existante = checklist.trouver_piece(nom)
+            if correction and existante is None:
+                # « Non, c'est la chambre » dans une pièce reconnue sur l'image : la même pièce, mal nommée (croquis).
+                checklist.renommer_piece(checklist.piece_courante, nom)
+            elif correction and existante != checklist.piece_courante:
+                # « Non, c'est le séjour » : pas une autre pièce, un coin du séjour reconnu à tort (essai du 22/10).
+                checklist.fusionner_pieces(checklist.piece_courante, existante)
+            else:
+                checklist.definir_piece(nom, t, citation if confirme else "")
             if not confirme:
                 resultat["raison"] = "pièce déduite de l'image, à confirmer"
         elif outil == "signaler_element":

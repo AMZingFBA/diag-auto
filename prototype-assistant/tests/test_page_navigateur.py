@@ -70,7 +70,8 @@ class Navigateur:
 
     def toucher(self, selecteur: str) -> None:
         """Un doigt sur le centre de l'élément."""
-        x, y = self.js(f"(() => {{ const r = document.querySelector({json.dumps(selecteur)}).getBoundingClientRect();"
+        x, y = self.js(f"(() => {{ const e = document.querySelector({json.dumps(selecteur)}); e.scrollIntoView({{block: 'center'}});"
+                       " const r = e.getBoundingClientRect();"
                        " return [r.x + r.width / 2, r.y + r.height / 2]; })()")
         point = [{"x": x, "y": y}]
         self.appel("Input.dispatchTouchEvent", type="touchStart", touchPoints=point)
@@ -173,3 +174,26 @@ def test_bouton_vu_sur_l_image_s_allume_et_se_confirme_d_un_appui(page):
     assert page.js("document.querySelectorAll('#choix button.vu').length") == 1
     page.toucher("#choix button.vu")
     assert [(m["cible"], m["valeur"]) for m in page.js("window.envoyes")] == [("F1.menuiserie", "PVC")]
+
+
+def test_croquis_dessine_dans_le_coin_puis_agrandi_et_renomme(page):
+    croquis = {"oriente": True, "courante": "cuisine", "portes": [{"a": "sejour", "b": "cuisine", "cote": "est"}],
+               "pieces": [{"cle": "sejour", "nom": "Séjour", "source": "dit", "x": 0, "y": 0,
+                           "murs": {"sud": "A", "ouest": "B", "nord": "C", "est": "D"}},
+                          {"cle": "cuisine", "nom": "Cuisine", "source": "image", "x": 1, "y": 0,
+                           "murs": {"ouest": "A", "nord": "B", "est": "C", "sud": "D"}}],
+               "ouvertures": [{"piece": "cuisine", "cote": "est", "type": "fenetre", "nombre": 1}]}
+    page.js(f"(() => {{ window.envoyes = []; afficherCroquis({json.dumps(croquis)}); return true; }})()")
+    assert page.js("$('croquis').hidden") is False
+    assert page.js("$('croquis-petit').querySelectorAll('rect').length") == 2  # une case par pièce
+    page.toucher("#croquis")
+    assert page.js("$('plan').hidden") is False
+    assert "A" in page.js("[...$('croquis-grand').querySelectorAll('text')].map((t) => t.textContent)")  # murs repérés
+    page.js("(() => { const s = $('plan-pieces').querySelectorAll('.bloc-piece')[1].querySelector('select'); s.value = 'Buanderie'; s.onchange(); return true; })()")
+    assert page.js("window.envoyes") == [{"type": "renommer_piece", "cle": "cuisine", "nom": "Buanderie"}]
+    page.js("(() => { window.envoyes = []; const s = $('plan-pieces').querySelectorAll('.bloc-piece')[1].querySelectorAll('select')[1];"
+            " s.value = 'sejour'; s.onchange(); return true; })()")
+    page.toucher("#plan-pieces .bloc-piece:nth-child(2) .fleche:nth-of-type(4)")  # « → » : vers l'est
+    assert page.js("window.envoyes") == [{"type": "fusionner_pieces", "cle": "cuisine", "dans": "sejour"},
+                                         {"type": "deplacer_piece", "cle": "cuisine", "vers": "est"}]
+    page.js("$('fermer-plan').onclick()")

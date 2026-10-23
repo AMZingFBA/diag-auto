@@ -86,3 +86,8 @@ Livrable : rejouer cette session réelle avant/après, montrer le dialogue obten
 - À adapter : checklist-dpe.md, questions de l'assistant (ne pas demander « quels murs dans cette pièce » mais « ce mur donne sur quoi ? »), schéma des données, extraction, rejeux de test, tests pytest, README.
 - Noah demande qu'on lui envoie un message quand c'est terminé.
 - Précision de Noah pendant l'étape (22/10, message direct) : « quand on veut faire un dpe il nous demande dans quel piece on est mais c pas imprtant pour le dpe puisque on veut savoir quel chose de globale […] qu'on soit dans le sejour ou chambre pour le dpe on s'en fiche » → l'assistant ne demande jamais la pièce.
+
+## Étape 14 (Noah, message direct du 23/10/2026, intégrée le 23/10) — Croquis en direct pour le plomb et l'amiante
+- « ok c bon pour le dpe mtn il faut que pour le pllonc et l'amiante il faut faire un plan donc faut que ut trouve un systeme ou on fait le tour le la maison et a fait un plan croquis automatqiuement avceun outil ia au tel et la perosnne uqipeut repondre en diret et entamment une idcution si l'ia a pas torp bine compris et il faut que le croqui se descine en meme temps que le digantqiuer fasse la video sur un coins du tel »
+- Choix de Noah (questions posées) : croquis **sans aucune mesure** ; « il faut qu'il reconnaisse lui-même quand on change de pièce et c'est quoi la pièce » ; murs **A = mur de la porte, sens horaire**.
+
