@@ -14,9 +14,16 @@
   <section id="accueil" class="ecran">
     <div class="carte">
       <h1>Assistant de visite</h1>
-      <p class="aide">Filmez tout le logement en une seule vidéo, en parlant normalement. L'assistant vous pose dans l'oreillette les questions qui manquent pour le DPE. Il ne devine rien : il demande.</p>
+      <!-- Choix de la mission avant de filmer (Noah, 23/10) : le DPE et ses questions, ou le croquis (amiante, plomb). -->
+      <p class="aide">Que faites-vous ?</p>
+      <div id="missions" class="missions" role="radiogroup" aria-label="Mission">
+        <button type="button" data-mission="dpe" role="radio" aria-checked="false"><strong>DPE</strong><span>Les questions du DPE pendant la vidéo</span></button>
+        <button type="button" data-mission="amiante" role="radio" aria-checked="false"><strong>Amiante</strong><span>Le croquis des pièces pendant la vidéo</span></button>
+        <button type="button" data-mission="plomb" role="radio" aria-checked="false"><strong>Plomb (CREP)</strong><span>Le croquis des pièces, murs A, B, C, D</span></button>
+      </div>
+      <p id="aide-mission" class="aide" hidden></p>
       <p id="statut-serveur" class="aide">Connexion au serveur…</p>
-      <label>Pièce de départ (facultatif : sans effet sur le DPE)
+      <label><span id="libelle-piece">Pièce de départ (facultatif)</span>
         <input id="piece" type="text" placeholder="ex. Séjour" autocomplete="off">
       </label>
       <label>Qualité de la vidéo
@@ -29,7 +36,7 @@
       <label id="ligne-code" hidden>Code d'accès
         <input id="code" type="password" autocomplete="off">
       </label>
-      <button id="demarrer" class="principal">Démarrer la visite</button>
+      <button id="demarrer" class="principal" disabled>Choisissez d'abord la mission</button>
       <p class="aide petit">Conseil : oreillette branchée ou Bluetooth, lumières allumées, mouvements lents.</p>
     </div>
   </section>
@@ -51,7 +58,8 @@
     </div>
     <!-- Croquis du logement (plomb, amiante ; Noah, 23/10) : dessiné en direct, pièces reconnues sur la vidéo. Le toucher
          l'agrandit, et permet de renommer une pièce mal reconnue. -->
-    <div id="croquis" class="croquis" hidden><svg id="croquis-petit"></svg></div>
+    <div id="croquis" class="croquis" hidden><svg id="croquis-petit"></svg>
+      <p id="croquis-aide" class="croquis-aide" hidden>Le croquis se dessine ici : entrez dans une pièce et faites-en le tour.</p></div>
     <div id="alerte" class="alerte" hidden></div>
     <div class="bas">
       <div class="ligne-question">
@@ -100,7 +108,7 @@
     <div class="carte">
       <h1>Visite terminée</h1>
       <div id="resume"></div>
-      <h2>Ce qui manque encore</h2>
+      <h2 id="titre-manques-fin">Ce qui manque encore</h2>
       <ul id="manques-fin"></ul>
       <div id="bloc-video" hidden>
         <h2>Vidéo enregistrée</h2>

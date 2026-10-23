@@ -128,6 +128,10 @@ RATTRAPAGE_S = 60.0  # étape 10 : une phrase non remise pendant une coupure est
 REFERENCES_PAR_PIECE = 3  # images de chaque pièce montrées à Claude pour la reconnaître
 INTERVALLE_PIECES_S = 6.0  # croquis : Claude regarde dans quelle pièce on est toutes les 6 s
 ATTENTE_NORD_S = 60.0  # gyroscope sans nord (iPhone tenu droit) : orientation demandée à l'oral seulement après 1 min
+# Mission choisie sur le téléphone avant de filmer (Noah, 23/10) : le DPE (ses questions, sans croquis), ou l'amiante et le
+# plomb (le croquis seul, en grand : pièces reconnues sur la vidéo, aucune question du DPE).
+MISSIONS = {"dpe": "DPE", "amiante": "Amiante", "plomb": "Plomb (CREP)"}
+OUVERTURE_CROQUIS = "Je dessine le croquis : entrez dans chaque pièce et faites-en le tour."
 # « Ce mur, ce mur et ce mur », « un mur ici, un mur ici » : des murs montrés un par un (texte normalisé).
 _DESIGNATION_MUR = re.compile(r"\b(?:(?:ce|cet)\s+mur(?:\s+(?:ici|la))?|un\s+mur\s+(?:ici|la))\b"
                               r"(?!\s+(?:de|du|des|d|en|est|donne|fait|avec|qui)\b)")
@@ -215,8 +219,10 @@ def rappel_fin(checklist: Checklist, maximum: int = 3) -> str:
 
 
 class Session:
-    def __init__(self, ident: str, dossier: Path, cerveau, cerveau_veille, transcripteur, reglages: Reglages, regard=None) -> None:
+    def __init__(self, ident: str, dossier: Path, cerveau, cerveau_veille, transcripteur, reglages: Reglages, regard=None,
+                 mission: str = "dpe") -> None:
         self.id = ident
+        self.mission = mission if mission in MISSIONS else "dpe"
         self.regard = regard  # assistant/regard.py : l'image propose la réponse à la question posée (None : sans)
         self.dossier = dossier
         (dossier / "images").mkdir(parents=True, exist_ok=True)
@@ -226,7 +232,8 @@ class Session:
         self.reglages = reglages
         self.checklist = Checklist()
         # Étape 7 : Claude cerveau de chaque phrase (sauf en simulation, ou si DIAGAUTO_CONVERSATION=rapide).
-        self.conversation = reglages.conversation == "claude" and not isinstance(cerveau, CerveauSimulation)
+        self.conversation = (reglages.conversation == "claude" and not isinstance(cerveau, CerveauSimulation)
+                             and not self.croquis_seul)
         self.en_pause = False  # « on fait une pause » : plus de question du parcours jusqu'à « on reprend »
         # Étape 8 : parole confirmée, réponse coupée à redire après un bruit, élément en cours de description.
         self._parole_confirmee = False
@@ -305,7 +312,7 @@ class Session:
     async def demarrer(self, piece: str = "") -> None:
         if piece.strip():
             self.checklist.definir_piece(piece, 0.0, citation="")
-        self.journaliser("debut", cerveau=self.cerveau.nom, transcription=self.transcripteur.nom, piece=piece)
+        self.journaliser("debut", cerveau=self.cerveau.nom, transcription=self.transcripteur.nom, piece=piece, mission=self.mission)
         self._taches = [
             asyncio.create_task(self._demarrer_cerveaux()),
             asyncio.create_task(self._boucle_transcription()),
@@ -318,9 +325,19 @@ class Session:
     async def ouvrir_visite(self) -> None:
         """La première question du parcours (« Ce mur donne sur quoi ? »), dès que le téléphone est relié : posée par le
         serveur seul, sans attendre Claude (prêt en 9 s environ) ni une première phrase. Visite de Noah du 22/10 au soir :
-        rien n'était dit pendant les 15 premières secondes."""
-        if self.questions.aucune() and not self.termine:
+        rien n'était dit pendant les 15 premières secondes. Amiante, plomb : ce que fait l'assistant, en une phrase."""
+        if self.termine:
+            return
+        if self.croquis_seul:
+            if not self._dits:
+                await self.dire(OUVERTURE_CROQUIS, time.monotonic(), forcer=True, question=False)
+        elif self.questions.aucune():
             await self._question_du_parcours(time.monotonic(), None)
+
+    @property
+    def croquis_seul(self) -> bool:
+        """Amiante, plomb : le croquis seul, sans aucune question du DPE."""
+        return self.mission != "dpe"
 
     @property
     def occupe(self) -> bool:
@@ -334,6 +351,19 @@ class Session:
 
     async def _demarrer_cerveaux(self) -> None:
         debut = time.perf_counter()
+        if self.croquis_seul:
+            # Amiante, plomb : seul le regard sert (pièces reconnues sur la vidéo) ; les cerveaux du DPE ne sont pas lancés.
+            try:
+                if self.regard is not None:
+                    await self.regard.demarrer(propositions=False)
+                self.journaliser("cerveau_pret", duree_s=round(time.perf_counter() - debut, 2), prechauffage={})
+            except Exception as e:
+                log.exception("Démarrage du regard")
+                self.journaliser("erreur", etape="demarrage_regard", message=str(e))
+                await self._envoyer({"type": "erreur", "message": f"Reconnaissance des pièces indisponible : {e}"})
+            finally:
+                self._pret.set()
+            return
         if self.regard is not None:
             tache = asyncio.create_task(self.regard.demarrer())
             tache.add_done_callback(lambda t: t.exception() and log.warning("Regard de Claude : %s", t.exception()))
@@ -673,8 +703,8 @@ class Session:
         # Second avis de Whisper : sans conversation seulement, pour une phrase non comprise. En conversation, Claude
         # comprend les mots abîmés ; et le second avis coûtait 2 à 3 s, en inventant parfois une phrase sur un bruit
         # (« . » devenu « Laine de verre. », test de Noah, étape 8).
-        if (not self.conversation and not compris and not proposition and not extraction.demande and son is not None
-                and hasattr(self.transcripteur, "second_avis")):
+        if (not self.conversation and not self.croquis_seul and not compris and not proposition and not extraction.demande
+                and son is not None and hasattr(self.transcripteur, "second_avis")):
             # 1 bis. Pas compris : second avis de Whisper, guidé par le vocabulaire métier (moteur « rapide »).
             debut = time.perf_counter()
             texte_whisper = await asyncio.to_thread(self.transcripteur.second_avis, son)
@@ -704,7 +734,15 @@ class Session:
         # Après l'extraction : la phrase a pu changer de pièce (« ici c'est la cuisine »).
         contexte.questions_recentes = self.questions.recentes(time.monotonic(), self.checklist.piece_courante)
 
-        if self.conversation:
+        if self.croquis_seul:
+            # Amiante, plomb : ce qui est compris (« on est dans la cuisine », « non, c'est la buanderie ») est noté d'un
+            # bip ; jamais de question du DPE ni d'appel au cerveau du DPE.
+            if compris:
+                mesure["bip_s"] = round(time.monotonic() - reference, 3)
+                await self._bip(mesure["bip_s"])
+            await self.envoyer_etat()
+            self.journaliser("decision", mode="croquis", mesures=mesure)
+        elif self.conversation:
             # Pré-rempli par les règles : « Noté. » à voix haute tout de suite (avec la contradiction relevée, s'il y en a
             # une), puis la phrase va à Claude, qui la vérifie et enchaîne (étape 8 : la voix part en moins de 2 s).
             # Étape 9 : un bip suffit (« ne pas répéter ce que je dis ») ; seule une contradiction relevée est dite.
@@ -1316,8 +1354,13 @@ class Session:
         signales = len(self.checklist.signalements)
         extraction = extraire(texte, self.checklist, self._cible_actuelle())
         actions, invraisemblables, ecartees = plausibilite.filtrer(extraction.actions)
+        if self.croquis_seul:
+            # Amiante, plomb (Noah, 23/10 : « quand on fait l'amiante, ne me parle pas de DPE ») : seules les pièces
+            # comptent (« on est dans la cuisine », « non, c'est la buanderie ») ; rien n'est noté pour le DPE.
+            actions, invraisemblables = [a for a in actions if a.get("outil") == "piece_courante"], []
         resultats = appliquer(self.checklist, actions, contexte.t, self._phrases_recentes(contexte) + [texte])
-        resultats += self._designer_murs(texte, lot, contexte, resultats)
+        if not self.croquis_seul:
+            resultats += self._designer_murs(texte, lot, contexte, resultats)
         notes = self._compter(resultats)
         self._noter_contradictions(signales)
         self._suivre(resultats)
@@ -1355,7 +1398,7 @@ class Session:
 
     async def _question_du_parcours(self, reference: float, mesure: dict | None, reposer: str = "", suite: bool = False) -> bool:
         """Pose la première question du parcours que les garde-fous acceptent. Vrai si une question part."""
-        if self.en_pause:
+        if self.en_pause or self.croquis_seul:
             return False
         maintenant = time.monotonic()
         dernier_id = self._dernier_element_id
@@ -1713,21 +1756,24 @@ class Session:
 
     async def _boucle_pieces(self) -> None:
         """Toutes les quelques secondes, Claude dit dans quelle pièce on est (assistant/regard.py) : le croquis se dessine
-        en même temps que la vidéo, sans que la pièce soit jamais demandée."""
-        if self.regard is None:
+        en même temps que la vidéo, sans que la pièce soit jamais demandée. Amiante et plomb seulement : le DPE n'en a pas
+        besoin (étape 13), et c'est un appel à Claude toutes les 6 s de moins."""
+        if self.regard is None or not self.croquis_seul:
             return
         await self._pret.wait()
         derniere = None
         while True:
-            await asyncio.sleep(INTERVALLE_PIECES_S)
-            if not self.images or self.images[-1].t == derniere or self.en_pause:
-                continue
-            derniere = self.images[-1].t
-            try:
-                await self._reconnaitre_piece()
-            except Exception as e:
-                log.exception("Pièce vue sur la vidéo")
-                self.journaliser("erreur", etape="pieces", message=str(e))
+            # Le premier coup d'œil part dès la première image (avant : 6 s d'attente de plus, test de Noah du 23/10).
+            if self.images and self.images[-1].t != derniere and not self.en_pause:
+                derniere = self.images[-1].t
+                try:
+                    await self._reconnaitre_piece()
+                except Exception as e:
+                    log.exception("Pièce vue sur la vidéo")
+                    self.journaliser("erreur", etape="pieces", message=str(e))
+                await asyncio.sleep(INTERVALLE_PIECES_S)
+            else:
+                await asyncio.sleep(0.5)
 
     async def _reconnaitre_piece(self) -> None:
         images = [i for i in self.images if i.t >= self.t_video - 3.0][-2:]
@@ -1743,8 +1789,8 @@ class Session:
         avis = await self.regard.reconnaitre(images, references, courante)
         self.journaliser("piece_vue", piece=avis.piece if avis else None, type=avis.type if avis else None,
                          confiance=avis.confiance if avis else None, courante=courante, duree_s=round(time.perf_counter() - debut, 2))
-        if (avis is not None and avis.piece is None and courante is not None
-                and cle_texte(courante).split(" ")[0] == cle_texte(avis.type).split(" ")[0]):
+        if (avis is not None and avis.piece is None and courante is not None and avis.type
+                and f"{cle_texte(courante)} ".startswith(f"{cle_texte(avis.type)} ")):
             # « Nouvelle cuisine » juste après être entré dans la cuisine (essai sur la visite du 22/10 : « Cuisine 2 ») :
             # un autre coin de la même pièce.
             avis = type(avis)(courante, "", avis.confiance)
@@ -1772,6 +1818,9 @@ class Session:
         self.journaliser("piece_reconnue", nom=piece.nom, nouvelle=not avis.piece)
         await self._envoyer({"type": "piece_reconnue", "nom": piece.nom, "nouvelle": not avis.piece})
         await self.envoyer_etat()
+        if self.croquis_seul and not avis.piece:
+            # Dite à voix haute : une pièce mal reconnue se corrige aussitôt à la voix (« non, c'est la buanderie »).
+            await self.dire(f"Nouvelle pièce : {piece.nom}.", time.monotonic(), forcer=True, question=False)
 
     def _referencer(self, cle: str, image) -> None:
         """Garde une image de la pièce, si la dernière gardée date d'au moins 20 s : un autre coin (un grand séjour a
@@ -1782,6 +1831,8 @@ class Session:
             del refs[:-REFERENCES_PAR_PIECE]
 
     async def _boucle_veille(self) -> None:
+        if self.croquis_seul:
+            return  # la veille signale ce qui manque au DPE
         await self._pret.wait()
         derniere = time.monotonic()
         while True:
@@ -1823,6 +1874,12 @@ class Session:
     # --- Fin et bilan ---------------------------------------------------------------------------
 
     async def fin_visite(self) -> None:
+        if self.croquis_seul:
+            n = len(self.checklist.pieces)
+            texte = f"Le croquis compte {n} pièce{'s' if n > 1 else ''}." if n else "Le croquis est vide : aucune pièce reconnue."
+            await self.dire(texte, time.monotonic(), forcer=True)
+            await self._envoyer({"type": "bilan", "bilan": self.bilan(), "manques": []})
+            return
         texte = rappel_fin(self.checklist)
         await self.dire(texte, time.monotonic(), forcer=True)
         await self._envoyer({"type": "bilan", "bilan": self.bilan(), "manques": [
@@ -1845,6 +1902,7 @@ class Session:
         repetitions = [m for m in self.mesures if "mots_repetes" in m]
         return {
             "session": self.id,
+            "mission": self.mission,
             "cerveau": self.cerveau.nom,
             "transcription": self.transcripteur.nom,
             "duree_video_s": round(self.t_video, 1),

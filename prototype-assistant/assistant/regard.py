@@ -160,8 +160,13 @@ class RegardClaude:
         self.delai_s = delai_s
         self.mesures: dict = {}
 
-    async def demarrer(self) -> None:
-        await asyncio.gather(self._cerveau.demarrer(), self._pieces.demarrer())
+    async def demarrer(self, propositions: bool = True) -> None:
+        """``propositions=False`` (amiante, plomb : aucune question, donc rien à proposer) : seul le processus qui reconnaît
+        les pièces est lancé, le croquis démarre plus tôt (rejeu du 23/10 : 22 s pour lancer les deux sur un PC chargé)."""
+        if propositions:
+            await asyncio.gather(self._cerveau.demarrer(), self._pieces.demarrer())
+        else:
+            await self._pieces.demarrer()
 
     async def reconnaitre(self, images: list[ImageInstant], references: dict[str, list[bytes]], courante: str | None) -> AvisPiece | None:
         """Dans quelle pièce est-on, d'après les dernières images comparées à une image de chaque pièce déjà vue ?"""

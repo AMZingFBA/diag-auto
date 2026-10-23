@@ -109,7 +109,9 @@ Au premier lancement, le modèle de transcription se télécharge (environ 500 M
 1. Ouvrez l'adresse affichée pour le téléphone, dans Chrome (Android) ou Safari (iPhone).
 2. Un avertissement de sécurité s'affiche, parce que le certificat est fait maison. Touchez « Paramètres avancés », puis « Continuer vers le site ». C'est normal pour ce prototype : le HTTPS est obligatoire pour que le téléphone autorise la caméra et le micro. Le téléphone oublie parfois ce certificat (« Serveur injoignable » alors que le Wi-Fi est bon) : touchez le lien « toucher ici » de l'accueil, ou ouvrez l'adresse suivie de `/api/statut`, et acceptez de nouveau.
 3. Branchez une **oreillette**, de préférence. Sans oreillette, la voix de l'assistant passe par le haut-parleur et peut être captée par le micro.
-4. Touchez **Démarrer la visite** et autorisez la caméra et le micro. Sur iPhone, autorisez aussi l'accès à l'**orientation** (boussole) : elle donne l'orientation des murs et des fenêtres (« le mur nord »). Si vous refusez, l'assistant demandera une fois l'orientation d'un mur à l'oral. Une petite boussole reste affichée en haut à droite (voir « Étape 6 »).
+4. Choisissez la **mission** : **DPE** (les questions du DPE pendant la vidéo), **Amiante** ou **Plomb (CREP)** (le croquis
+   des pièces en grand pendant la vidéo, sans question du DPE ; voir « Choix de la mission »). Touchez ensuite **Démarrer**
+   (grisé tant que la mission n'est pas choisie) et autorisez la caméra et le micro. Sur iPhone, autorisez aussi l'accès à l'**orientation** (boussole) : elle donne l'orientation des murs et des fenêtres (« le mur nord »). Si vous refusez, l'assistant demandera une fois l'orientation d'un mur à l'oral. Une petite boussole reste affichée en haut à droite (voir « Étape 6 »).
 5. Filmez en parlant normalement, en décrivant librement :
    - « ici c'est la cuisine » ;
    - « ce mur fait 4 m 50 de long, brique 30 cm, isolé par l'intérieur, il donne dehors » ;
@@ -120,7 +122,8 @@ Au premier lancement, le modèle de transcription se télécharge (environ 500 M
 6. À côté de chaque question sur un élément, l'écran montre sa **vignette** : l'image filmée quand il a été décrit. Le diagnostiqueur sait ainsi de quel mur on parle.
 7. Sous chaque question, ses **réponses en boutons** : un appui vaut une réponse dite, et la question suivante arrive aussitôt. On peut répondre à l'oral ou au doigt, au choix.
 8. Les boutons :
-   - **📋 Fiche** : toute la pièce en cours, chaque information avec sa valeur ou « à remplir » ; un appui sur une ligne pour la remplir ou la corriger ;
+   - **📋 Fiche** (DPE) : le DPE du logement, chaque information avec sa valeur ou « à remplir » ; un appui sur une ligne pour la remplir ou la corriger ;
+   - **🗺️ Plan** (amiante, plomb) : le croquis en plein écran, avec les corrections de chaque pièce ;
    - **Assistant actif / muet** : en mode muet, les questions s'affichent sans être lues.
    - **Terminer** :
      - au 1er appui, l'assistant dit ce qui manque encore ;
@@ -1151,7 +1154,7 @@ montre (convention du repérage plomb ; cas particuliers à confirmer avec la no
   vient, du côté où l'on marchait (cap de la caméra au passage : boussole, sinon gyroscope ; tout se remet d'aplomb quand le
   nord est connu), avec la porte entre les deux ; les fenêtres (bleu) et portes du logement (marron) notées pendant la
   visite sont sur leur mur ; murs A à D ; nord en haut quand il est connu ;
-- **sur le téléphone** : le croquis en petit en haut à gauche ; touché, il s'agrandit (murs A à D, légende) avec, pour
+- **sur le téléphone** (missions amiante et plomb) : le croquis en grand sous le bandeau ; touché, il passe en plein écran (murs A à D, légende) avec, pour
   chaque pièce : « Renommer », « Même pièce que… » (reconnue à tort : les deux sont réunies) et quatre flèches pour la
   déplacer d'une case ;
 - **à la voix** : « non, c'est la buanderie » dans une pièce reconnue sur la vidéo la renomme ; « non, c'est le séjour »
@@ -1181,7 +1184,45 @@ image : pièce « U », cuisine, U, chambre, U), un coup d'œil toutes les 8 s :
 du séjour reconnu à tort), `tests/test_page_navigateur.py` (le croquis dessiné dans le coin, agrandi, renommer, réunir,
 déplacer).
 
-Le prototype compte 340 tests (et le projet, à la racine, 654).
+Le prototype compte 340 tests (et le projet, à la racine, 654) à cette étape ; 353 avec le choix de la mission.
+
+## Choix de la mission avant de filmer (23/10/2026)
+
+**Ce que Noah a demandé** : « quand j'ouvre l'URL du logiciel ça met uniquement le DPE ; il faut que je choisisse avant le
+bouton ce que je veux faire : DPE ça m'envoie à la vidéo pour faire le DPE ; ou amiante et ça m'emmène au croquis ».
+
+**Comment ça marche** : l'accueil propose trois grandes cases, **DPE**, **Amiante**, **Plomb (CREP)** ; « Démarrer » reste
+grisé tant qu'aucune n'est choisie, puis devient « Démarrer le DPE », « Démarrer l'amiante (croquis) »… La mission part
+vers le serveur avec l'ouverture de la liaison (et chaque reconnexion) et elle est notée dans le journal et le bilan.
+
+| | DPE | Amiante, plomb |
+|---|---|---|
+| Ce que dit l'assistant | les questions du DPE (comme avant) | « Je dessine le croquis : entrez dans chaque pièce et faites-en le tour. », puis « Nouvelle pièce : cuisine. » à chaque nouvelle pièce reconnue (pour la corriger aussitôt à la voix) |
+| Pièces reconnues sur la vidéo | non (la pièce ne compte pas pour le DPE : un appel à Claude toutes les 6 s de moins) | oui : le premier coup d'œil dès la première image, puis toutes les 6 s |
+| Claude | les cerveaux du DPE (réponses, veille) et le regard | le regard seul (les cerveaux du DPE ne sont pas lancés) |
+| Écran | la question et ses boutons, la jauge, les manques, 📋 Fiche | le croquis en grand sous le bandeau (vide : ce qu'il faut faire), 🗺️ Plan, le nombre de pièces dans le bandeau ; rien du DPE (ni jauge, ni manques, ni boutons, ni liste des valeurs notées) |
+| Une phrase | notée, puis la question suivante | seule la pièce compte (« on est dans la cuisine », « non, c'est la buanderie »), notée d'un bip ; rien n'est noté pour le DPE, jamais de question du DPE |
+| « Terminer » | ce qui manque au DPE | « Le croquis compte 5 pièces. » ; l'écran de fin liste les pièces |
+
+**Premier essai de Noah (23/10)** : « quand j'appuie sur amiante, le croquis ne fonctionne pas et il y a encore les cases
+du DPE ». Cause : la page avait changé mais le serveur n'avait pas été relancé, il ignorait donc la mission. Corrigé en
+même temps : plus rien du DPE à l'écran ni dans la checklist en amiante, et le croquis démarre dès la première image.
+L'outil `python -m assistant.rejouer <visite> --mission amiante --duree 270` rejoue une visite enregistrée (son, images,
+boussole) dans cette mission, et affiche les pièces reconnues et le croquis.
+
+**Tests** : `tests/test_missions.py` (amiante : aucune question du DPE, rien de noté pour le DPE, pièces annoncées et
+corrigées à la voix, premier coup d'œil sans attendre ; DPE : pièces non regardées ; mission inconnue = DPE), `tests/test_serveur.py` (plomb par la vraie liaison), `tests/test_page_navigateur.py`
+(cases de l'accueil, bouton grisé puis libellé, mission dans le message d'ouverture, croquis en grand, bouton Plan).
+
+## Correction : vidéos d'iPhone lues à l'envers après la visite (23/10/2026)
+
+Trouvé en analysant les vraies visites : une vidéo d'iPhone tenu en portrait porte une « matrice d'affichage » de −90°
+(un quart de tour dans le sens des aiguilles d'une montre pour l'afficher). `assistant/vision.py` tournait dans l'autre
+sens : les images sortaient à l'envers, et le cap suivi sur la vidéo (`assistant/carte.py`) tournait à rebours du
+gyroscope, ce qui faussait le côté des murs dans la carte d'après la visite. Corrigé par `vision.redresser` (même sens
+que ffmpeg), et `rejouer.py` redresse aussi les images. Sur la visite du 22/10 au soir (chambre), la ressemblance entre
+l'image lue par le serveur et l'image du direct au même instant passe de −0,39 à 0,27 à **0,84 à 1,00**.
+Tests : `tests/test_rotation_video.py` (une vidéo tournée fabriquée par ffmpeg, comparée à ce qu'affiche ffmpeg).
 
 ## Réglages (variables d'environnement)
 

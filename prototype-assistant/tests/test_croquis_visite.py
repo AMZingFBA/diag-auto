@@ -15,8 +15,8 @@ class ClaudeQuiVoitLesPieces:
         self.avis = avis
         self.references: list[list[str]] = []
 
-    async def demarrer(self):
-        pass
+    async def demarrer(self, propositions=True):
+        self.propositions = propositions
 
     async def fermer(self):
         pass
@@ -94,3 +94,22 @@ def test_coin_du_sejour_reconnu_a_tort_puis_corrige_a_la_voix(tmp_path):
     assert list(session.checklist.pieces) == ["sejour"] and session.checklist.nom_piece(session.checklist.piece_courante) == "Séjour"
     croquis = [m for m in recus if m["type"] == "etat"][-1]["checklist"]["croquis"]
     assert [p["nom"] for p in croquis["pieces"]] == ["Séjour"] and croquis["portes"] == []
+
+
+def test_salle_a_manger_apres_la_salle_de_bains_est_une_autre_piece(tmp_path):
+    # « Salle de bains » puis « nouvelle salle à manger » : même premier mot, mais deux pièces différentes.
+    avis = {1.0: AvisPiece(None, "Salle de bains", "forte"), 20.0: AvisPiece(None, "Salle à manger", "forte"),
+            30.0: AvisPiece(None, "Salle à manger", "forte")}  # puis un autre coin de la salle à manger : la même
+    claude = ClaudeQuiVoitLesPieces(avis)
+
+    async def scenario():
+        session, recus = await ouvrir(tmp_path, CerveauScenario(poli()))
+        session.regard = claude
+        await filmer(session, 1.0, 0.0)
+        await filmer(session, 20.0, 90.0)
+        await filmer(session, 30.0, 90.0)
+        await session.terminer()
+        return session
+
+    session = asyncio.run(scenario())
+    assert [session.checklist.nom_piece(k) for k in session.checklist.pieces] == ["Salle de bains", "Salle à manger"]

@@ -66,7 +66,7 @@ class Gestionnaire:
         # Deux processus : la veille ne fait jamais attendre la réponse à une phrase.
         return nouveau("claude-reponses"), nouveau("claude-veille")
 
-    async def ouvrir(self, ident: str | None, piece: str) -> tuple[Session, bool]:
+    async def ouvrir(self, ident: str | None, piece: str, mission: str = "dpe") -> tuple[Session, bool]:
         if ident and ident in self.sessions and not self.sessions[ident].termine:
             return self.sessions[ident], True
         ident = f"{datetime.now():%Y%m%d-%H%M%S}-{secrets.token_hex(3)}"
@@ -76,7 +76,7 @@ class Gestionnaire:
         regard = None
         if self.mode_cerveau == "claude":  # l'image propose la réponse (assistant/regard.py)
             regard = RegardClaude(dossier / "claude-regard", binaire=self.binaire_claude)
-        session = Session(ident, dossier, cerveau, veille, self.transcripteur, self.reglages, regard=regard)
+        session = Session(ident, dossier, cerveau, veille, self.transcripteur, self.reglages, regard=regard, mission=mission)
         self.sessions[ident] = session
         await session.demarrer(piece)
         return session, False
@@ -231,11 +231,13 @@ def creer_app(reglages: Reglages | None = None) -> FastAPI:
                             # distingue « serveur lent » de « pas de réseau » côté téléphone.
                             await envoyer({"type": "pong", "n": controle.get("n")})
                         elif controle.get("type") == "debut":
-                            session, reprise = await gestionnaire.ouvrir(controle.get("session"), str(controle.get("piece") or ""))
+                            session, reprise = await gestionnaire.ouvrir(controle.get("session"), str(controle.get("piece") or ""),
+                                                                         str(controle.get("mission") or "dpe"))
                             session.envoyer = envoyer
                             session.journaliser("connexion", reprise=reprise, appareil=str(controle.get("appareil", ""))[:300],
                                                 coupures=controle.get("coupures") or [])
-                            await envoyer({"type": "statut", "session": session.id, "reprise": reprise, **(await statut())})
+                            await envoyer({"type": "statut", "session": session.id, "reprise": reprise, "mission": session.mission,
+                                           **(await statut())})
                             await session.envoyer_etat()
                             await session.rattraper()  # questions calculées pendant la coupure
                             if not reprise:

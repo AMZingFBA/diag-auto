@@ -49,11 +49,11 @@ class TranscripteurFactice:
         return self.textes.pop(0) if self.textes else ""
 
 
-async def ouvrir(dossier, cerveau, transcripteur=None, cerveau_veille=None):
+async def ouvrir(dossier, cerveau, transcripteur=None, cerveau_veille=None, mission="dpe"):
     reglages = Reglages(cerveau="simulation", transcription="simulation", dossier_sessions=dossier, veille_s=1000,
                         questions_par_minute=60, conversation="claude")
     session = Session("fluidite", dossier, cerveau, cerveau_veille or CerveauSimulation(), transcripteur or TranscripteurFactice([]),
-                      reglages)
+                      reglages, mission=mission)
     recus: list[dict] = []
 
     async def envoyer(message):

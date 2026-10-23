@@ -183,6 +183,7 @@ def test_croquis_dessine_dans_le_coin_puis_agrandi_et_renomme(page):
                           {"cle": "cuisine", "nom": "Cuisine", "source": "image", "x": 1, "y": 0,
                            "murs": {"ouest": "A", "nord": "B", "est": "C", "sud": "D"}}],
                "ouvertures": [{"piece": "cuisine", "cote": "est", "type": "fenetre", "nombre": 1}]}
+    page.js("choisirMission('amiante')")  # le croquis : amiante et plomb seulement
     page.js(f"(() => {{ window.envoyes = []; afficherCroquis({json.dumps(croquis)}); return true; }})()")
     assert page.js("$('croquis').hidden") is False
     assert page.js("$('croquis-petit').querySelectorAll('rect').length") == 2  # une case par pièce
@@ -197,3 +198,32 @@ def test_croquis_dessine_dans_le_coin_puis_agrandi_et_renomme(page):
     assert page.js("window.envoyes") == [{"type": "fusionner_pieces", "cle": "cuisine", "dans": "sejour"},
                                          {"type": "deplacer_piece", "cle": "cuisine", "vers": "est"}]
     page.js("$('fermer-plan').onclick()")
+
+
+
+def test_mission_choisie_avant_de_demarrer(page):
+    # Noah, 23/10 : « choisir avant le bouton ce que je veux faire : DPE → la vidéo du DPE ; amiante → le croquis ».
+    page.js("(() => { $('visite').hidden = true; $('accueil').hidden = false; etat.mission = null;"
+            " document.querySelectorAll('#missions button').forEach((b) => b.classList.remove('choisi'));"
+            " $('demarrer').disabled = true; return true; })()")
+    page.toucher("#missions button[data-mission='amiante']")
+    assert page.js("$('demarrer').disabled") is False and page.js("$('demarrer').textContent") == "Démarrer l'amiante (croquis)"
+    assert page.js("messageDebut([]).mission") == "amiante" and page.js("document.body.dataset.mission") == "amiante"
+    assert "faites-en le tour" in page.js("$('aide-mission').textContent")
+    page.toucher("#missions button[data-mission='dpe']")
+    assert page.js("[...document.querySelectorAll('#missions button.choisi')].map((b) => b.dataset.mission)") == ["dpe"]
+    assert page.js("messageDebut([]).mission") == "dpe" and page.js("$('demarrer').textContent") == "Démarrer le DPE"
+    page.js("(() => { $('accueil').hidden = true; $('visite').hidden = false; etat.croquis = null; afficherCroquis(null); return true; })()")
+    assert page.js("$('croquis').hidden") is True and page.js("$('voir-fiche').textContent") == "📋 Fiche"  # DPE : pas de croquis
+
+
+def test_amiante_croquis_en_grand_et_bouton_plan(page):
+    page.js("(() => { choisirMission('plomb'); etat.croquis = null; afficherCroquis(null); return true; })()")
+    assert page.js("$('croquis').hidden") is False and page.js("$('croquis-aide').hidden") is False  # vide : ce qu'il faut faire
+    assert page.js("$('croquis').getBoundingClientRect().width") > 200  # en grand, pas dans le coin
+    assert page.js("$('manques-bloc').hidden") is True and page.js("$('voir-fiche').textContent") == "🗺️ Plan"
+    page.js("majEtat({taux: 0, piece: 'Séjour', manques: [], nb_manques_visite: 0, checklist: {pieces: [{nom: 'Séjour'}]}})")
+    assert page.js("$('piece-courante').textContent") == "Plomb (CREP) · 1 pièce · Séjour"
+    page.toucher("#voir-fiche")
+    assert page.js("$('plan').hidden") is False and page.js("$('fiche').hidden") is True
+    page.js("(() => { $('fermer-plan').onclick(); choisirMission('dpe'); return true; })()")

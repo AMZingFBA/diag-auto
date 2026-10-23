@@ -40,6 +40,35 @@ def test_statut(client):
     assert client.get("/").status_code == 200 and "Assistant de visite" in client.get("/").text
 
 
+def test_mission_plomb_croquis_sans_question_du_dpe(client, tmp_path):
+    # Mission choisie sur l'accueil (Noah, 23/10) : plomb → le croquis seul ; aucune question du DPE, même après un mur décrit.
+    recus = []
+
+    def lire_jusqua(ws, genre):
+        while True:
+            recus.append(ws.receive_json())
+            if recus[-1]["type"] == genre:
+                return recus[-1]
+
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "debut", "piece": "", "mission": "plomb"})
+        statut = lire_jusqua(ws, "statut")
+        assert statut["mission"] == "plomb"
+        lire_jusqua(ws, "dire")
+        ws.send_json({"type": "texte", "texte": "ici c'est la cuisine"})
+        lire_jusqua(ws, "etat")
+        ws.send_json({"type": "texte", "texte": "ce mur-là, brique, 30 cm, il donne sur l'extérieur"})
+        lire_jusqua(ws, "etat")
+        ws.send_json({"type": "fin"})
+        bilan = lire_jusqua(ws, "bilan")
+    dits = [m["texte"] for m in recus if m["type"] == "dire"]
+    assert dits == ["Je dessine le croquis : entrez dans chaque pièce et faites-en le tour.", "Le croquis compte 1 pièce."]
+    assert not [m for m in recus if m["type"] == "dire" and m.get("options")]  # pas « Ce mur est isolé ? » avec ses boutons
+    assert bilan["manques"] == [] and bilan["bilan"]["mission"] == "plomb"
+    journal = (tmp_path / statut["session"] / "journal.jsonl").read_text(encoding="utf-8")
+    assert '"mission": "plomb"' in journal
+
+
 def test_visite_par_texte_puis_video_et_bilan(client, tmp_path):
     with client.websocket_connect("/ws") as ws:
         ws.send_json({"type": "debut", "piece": ""})

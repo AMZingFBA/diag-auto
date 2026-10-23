@@ -3,7 +3,7 @@
 // (16 kHz) et une image par seconde, et lit à voix haute les questions de l'assistant.
 
 // Version de la page, comparée à celle du serveur (test du 23/10 : l'iPhone gardait l'ancienne page en mémoire).
-const VERSION_PAGE = "2026-10-23-6";
+const VERSION_PAGE = "2026-10-23-8";
 const $ = (id) => document.getElementById(id);
 const TAUX = 16000;
 const TYPE_SON = 1;
@@ -42,7 +42,45 @@ const etat = {
   bilan: null,
   // Seuils de la boussole (boussole.toml) ; remplacés par ceux du serveur au chargement.
   reglagesBoussole: { precision: { bonne: 15, faible: 30 }, dispersion: { bonne: 12, faible: 25 }, iphone: { inclinaison_calibrage: 60 } },
+  mission: null, // choisie sur l'accueil : « dpe », « amiante » ou « plomb »
 };
+
+// Missions (Noah, 23/10) : le DPE et ses questions ; l'amiante et le plomb, le croquis en grand (aucune question du DPE).
+const MISSIONS = {
+  dpe: { titre: "DPE", demarrer: "Démarrer le DPE", piece: "Pièce de départ (facultatif : sans effet sur le DPE)",
+         aide: "Filmez tout le logement en une seule vidéo, en parlant normalement. L'assistant vous pose dans l'oreillette les questions qui manquent pour le DPE. Il ne devine rien : il demande." },
+  amiante: { titre: "Amiante", demarrer: "Démarrer l'amiante (croquis)", piece: "Pièce de départ (facultatif)",
+             aide: "Filmez tout le logement en une seule vidéo : entrez dans chaque pièce et faites-en le tour. Le croquis se dessine tout seul ; corrigez-le à la voix (« non, c'est la buanderie ») ou en le touchant." },
+  plomb: { titre: "Plomb (CREP)", demarrer: "Démarrer le plomb (croquis)", piece: "Pièce de départ (facultatif)",
+           aide: "Filmez tout le logement en une seule vidéo : entrez dans chaque pièce et faites-en le tour. Le croquis se dessine tout seul, murs A, B, C, D ; corrigez-le à la voix ou en le touchant." },
+};
+
+function croquisSeul() {
+  return etat.mission === "amiante" || etat.mission === "plomb";
+}
+
+function choisirMission(mission) {
+  if (!MISSIONS[mission]) return;
+  etat.mission = mission;
+  for (const b of $("missions").querySelectorAll("button")) {
+    b.classList.toggle("choisi", b.dataset.mission === mission);
+    b.setAttribute("aria-checked", String(b.dataset.mission === mission));
+  }
+  const m = MISSIONS[mission];
+  $("aide-mission").textContent = m.aide;
+  $("aide-mission").hidden = false;
+  $("libelle-piece").textContent = m.piece;
+  $("demarrer").textContent = m.demarrer;
+  $("demarrer").disabled = false;
+  document.body.dataset.mission = mission; // style.css : le croquis en grand pour l'amiante et le plomb
+  $("voir-fiche").textContent = croquisSeul() ? "🗺️ Plan" : "📋 Fiche";
+  $("manques-bloc").hidden = croquisSeul();
+}
+
+// Le message d'ouverture de la liaison (et de chaque reconnexion) : la mission part avec lui.
+function messageDebut(coupures) {
+  return { type: "debut", session: etat.session, piece: $("piece").value, mission: etat.mission || "dpe", appareil: navigator.userAgent, coupures };
+}
 
 function maintenant() {
   return (performance.now() - etat.debut) / 1000;
@@ -173,7 +211,7 @@ function connecter() {
       ws.binaryType = "arraybuffer";
       return ws;
     },
-    debut: (coupures) => ({ type: "debut", session: etat.session, piece: $("piece").value, appareil: navigator.userAgent, coupures }),
+    debut: messageDebut,
     surMessage: recevoir,
     surEtat: afficherLiaison,
   });
@@ -274,6 +312,11 @@ function recevoir(m) {
 
 // Étape 13 : le DPE décrit le logement (ses côtés, ses équipements), pas une pièce ; la pièce dite n'est qu'un repère.
 function majEtat(m) {
+  if (croquisSeul()) {
+    const n = (m.checklist && m.checklist.pieces || []).length;
+    $("piece-courante").textContent = `${MISSIONS[etat.mission].titre} · ${n} pièce${n > 1 ? "s" : ""}${m.piece ? ` · ${m.piece}` : ""}`;
+    return;
+  }
   $("piece-courante").textContent = `DPE du logement : ${Math.round((m.taux || 0) * 100)} %${m.piece ? ` · ${m.piece}` : ""}`;
   $("taux").style.width = `${Math.round((m.taux || 0) * 100)}%`;
   const liste = $("manques");
@@ -419,12 +462,16 @@ function dessinerCroquis(svg, c, grand) {
   if (c.oriente) el("text", { x: largeur - 10, y: 12, "text-anchor": "end", "font-size": grand ? 14 : 9, fill: "#b00", "font-weight": "700" }, "N ↑");
 }
 
+// Amiante, plomb : le croquis en grand, toujours visible (vide : ce qu'il faut faire). DPE : pas de croquis.
 function afficherCroquis(c) {
   if (c) etat.croquis = c;
   c = etat.croquis;
-  $("croquis").hidden = !c || !c.pieces.length;
+  const vide = !c || !c.pieces.length;
+  $("croquis").hidden = !croquisSeul();
+  $("croquis-aide").hidden = !vide;
   if ($("croquis").hidden) return;
-  dessinerCroquis($("croquis-petit"), c, false);
+  if (vide) return $("croquis-petit").replaceChildren();
+  dessinerCroquis($("croquis-petit"), c, true);
   if ($("plan").hidden) return;
   dessinerCroquis($("croquis-grand"), c, true);
   // Corriger une pièce : un autre nom, « c'est la même pièce que… » (reconnue à tort), ou la déplacer d'une case.
@@ -693,6 +740,7 @@ function demarrerEnregistrement(qualite) {
 // --- Démarrage et fin ----------------------------------------------------------------------------
 
 async function demarrer() {
+  if (!etat.mission) return; // le bouton reste grisé tant que la mission n'est pas choisie
   debloquerVoix();
   autoriserBoussole();
   etat.code = $("code").value;
@@ -710,6 +758,8 @@ async function demarrer() {
   }
   $("accueil").hidden = true;
   $("visite").hidden = false;
+  $("piece-courante").textContent = croquisSeul() ? MISSIONS[etat.mission].titre : "DPE du logement";
+  afficherCroquis(null);
   const video = $("camera");
   video.srcObject = etat.flux;
   await video.play().catch(() => {});
@@ -769,7 +819,12 @@ function afficherFin(bilan) {
   $("fin").hidden = false;
   const resume = $("resume");
   resume.replaceChildren();
-  if (bilan) {
+  if (bilan && croquisSeul()) {
+    // Amiante, plomb : les pièces du croquis (le remplissage du DPE n'a pas de sens ici).
+    const noms = (bilan.pieces || []).map((p) => p.nom);
+    resume.append(Object.assign(document.createElement("p"), { textContent: `Durée filmée : ${horodatage(bilan.duree_video_s)}.` }),
+                  Object.assign(document.createElement("p"), { textContent: noms.length ? `Croquis : ${noms.length} pièce${noms.length > 1 ? "s" : ""} (${noms.join(", ")}).` : "Croquis vide : aucune pièce reconnue." }));
+  } else if (bilan) {
     const lignes = [
       `Durée filmée : ${horodatage(bilan.duree_video_s)} — ${bilan.phrases} phrases, ${bilan.questions} questions, ${bilan.acceptees} valeurs notées, ${bilan.refusees} refusées.`,
       ...bilan.pieces.map((p) => `${p.nom} : ${Math.round(p.taux_remplissage * 100)} % rempli`),
@@ -777,6 +832,7 @@ function afficherFin(bilan) {
     lignes.forEach((texte) => resume.append(Object.assign(document.createElement("p"), { textContent: texte })));
   }
   const manques = (etat.bilan && etat.bilan.manques) || [];
+  $("titre-manques-fin").hidden = croquisSeul();
   $("manques-fin").replaceChildren(...manques.map((m) => Object.assign(document.createElement("li"), { textContent: `${m.piece} : ${m.libelle}` })));
   if (etat.morceaux.length) {
     const blob = new Blob(etat.morceaux, { type: etat.typeVideo || "video/webm" });
@@ -820,7 +876,13 @@ function envoyerVideo(blob) {
 // --- Boutons ---------------------------------------------------------------------------------------
 
 $("demarrer").onclick = demarrer;
-$("voir-fiche").onclick = () => { $("fiche").hidden = false; afficherFiche(); };
+for (const b of $("missions").querySelectorAll("button")) b.onclick = () => choisirMission(b.dataset.mission);
+// Amiante, plomb : le bouton ouvre le plan (croquis en grand, corrections) ; DPE : la fiche du logement.
+$("voir-fiche").onclick = () => {
+  if (croquisSeul()) { $("plan").hidden = false; afficherCroquis(etat.croquis); return; }
+  $("fiche").hidden = false;
+  afficherFiche();
+};
 $("croquis").onclick = () => { $("plan").hidden = false; afficherCroquis(etat.croquis); };
 $("fermer-plan").onclick = () => ($("plan").hidden = true);
 $("fermer-fiche").onclick = () => ($("fiche").hidden = true);

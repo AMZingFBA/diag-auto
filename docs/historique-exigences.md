@@ -91,3 +91,7 @@ Livrable : rejouer cette session réelle avant/après, montrer le dialogue obten
 - « ok c bon pour le dpe mtn il faut que pour le pllonc et l'amiante il faut faire un plan donc faut que ut trouve un systeme ou on fait le tour le la maison et a fait un plan croquis automatqiuement avceun outil ia au tel et la perosnne uqipeut repondre en diret et entamment une idcution si l'ia a pas torp bine compris et il faut que le croqui se descine en meme temps que le digantqiuer fasse la video sur un coins du tel »
 - Choix de Noah (questions posées) : croquis **sans aucune mesure** ; « il faut qu'il reconnaisse lui-même quand on change de pièce et c'est quoi la pièce » ; murs **A = mur de la porte, sens horaire**.
 
+
+## Choix de la mission (Noah, message direct du 23/10/2026, intégré le 23/10)
+- « comment je test le logiciel sur mon tel quan dj'ouvre l'url du logciel ca met uniquemet le dpe fautq ue je chossise avant le bonton ce que je veux faire par ex dpe ca m'envois a lavideo piryur faire le dpe ; ou amiante et ca m'memene au croquis »
+- Mis en œuvre : accueil à trois cases (DPE, Amiante, Plomb (CREP)), « Démarrer » grisé tant qu'aucune n'est choisie ; DPE = questions du DPE, sans croquis ; amiante et plomb = croquis en grand, pièces reconnues et annoncées, aucune question du DPE (prototype-assistant/README.md, « Choix de la mission »).

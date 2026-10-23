@@ -51,6 +51,13 @@ progress { width: 100%; margin-top: 10px; }
 .croquis { position: absolute; top: calc(56px + env(safe-area-inset-top)); left: 12px; width: 132px; height: 132px;
   background: rgba(255,255,255,0.88); border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.35); }
 .croquis svg { display: block; width: 100%; height: 100%; }
+/* Amiante, plomb : le croquis en grand, sous le bandeau (la vidéo reste visible en dessous). */
+body[data-mission="amiante"] .croquis, body[data-mission="plomb"] .croquis { left: 12px; right: 132px; width: auto; height: 42vh; }
+body[data-mission="amiante"] .jauge, body[data-mission="plomb"] .jauge,
+body[data-mission="amiante"] .actions, body[data-mission="plomb"] .actions,
+body[data-mission="amiante"] .choix, body[data-mission="plomb"] .choix { display: none !important; }  /* rien du DPE */
+.croquis-aide { position: absolute; inset: 0; margin: 0; display: flex; align-items: center; justify-content: center; padding: 16px;
+  text-align: center; font-weight: 600; color: var(--doux); }
 #plan { color: #fff; }
 .croquis-grand { display: block; width: 100%; height: 60vh; background: #fff; border-radius: 10px; }
 #plan-pieces .ligne-piece { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
@@ -90,6 +97,12 @@ progress { width: 100%; margin-top: 10px; }
 .choix button.choisi { background: var(--accent); color: #fff; }
 .choix button.vu { background: #e3f5e9; border-color: #2e9e5b; border-width: 3px; }  /* vu sur l'image : à confirmer */
 .a-recharger { color: var(--danger); font-weight: 700; }
+/* Choix de la mission sur l'accueil : trois grandes cases, une seule choisie. */
+.missions { display: flex; flex-direction: column; gap: 8px; }
+.missions button { margin: 0; text-align: left; background: #fff; border: 2px solid #b8c0cc; }
+.missions button strong { display: block; font-size: 1.15rem; }
+.missions button span { display: block; font-weight: 400; font-size: 0.9rem; color: var(--doux); }
+.missions button.choisi { border-color: var(--accent); background: #e8f1fb; box-shadow: inset 0 0 0 2px var(--accent); }
 /* « Autre… » : un bouton comme les autres tant qu'on ne l'a pas touché ; touché, une case et « OK » (clavier chiffres). */
 .choix form.autre { display: flex; align-items: center; gap: 8px; flex: 1 1 calc(50% - 8px); }
 .choix form.autre input { flex: 1; min-width: 0; margin: 0; padding: 12px 10px; font-size: 1rem; text-align: center; background: #fff;
