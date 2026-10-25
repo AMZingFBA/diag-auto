@@ -2,3 +2,5 @@
 # aucune conversion de fin de ligne (ils utilisent CR seul, encodage Windows-1252).
 tests/fixtures/** -text
 *.xml -text
+# Moteur de 8th Wall : copié tel quel (licence : aucune modification) ; jamais de conversion des fins de ligne.
+prototype-assistant/web/vendor/** -text
