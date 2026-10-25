@@ -626,6 +626,8 @@ class Session:
             await self._tracer(message)
         elif genre == "visibilite":
             self.journaliser("visibilite", cachee=bool(message.get("cachee")))
+        elif genre == "diagnostic":  # ce que la page voit (moteur de 8th Wall : état du suivi, erreurs)
+            self.journaliser("diagnostic", source=str(message.get("source", ""))[:40], texte=str(message.get("texte", ""))[:300])
         elif genre == "deplacer_piece" and message.get("cle") in self.checklist.pieces and message.get("vers") in ("nord", "est", "sud", "ouest"):
             # Croquis : la pièce n'est pas à la bonne place (deux portes du même côté d'une grande pièce, par exemple).
             self.croquis.deplacer(str(message["cle"]), str(message["vers"]), self.checklist.correction_cap)

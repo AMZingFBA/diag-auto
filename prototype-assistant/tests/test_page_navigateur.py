@@ -504,7 +504,7 @@ def test_trace_avec_le_moteur_de_8th_wall(page):
         await suivi.demarrer($('xr-toile'), () => 30);
         etat.xr8 = true; traceur.recalage = [0, 0]; traceur.pieces = []; traceur.courant = null; traceur.selection = null;
         afficherTrace(true); return true; })()""")
-    assert page.js("XR8.config.scale") == "absolute" and page.js("suivi.actif") is True
+    assert page.js("XR8.config.scale") == "responsive" and page.js("suivi.actif") is True
     s = math.sin(math.radians(-17.5))
     reality = {"position": {"x": 0, "y": 1.4, "z": 0}, "rotation": {"x": s, "y": 0, "z": 0, "w": math.cos(math.radians(17.5))},
                "intrinsics": [2.4 / (390 / 844), 0, 0, 0, 0, 2.4, 0, 0, 0, 0, -1.002, -1, 0, 0, -0.2002, 0]}
@@ -525,3 +525,12 @@ def test_trace_avec_le_moteur_de_8th_wall(page):
     assert abs(coin["x"] - 195) < 1 and abs(coin["y"] - 422) < 1  # sous la croix
     assert page.js("positionTrace()") == [0, 0]
     page.js("(() => { afficherTrace(false); etat.xr8 = false; delete window.XR8; choisirMission('dpe'); return true; })()")
+
+
+def test_suivi_8th_wall_seulement_si_coche(page):
+    # Essai du 25/10 (17:25) : avec le moteur, la vidéo était en basse définition. Il ne se lance plus que sur demande
+    # (case d'essai, décochée par défaut, montrée seulement pour l'amiante et le plomb).
+    assert page.js("$('ligne-suivi-precis').hidden") is True  # DPE
+    page.js("(() => { choisirMission('plomb'); return true; })()")
+    assert page.js("$('ligne-suivi-precis').hidden") is False and page.js("$('suivi-precis').checked") is False
+    page.js("(() => { choisirMission('dpe'); return true; })()")

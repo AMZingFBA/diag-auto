@@ -6,7 +6,9 @@
 // ou essentiellement » de lui (hypothèse : le croquis n'est qu'une partie de DiagAuto ; à confirmer par un juriste avant
 // tout usage commercial) ; ni modification ni décompilation ; attribution visible.
 //
-// Repères. Le moteur : x à droite, y en haut, z vers l'arrière (la caméra regarde -z), en mètres (échelle « absolute »).
+// Repères. Le moteur : x à droite, y en haut, z vers l'arrière (la caméra regarde -z) ; le sol est y = 0 et la caméra part
+// à 1,40 m au-dessus (échelle « responsive » : les unités sont des mètres si le téléphone est bien tenu à 1,40 m). Essai
+// du 25/10 (17:25) avec l'échelle « absolute » : elle ne s'était jamais réglée, un aller-retour de 2 à 3 m comptait 15 cm.
 // L'application : x vers la direction 90°, y vers la direction 0° du gyroscope (le lacet), à l'horizontale ; les deux
 // sont reliés par le cap de la caméra (le décalage entre le cap vu par le moteur et le lacet). Le sol est le plan
 // horizontal y = sol du moteur (estimé par ses surfaces).
@@ -15,6 +17,7 @@
 (function (racine) {
   const RAD = Math.PI / 180;
   const PRES = 0.05;
+  const HAUTEUR_M = 1.4;
 
   // Rotation du vecteur v par le quaternion q ({x, y, z, w}).
   function tournerQ(q, v) {
@@ -108,11 +111,12 @@
     this.derniereVisee = 0;
     this.decalages = []; // lacet − cap du moteur
     this.surImage = null; // rappel à chaque image suivie
+    this.signaler = null; // rappel pour le diagnostic (état du suivi, erreurs) : envoyé au serveur
   }
 
   Suivi.prototype.sol = function () {
     const m = mediane(this.hauteursSol);
-    return m != null ? m : this.pose ? this.pose.position.y - 1.4 : 0;
+    return m != null ? m : 0;
   };
 
   Suivi.prototype.decalage = function () {
@@ -125,8 +129,10 @@
   Suivi.prototype.noter = function (reality, lacet) {
     if (!reality || !reality.position || !reality.rotation) return;
     this.pose = { position: reality.position, rotation: reality.rotation, intrinsics: reality.intrinsics || (this.pose && this.pose.intrinsics) };
-    this.statut = reality.trackingStatus || this.statut;
-    this.raison = reality.trackingReason || "";
+    const statut = reality.trackingStatus || this.statut, raison = reality.trackingReason || "";
+    if ((statut !== this.statut || raison !== this.raison) && this.signaler) this.signaler(`suivi ${statut} ${raison}`.trim());
+    this.statut = statut;
+    this.raison = raison;
     const maintenant = Date.now();
     if (this.statut === "NORMAL" && maintenant - this.derniereVisee > 250 && globalThis.XR8) {
       this.derniereVisee = maintenant;
@@ -179,20 +185,23 @@
       document.head.appendChild(s);
     });
     const lance = (XR8) => new Promise((resolve, reject) => {
-      XR8.XrController.configure({ scale: "absolute", disableWorldTracking: false });
+      XR8.XrController.configure({ scale: "responsive", disableWorldTracking: false });
       XR8.addCameraPipelineModules([XR8.GlTextureRenderer.pipelineModule(), XR8.XrController.pipelineModule(), {
         name: "diagauto",
+        // La caméra part à 1,40 m au-dessus du sol (téléphone tenu devant la poitrine, hypothèse) : l'échelle en mètres.
+        onStart: () => XR8.XrController.updateCameraProjectionMatrix({ origin: { x: 0, y: HAUTEUR_M, z: 0 }, facing: { w: 1, x: 0, y: 0, z: 0 } }),
         onCameraStatusChange: ({ status, stream }) => {
           if (status === "hasStream") { this.flux = stream; this.actif = true; resolve(this); }
           if (status === "hasVideo") { this.actif = true; resolve(this); }
           if (status === "failed") reject(new Error("caméra refusée"));
+          if (this.signaler) this.signaler(`caméra ${status}`);
         },
         onUpdate: ({ processCpuResult }) => {
           const reality = processCpuResult && processCpuResult.reality;
           this.noter(reality, lacetActuel());
           if (this.surImage) this.surImage(this);
         },
-        onException: (e) => reject(e),
+        onException: (e) => { if (this.signaler) this.signaler(`erreur ${e && e.message ? e.message : e}`); reject(e); },
       }]);
       XR8.run({ canvas: toile, glContextConfig: { preserveDrawingBuffer: true } });
     });

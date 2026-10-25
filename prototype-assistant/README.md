@@ -1184,7 +1184,7 @@ image : pièce « U », cuisine, U, chambre, U), un coup d'œil toutes les 8 s :
 du séjour reconnu à tort), `tests/test_page_navigateur.py` (le croquis dessiné dans le coin, agrandi, renommer, réunir,
 déplacer).
 
-Le prototype compte 340 tests (et le projet, à la racine, 654) à cette étape ; 353 avec le choix de la mission ; 393 avec la capture du tour (étape 15) ; 408 avec le plan dans un repère commun ; 411 avec le plan dans le sens de la marche ; 416 avec les gardes de la voix (rien d'inventé, rien d'effacé) ; 429 avec le relevé des murs ; 432 avec le tracé guidé du plan (qui remplace le relevé) ; 435 avec le tracé qui tient en place ; 441 avec le moteur de 8th Wall.
+Le prototype compte 340 tests (et le projet, à la racine, 654) à cette étape ; 353 avec le choix de la mission ; 393 avec la capture du tour (étape 15) ; 408 avec le plan dans un repère commun ; 411 avec le plan dans le sens de la marche ; 416 avec les gardes de la voix (rien d'inventé, rien d'effacé) ; 429 avec le relevé des murs ; 432 avec le tracé guidé du plan (qui remplace le relevé) ; 435 avec le tracé qui tient en place ; 441 avec le moteur de 8th Wall ; 442 avec le moteur seulement sur demande.
 
 ## Choix de la mission avant de filmer (23/10/2026)
 
@@ -1398,6 +1398,28 @@ pas), et en fin de visite 1 à 3 questions sur ce qui reste douteux, avec dépla
 doublon, espace montré qui est celui où l'on est, nom inventé refusé, pièce devinée par la porte puis dite, correction qui
 n'efface jamais une pièce déjà vécue), `tests/test_voix_croquis.py` (nom entendu même mal transcrit),
 `tests/test_page_navigateur.py` (plan dans le sens de la marche, flèche du nord, « vous êtes ici »).
+
+## Étape 19 bis : premier essai du moteur de 8th Wall, raté (25/10/2026, 17:25)
+
+**Ce que Noah a dit** : « c'est une catastrophe, ça ne fonctionne pas du tout, la vidéo est de qualité médiocre ».
+
+**Ce que montre la visite 20261025-172507** :
+- la vidéo : le moteur ouvre lui-même la caméra en basse définition (images clés en 384 × 512 au lieu de 1080p) ; on ne
+  peut pas ouvrir la caméra une seconde fois en 1080p sur iPhone ;
+- le suivi : en mode « absolute », l'échelle du moteur ne s'est jamais réglée ; l'aller-retour à la cuisine (2 à 3 m, 23
+  à 31 s) a la bonne forme mais compte 15 cm ; puis la page a été quittée (46 s) ; aucune trace de ce qui se passait dans
+  le moteur.
+
+**Corrigé** :
+- le moteur ne se lance plus que si l'on coche « Essai : suivi des déplacements par 8th Wall » (amiante, plomb), décoché
+  par défaut : la vidéo redevient en 1080p avec notre propre suivi ;
+- échelle « responsive » : le sol est y = 0 et la caméra part à 1,40 m (`updateCameraProjectionMatrix`), donc des mètres
+  si le téléphone est tenu à cette hauteur ;
+- diagnostic : l'état du suivi (NORMAL, LIMITED et sa raison), l'état de la caméra et les erreurs du moteur partent au
+  journal de la visite (`diagnostic`).
+
+**Honnêtement** : avec le moteur, la vidéo restera en basse définition (il garde la caméra pour lui). Un suivi pro avec
+une vidéo de qualité demande une application avec ARKit (iPhone) et ARCore (Android).
 
 ## Étape 19 : le suivi de position par le moteur de 8th Wall (25/10/2026)
 

@@ -3,7 +3,7 @@
 // (16 kHz) et une image par seconde, et lit à voix haute les questions de l'assistant.
 
 // Version de la page, comparée à celle du serveur (test du 23/10 : l'iPhone gardait l'ancienne page en mémoire).
-const VERSION_PAGE = "2026-10-25-01";
+const VERSION_PAGE = "2026-10-25-02";
 const $ = (id) => document.getElementById(id);
 const TAUX = 16000;
 const TYPE_SON = 1;
@@ -98,6 +98,7 @@ function choisirMission(mission) {
   $("voir-fiche").textContent = croquisSeul() ? "🗺️ Plan" : "📋 Fiche";
   $("manques-bloc").hidden = croquisSeul();
   $("murs").hidden = !croquisSeul();
+  $("ligne-suivi-precis").hidden = !croquisSeul();
 }
 
 // --- Tracé guidé du plan sur la caméra (Noah, 23/10) ------------------------------------------------------------------
@@ -1381,11 +1382,13 @@ async function demarrer() {
   $("demarrer").disabled = true;
   const micro = { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 };
   try {
-    if (croquisSeul() && suivi) {
+    if (croquisSeul() && suivi && $("suivi-precis").checked) {
       // Le moteur de 8th Wall ouvre la caméra et dessine l'image ; sa vidéo est enregistrée avec le micro.
       try {
         $("visite").hidden = false;
         $("xr-toile").hidden = false;
+        // Ce qui se passe dans le moteur part au journal de la visite (essai du 25/10 : rien pour comprendre l'échec).
+        suivi.signaler = (texte) => envoyerJson({ type: "diagnostic", source: "8thwall", texte: String(texte).slice(0, 300) });
         await suivi.demarrer($("xr-toile"), () => (capteurs.lacet != null ? capteurs.lacet : capteurs.cap));
         const son = await navigator.mediaDevices.getUserMedia({ audio: micro });
         etat.flux = new MediaStream([...suivi.flux.getVideoTracks(), ...son.getAudioTracks()]);
