@@ -481,3 +481,47 @@ def test_position_suivie_sur_une_fausse_camera(page):
     assert position is not None and math.dist(position, vrai) < 0.08, (position, vrai)
     assert page.js("traceur.odo.details.length") >= 12  # des détails du sol suivis
     page.js("(() => { $('camera').srcObject = null; choisirMission('dpe'); return true; })()")
+
+
+def test_trace_avec_le_moteur_de_8th_wall(page):
+    # Noah (25/10, choix 1) : la position vient du moteur de 8th Wall. Un faux moteur : il ouvre la « caméra », puis donne
+    # la pose de la caméra (1,40 m au-dessus du sol, 35° vers le bas). La consigne attend que le suivi soit prêt ; puis le
+    # point visé (2 m devant) part comme coin, et il est redessiné sous la croix.
+    import math
+
+    page.js("""(async () => {
+        choisirMission('amiante'); window.envoyes = [];
+        window.XR8 = {
+          modules: [],
+          XrController: {configure: (c) => { XR8.config = c; }, pipelineModule: () => ({name: 'xr'}),
+                         hitTest: () => [{position: {x: 0, y: 0, z: -2}}]},
+          GlTextureRenderer: {pipelineModule: () => ({name: 'gl'})},
+          addCameraPipelineModules: (m) => { XR8.modules.push(...m); },
+          run: () => { const t = document.createElement('canvas').captureStream(1);
+                       XR8.modules.forEach((m) => m.onCameraStatusChange && m.onCameraStatusChange({status: 'hasStream', stream: t})); },
+          stop: () => {},
+        };
+        await suivi.demarrer($('xr-toile'), () => 30);
+        etat.xr8 = true; traceur.recalage = [0, 0]; traceur.pieces = []; traceur.courant = null; traceur.selection = null;
+        afficherTrace(true); return true; })()""")
+    assert page.js("XR8.config.scale") == "absolute" and page.js("suivi.actif") is True
+    s = math.sin(math.radians(-17.5))
+    reality = {"position": {"x": 0, "y": 1.4, "z": 0}, "rotation": {"x": s, "y": 0, "z": 0, "w": math.cos(math.radians(17.5))},
+               "intrinsics": [2.4 / (390 / 844), 0, 0, 0, 0, 2.4, 0, 0, 0, 0, -1.002, -1, 0, 0, -0.2002, 0]}
+    page.js(f"""(() => {{ XR8.modules.find((m) => m.name === 'diagauto').onUpdate({{processCpuResult: {{reality: Object.assign({json.dumps(reality)},
+        {{trackingStatus: 'LIMITED'}})}}}}); majInfoTrace(); dessinerTrace(); return true; }})()""")
+    assert "bougez doucement" in page.js("$('trace-info').textContent") and page.js("traceur.vise") is None
+    for _ in range(3):
+        page.js(f"""(() => {{ suivi.derniereVisee = 0; XR8.modules.find((m) => m.name === 'diagauto').onUpdate({{processCpuResult:
+            {{reality: Object.assign({json.dumps(reality)}, {{trackingStatus: 'NORMAL'}})}}}}); majInfoTrace(); dessinerTrace(); return true; }})()""")
+    vise = page.js("traceur.vise")
+    d = 1.4 / math.tan(math.radians(35))
+    assert math.dist(vise, (d * math.sin(math.radians(30)), d * math.cos(math.radians(30)))) < 1e-3  # aligné sur le lacet (30°)
+    page.toucher("#trace-point")
+    envoye = page.js("window.envoyes")[-1]
+    assert envoye["action"] == "point" and math.dist((envoye["x"], envoye["y"]), vise) < 2e-3
+    page.js("(() => { dessinerTrace(); return true; })()")
+    coin = page.js("traceur.ecran")[0]
+    assert abs(coin["x"] - 195) < 1 and abs(coin["y"] - 422) < 1  # sous la croix
+    assert page.js("positionTrace()") == [0, 0]
+    page.js("(() => { afficherTrace(false); etat.xr8 = false; delete window.XR8; choisirMission('dpe'); return true; })()")

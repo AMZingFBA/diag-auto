@@ -3,7 +3,7 @@
 // (16 kHz) et une image par seconde, et lit à voix haute les questions de l'assistant.
 
 // Version de la page, comparée à celle du serveur (test du 23/10 : l'iPhone gardait l'ancienne page en mémoire).
-const VERSION_PAGE = "2026-10-23-15";
+const VERSION_PAGE = "2026-10-25-01";
 const $ = (id) => document.getElementById(id);
 const TAUX = 16000;
 const TYPE_SON = 1;
@@ -47,6 +47,7 @@ const etat = {
   // Seuils de la boussole (boussole.toml) ; remplacés par ceux du serveur au chargement.
   reglagesBoussole: { precision: { bonne: 15, faible: 30 }, dispersion: { bonne: 12, faible: 25 }, iphone: { inclinaison_calibrage: 60 } },
   mission: null, // choisie sur l'accueil : « dpe », « amiante » ou « plomb »
+  xr8: false, // amiante, plomb : le moteur de 8th Wall suit la position (web/suivi-xr8.js)
 };
 
 // Mouvement du téléphone (étape 15 : « un tour de 3 s par pièce ») : orientation complète à chaque événement, rotation
@@ -129,7 +130,12 @@ const traceur = {
   historique: [], // positions suivies de la dernière seconde : { quand, C }
   secousse: -1e9, // dernier pic d'accélération (secondes de la visite) : un pas, même lent
   marche: false,
+  recalage: [0, 0], // moteur de 8th Wall : décalage ajouté à ses positions par « ⇄ Recaler » ou la fermeture
 };
+
+// Le suivi par le moteur de 8th Wall (web/suivi-xr8.js ; Noah, 25/10, choix 1) : amiante et plomb. S'il ne démarre pas
+// (téléphone non pris en charge), l'application garde son propre suivi par le sol filmé (web/odometrie.js).
+const suivi = window.SuiviXr8 ? new SuiviXr8.Suivi() : null;
 const PRES_DU_PREMIER_M = 0.3;
 
 function afficherTrace(actif) {
@@ -151,6 +157,11 @@ function majInfoTrace(texte) {
   const info = $("trace-info");
   if (!traceur.actif) { info.hidden = true; return; }
   const c = contourEnCours();
+  if (!texte && etat.xr8 && suivi.statut !== "NORMAL") {
+    info.textContent = "Démarrage du suivi : bougez doucement le téléphone de gauche à droite en visant le sol, quelques secondes.";
+    info.hidden = false;
+    return;
+  }
   info.textContent = texte || (traceur.selection
     ? "Coin choisi : visez sa vraie place. « ✓ Placer ici » corrige ce coin ; « ⇄ Recaler » remet tout le dessin sur lui."
     : !c ? "Placez-vous au milieu de la pièce. Visez un coin au ras du sol (pas vos pieds), puis « ＋ Coin »."
@@ -179,6 +190,10 @@ function positionStable(Csuivi) {
 // Recaler : le point du sol visé est en vrai le coin P (on le vise de nouveau) : tout le dessin se décale d'autant.
 function recaler(P, vise) {
   const d = [P[0] - vise[0], P[1] - vise[1]];
+  if (etat.xr8) {
+    traceur.recalage = [traceur.recalage[0] + d[0], traceur.recalage[1] + d[1]];
+    return d;
+  }
   if (traceur.fige) traceur.Cfige = [traceur.Cfige[0] + d[0], traceur.Cfige[1] + d[1]];
   traceur.decalage = [traceur.decalage[0] - d[0], traceur.decalage[1] - d[1]];
   if (traceur.pose) traceur.pose.C = [traceur.pose.C[0] + d[0], traceur.pose.C[1] + d[1]];
@@ -203,7 +218,7 @@ function orientationA(quand) {
 // plus, dès le début de la visite), et le tracé redessiné sur cette image, avec l'orientation de sa prise (le dessin et
 // l'image ont le même retard : ils restent ensemble quand on tourne).
 function suivrePosition(meta) {
-  if (!croquisSeul() || !window.Odometrie || etat.termine) return;
+  if (!croquisSeul() || !window.Odometrie || etat.termine || etat.xr8) return;
   const video = $("camera");
   if (!video.videoWidth) return;
   const quand = performance.now();
@@ -234,27 +249,24 @@ function dessinerTrace() {
   const ctx = toile.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H);
-  const pose = traceur.pose;
   traceur.ecran = [];
-  if (!pose || !video.videoWidth) { majBoutonCoin(); return; }
-  const F = Trace.focaleEcran(champHorizontal(), video.videoWidth, video.videoHeight, W, H);
-  const h = traceur.hauteur;
-  const E = (uv) => Trace.versEcran(uv, F, W, H);
+  const cam = cameraTrace(W, H);
+  if (!cam) { traceur.vise = null; majBoutonCoin(); return; }
   const distance = (A, B) => Math.hypot(B[0] - A[0], B[1] - A[1]);
-  traceur.vise = Trace.auSol(pose.C, h, Trace.rayon(pose.R), 12);
+  traceur.vise = cam.vise;
   const courant = contourEnCours();
   traceur.pres = !!(courant && courant.points.length >= 3 && traceur.vise && distance(traceur.vise, courant.points[0]) < PRES_DU_PREMIER_M);
   for (const p of traceur.pieces) {
     const n = p.points.length, couleur = p.ferme ? "#3ddc84" : "#ffd400";
     for (let i = 0; i < (p.ferme ? n : n - 1); i++) {
       const A = p.points[i], B = p.points[(i + 1) % n];
-      const s = Trace.segment(pose.R, pose.C, h, A, B);
-      if (s) traitTrace(ctx, E(s[0]), E(s[1]), couleur, false, distance(A, B));
+      const s = cam.mur(A, B);
+      if (s) traitTrace(ctx, s[0], s[1], couleur, false, distance(A, B));
     }
     p.points.forEach((P, index) => {
-      const uv = Trace.projeter(pose.R, pose.C, h, P);
-      if (!uv) return;
-      const [x, y] = E(uv);
+      const e = cam.ecran(P);
+      if (!e) return;
+      const [x, y] = e;
       if (x < -40 || y < -40 || x > W + 40 || y > H + 40) return;
       traceur.ecran.push({ cle: p.cle, index, x, y });
       const choisi = traceur.selection && traceur.selection.cle === p.cle && traceur.selection.index === index;
@@ -265,10 +277,37 @@ function dessinerTrace() {
   // Le mur en cours : du dernier coin validé au point visé (au premier coin quand on y revient), en pointillés.
   if (courant && courant.points.length && traceur.vise && !traceur.selection) {
     const A = courant.points[courant.points.length - 1], B = traceur.pres ? courant.points[0] : traceur.vise;
-    const s = Trace.segment(pose.R, pose.C, h, A, B);
-    if (s) traitTrace(ctx, E(s[0]), E(s[1]), "#ffffff", true, distance(A, B));
+    const s = cam.mur(A, B);
+    if (s) traitTrace(ctx, s[0], s[1], "#ffffff", true, distance(A, B));
   }
   majBoutonCoin();
+}
+
+// La caméra du tracé : le point du sol visé, un point du sol à l'écran, un mur à l'écran. Avec le moteur de 8th Wall
+// (position en 3D, en mètres), sinon avec notre suivi (gyroscope + sol filmé, téléphone supposé à 1,40 m du sol).
+function cameraTrace(W, H) {
+  if (etat.xr8) {
+    const r = traceur.recalage, plus = (P) => P && [P[0] + r[0], P[1] + r[1]], moins = (P) => [P[0] - r[0], P[1] - r[1]];
+    return { vise: plus(suivi.vise()), ecran: (P) => suivi.ecran(moins(P), W, H), mur: (A, B) => suivi.mur(moins(A), moins(B), W, H) };
+  }
+  const pose = traceur.pose, video = $("camera");
+  if (!pose || !video.videoWidth) return null;
+  const F = Trace.focaleEcran(champHorizontal(), video.videoWidth, video.videoHeight, W, H);
+  const h = traceur.hauteur, E = (uv) => Trace.versEcran(uv, F, W, H);
+  return {
+    vise: Trace.auSol(pose.C, h, Trace.rayon(pose.R), 12),
+    ecran: (P) => { const uv = Trace.projeter(pose.R, pose.C, h, P); return uv && E(uv); },
+    mur: (A, B) => { const s = Trace.segment(pose.R, pose.C, h, A, B); return s && [E(s[0]), E(s[1])]; },
+  };
+}
+
+// Position du téléphone pour le serveur (repère de l'application).
+function positionTrace() {
+  if (etat.xr8) {
+    const p = suivi.position();
+    return p && [p[0] + traceur.recalage[0], p[1] + traceur.recalage[1]];
+  }
+  return traceur.pose ? traceur.pose.C : traceur.odo ? traceur.odo.C : null;
 }
 
 function traitTrace(ctx, a, b, couleur, pointille, longueur) {
@@ -1262,9 +1301,12 @@ function noterCapteurs() {
   const mesure = { t: Math.round(t * 1000) / 1000, cap: arrondi(capteurs.cap), lacet: arrondi(capteurs.lacet),
                    precision: arrondi(capteurs.precision), inclinaison: arrondi(capteurs.inclinaison),
                    elevation: arrondi(pose.elevation), roulis: arrondi(pose.roulis), acc: arrondi(mouvement.acc) };
-  if (traceur.odo && croquisSeul()) {
+  const C = croquisSeul() ? positionTrace() : null;
+  if (C && etat.xr8) {
+    // La position du moteur de 8th Wall, et son état (NORMAL, LIMITED…) pour juger le suivi après la visite.
+    Object.assign(mesure, { x: arrondiMm(C[0]), y: arrondiMm(C[1]), xr8: suivi.statut === "NORMAL" ? 1 : 0 });
+  } else if (C && traceur.odo) {
     // La position suivie par le sol filmé, et de quoi juger le suivi après la visite (détails suivis, calcul, perdu).
-    const C = traceur.pose ? traceur.pose.C : traceur.odo.C;
     Object.assign(mesure, { x: arrondiMm(C[0]), y: arrondiMm(C[1]), vo_n: traceur.odo.details.length, vo_fige: traceur.fige ? 1 : 0,
                             vo_ms: Math.round(traceur.dureeMs), vo_perdu: traceur.odo.perdu ? 1 : 0 });
   }
@@ -1337,11 +1379,32 @@ async function demarrer() {
   etat.code = $("code").value;
   const qualite = $("qualite").value;
   $("demarrer").disabled = true;
+  const micro = { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 };
   try {
-    etat.flux = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: "environment" }, width: { ideal: qualite === "1080" ? 1920 : 1280 }, height: { ideal: qualite === "1080" ? 1080 : 720 } },
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
-    });
+    if (croquisSeul() && suivi) {
+      // Le moteur de 8th Wall ouvre la caméra et dessine l'image ; sa vidéo est enregistrée avec le micro.
+      try {
+        $("visite").hidden = false;
+        $("xr-toile").hidden = false;
+        await suivi.demarrer($("xr-toile"), () => (capteurs.lacet != null ? capteurs.lacet : capteurs.cap));
+        const son = await navigator.mediaDevices.getUserMedia({ audio: micro });
+        etat.flux = new MediaStream([...suivi.flux.getVideoTracks(), ...son.getAudioTracks()]);
+        etat.xr8 = true;
+        suivi.surImage = () => { if (traceur.actif) dessinerTrace(); };
+        $("credit-xr8").hidden = false;
+      } catch (e) {
+        console.warn("Suivi 8th Wall indisponible :", e);
+        suivi.arreter();
+        $("xr-toile").hidden = true;
+        $("visite").hidden = true;
+      }
+    }
+    if (!etat.xr8) {
+      etat.flux = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" }, width: { ideal: qualite === "1080" ? 1920 : 1280 }, height: { ideal: qualite === "1080" ? 1080 : 720 } },
+        audio: micro,
+      });
+    }
   } catch (e) {
     etat.demarrage = false;
     $("demarrer").disabled = false;
@@ -1396,6 +1459,7 @@ async function arreter() {
   });
   await videoPrete;
   etat.flux.getTracks().forEach((piste) => piste.stop());
+  if (etat.xr8) suivi.arreter();
   if (etat.contexteAudio) etat.contexteAudio.close();
   let bilan = etat.bilan && etat.bilan.bilan;
   if (etat.session) {

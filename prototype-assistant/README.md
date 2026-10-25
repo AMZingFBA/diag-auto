@@ -1184,7 +1184,7 @@ image : pièce « U », cuisine, U, chambre, U), un coup d'œil toutes les 8 s :
 du séjour reconnu à tort), `tests/test_page_navigateur.py` (le croquis dessiné dans le coin, agrandi, renommer, réunir,
 déplacer).
 
-Le prototype compte 340 tests (et le projet, à la racine, 654) à cette étape ; 353 avec le choix de la mission ; 393 avec la capture du tour (étape 15) ; 408 avec le plan dans un repère commun ; 411 avec le plan dans le sens de la marche ; 416 avec les gardes de la voix (rien d'inventé, rien d'effacé) ; 429 avec le relevé des murs ; 432 avec le tracé guidé du plan (qui remplace le relevé) ; 435 avec le tracé qui tient en place.
+Le prototype compte 340 tests (et le projet, à la racine, 654) à cette étape ; 353 avec le choix de la mission ; 393 avec la capture du tour (étape 15) ; 408 avec le plan dans un repère commun ; 411 avec le plan dans le sens de la marche ; 416 avec les gardes de la voix (rien d'inventé, rien d'effacé) ; 429 avec le relevé des murs ; 432 avec le tracé guidé du plan (qui remplace le relevé) ; 435 avec le tracé qui tient en place ; 441 avec le moteur de 8th Wall.
 
 ## Choix de la mission avant de filmer (23/10/2026)
 
@@ -1398,6 +1398,37 @@ pas), et en fin de visite 1 à 3 questions sur ce qui reste douteux, avec dépla
 doublon, espace montré qui est celui où l'on est, nom inventé refusé, pièce devinée par la porte puis dite, correction qui
 n'efface jamais une pièce déjà vécue), `tests/test_voix_croquis.py` (nom entendu même mal transcrit),
 `tests/test_page_navigateur.py` (plan dans le sens de la marche, flèche du nord, « vous êtes ici »).
+
+## Étape 19 : le suivi de position par le moteur de 8th Wall (25/10/2026)
+
+**Ce que Noah a dit** : « c'est pas encore précis, ça manque de pro, c'est pas fonctionnel ; le croquis se dessine mal par
+rapport à mes déplacements ; améliore-le nettement ». Puis, entre les deux solutions proposées (le moteur de 8th Wall dans
+la page, ou une application avec ARKit/ARCore) : « 1 ».
+
+**Pourquoi** : notre suivi par le sol filmé tient debout (gyroscope seul), mais en marchant il reste loin d'un outil pro
+(étape 18). Safari sur iPhone n'a toujours pas de réalité augmentée en 2026. Le moteur de 8th Wall (Niantic Spatial)
+suit la position et l'orientation du téléphone en 3D, en mètres, dans Safari ; son binaire est gratuit depuis janvier
+2026, sous une licence propriétaire (voir `web/vendor/8thwall/README.md` : pas libre, attribution visible, usage
+commercial à faire confirmer par un juriste).
+
+**Ce qui est fait** :
+- `web/vendor/8thwall/` : le binaire 1.0.0, tel quel, avec sa licence ;
+- `web/suivi-xr8.js` : lance le moteur (échelle « absolute » : des mètres), lit la pose de la caméra à chaque image ; le
+  sol est la hauteur des surfaces que le moteur voit sous la croix ; le repère du moteur est tourné sur celui du
+  gyroscope (le lacet) pour que le plan, la boussole et le serveur restent dans le même repère ; le point visé et chaque
+  coin sont calculés et redessinés avec la projection du moteur ;
+- `web/app.js` : en amiante et plomb, le moteur ouvre la caméra et dessine l'image ; sa vidéo est enregistrée avec le
+  micro ; le tracé (croix, « ＋ Coin », pointillés, fermer, annuler, corriger, recaler) utilise ses positions ; tant que le
+  suivi démarre : « bougez doucement le téléphone de gauche à droite en visant le sol » ; la position part au serveur
+  avec chaque mesure (`xr8` = 1 quand le suivi est normal) ; mention de la licence affichée ;
+- **secours** : si le moteur ne démarre pas (téléphone non pris en charge, licence retirée), notre propre suivi (étapes
+  17 et 18) reprend ; le DPE ne change pas.
+
+**Vérifié** : les calculs du moteur (point visé, projection, repères) avec Node ; la page avec un faux moteur (démarrage,
+consigne d'attente, coin calculé par le moteur et redessiné sous la croix). **Pas encore sur un téléphone** : le moteur ne
+tourne que sur un vrai téléphone ; c'est l'essai de Noah qui dira la précision réelle.
+
+**Tests** : `tests/test_suivi_xr8_js.py`, `tests/test_page_navigateur.py` (tracé avec le moteur de 8th Wall).
 
 ## Étape 18 : un tracé qui tient en place (23/10/2026, après l'essai de Noah de 17:30)
 
