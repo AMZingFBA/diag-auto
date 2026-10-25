@@ -1,0 +1,3 @@
+ÉTAPE 11 (étape 10 vérifiée : 263 + 624 tests OK, merci).
+1) Reformule en 10 lignes ta compréhension du logiciel DiagAuto (objectif, contraintes : tout téléphone, Claude seul, assistant vocal en direct, vidéo continue avec pièces reconnues, remplissage LICIEL automatique).
+2) Puis construis le pont assistant -> LICIEL : à partir de l'état d'une visite (sessions/<dernière>/ : pièces, murs, ouvertures, émetteurs), génère les tables LICIEL de NOTRE dossier de test (liste des pièces + Carrez) avec le sérialiseur octet-exact de diagauto/liciel_xml, dans un dossier hors C:\LICIEL_* (ex. sorties/dossier-test). Valide avec diagauto verifier. Ajoute les tests, mets à jour le README et docs/exigences-en-attente.md. Ne touche jamais à C:\LICIEL_*.
