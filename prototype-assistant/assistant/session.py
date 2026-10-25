@@ -134,6 +134,10 @@ REFERENCES_PAR_PIECE = 3  # images de chaque pièce montrées à Claude pour la 
 INTERVALLE_PIECES_S = 6.0  # croquis : Claude regarde dans quelle pièce on est toutes les 6 s
 # Une nouvelle pièce suppose d'avoir marché (2 pas comptés) depuis l'entrée dans la pièce où l'on est : une rotation sur
 # place n'est jamais un changement de pièce (Noah, 23/10). Sans pas (accéléromètre refusé), pas de contrôle.
+# Croquis par les coins seulement (Noah, 25/10 : « pourquoi tu t'obliges à trouver c'est quoi la pièce ? il faut simplement
+# faire un suivi des coins ; à chaque fois que j'appuie, ça fait un coin ») : en amiante et plomb, plus de pièce reconnue
+# sur l'image ni de tour bipé ; le croquis est fait des coins validés ; une pièce se nomme à la voix si on le veut.
+RECONNAITRE_PIECES = False
 DEPLACEMENT_MIN_M = 0.6  # un pas compté (le téléphone en manque quand on marche lentement en filmant)
 ATTENTE_NORD_S = 60.0  # gyroscope sans nord (iPhone tenu droit) : orientation demandée à l'oral seulement après 1 min
 # Mission choisie sur le téléphone avant de filmer (Noah, 23/10) : le DPE (ses questions, sans croquis), ou l'amiante et le
@@ -392,7 +396,7 @@ class Session:
             # Amiante, plomb : seul le regard sert (pièces reconnues sur la vidéo) ; les cerveaux du DPE ne sont pas lancés.
             try:
                 if self.regard is not None:
-                    await self.regard.demarrer(propositions=False, pieces=True, voix=True)
+                    await self.regard.demarrer(propositions=False, pieces=RECONNAITRE_PIECES, voix=True)
                 self.journaliser("cerveau_pret", duree_s=round(time.perf_counter() - debut, 2), prechauffage={})
             except Exception as e:
                 log.exception("Démarrage du regard")
@@ -509,6 +513,12 @@ class Session:
                                    releves, coins, ouvert)
             croquis["plan"] = plan_vers_dict(plan, {k: p.nom for k, p in self.croquis.pieces.items()},
                                              {k: p.source for k, p in self.croquis.pieces.items()}, self.croquis.courante)
+            if self.croquis_seul and not RECONNAITRE_PIECES:
+                # Le croquis, ce sont les coins validés : les pièces fermées et le contour en cours ; ni pièce devinée, ni
+                # porte supposée, ni trajet.
+                plan_d = croquis["plan"]
+                plan_d["pieces"] = [p for p in plan_d["pieces"] if p.get("mesuree")]
+                plan_d["portes"], plan_d["trajet"] = [], []
         return croquis
 
     async def envoyer_etat(self) -> None:
@@ -772,7 +782,7 @@ class Session:
             return
         images = [i for i in self.images if tour.t_debut - 0.3 <= i.t <= tour.t_fin + 0.3]
         self.journaliser("tour", **tour.vers_dict(), images=len(images), pas=sum(tour.t_debut <= t <= tour.t_fin for t in self.pas))
-        if self.croquis_seul:
+        if self.croquis_seul and RECONNAITRE_PIECES:
             # Le diagnostiqueur entend un bip : le tour est vu, il peut passer à la suite.
             await self._envoyer({"type": "tour", **tour.vers_dict(), "images": len(images)})
             if self.regard is not None:
@@ -2004,7 +2014,7 @@ class Session:
         """Toutes les quelques secondes, Claude dit dans quelle pièce on est (assistant/regard.py) : le croquis se dessine
         en même temps que la vidéo, sans que la pièce soit jamais demandée. Amiante et plomb seulement : le DPE n'en a pas
         besoin (étape 13), et c'est un appel à Claude toutes les 6 s de moins."""
-        if self.regard is None or not self.croquis_seul:
+        if self.regard is None or not self.croquis_seul or not RECONNAITRE_PIECES:
             return
         await self._pret.wait()
         derniere = None

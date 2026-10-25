@@ -76,6 +76,7 @@ def test_mission_inconnue_vaut_dpe(tmp_path):
 def test_amiante_premier_coup_d_oeil_sans_attendre(tmp_path, monkeypatch):
     # Test de Noah du 23/10 : le croquis restait vide les premières secondes. Le premier coup d'œil part dès la 1re image.
     monkeypatch.setattr(module_session, "INTERVALLE_PIECES_S", 1000.0)
+    monkeypatch.setattr(module_session, "RECONNAITRE_PIECES", True)  # pièces reconnues sur l'image (coupé depuis le 25/10)
     claude = ClaudeQuiVoitLesPieces({0.5: AvisPiece(None, "Entrée", "forte")})
 
     async def scenario():

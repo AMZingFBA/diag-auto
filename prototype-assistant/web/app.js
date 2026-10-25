@@ -3,7 +3,7 @@
 // (16 kHz) et une image par seconde, et lit à voix haute les questions de l'assistant.
 
 // Version de la page, comparée à celle du serveur (test du 23/10 : l'iPhone gardait l'ancienne page en mémoire).
-const VERSION_PAGE = "2026-10-25-02";
+const VERSION_PAGE = "2026-10-25-03";
 const $ = (id) => document.getElementById(id);
 const TAUX = 16000;
 const TYPE_SON = 1;
@@ -165,8 +165,8 @@ function majInfoTrace(texte) {
   }
   info.textContent = texte || (traceur.selection
     ? "Coin choisi : visez sa vraie place. « ✓ Placer ici » corrige ce coin ; « ⇄ Recaler » remet tout le dessin sur lui."
-    : !c ? "Placez-vous au milieu de la pièce. Visez un coin au ras du sol (pas vos pieds), puis « ＋ Coin »."
-    : `${c.nom} : ${c.points.length} coin${c.points.length > 1 ? "s" : ""}. Sans marcher, visez le coin suivant ; revenez au premier pour fermer.`);
+    : !c ? "Restez au milieu de la pièce. Visez un coin au ras du sol (pas vos pieds), puis « ＋ Coin »."
+    : `${c.nom} : ${c.points.length} coin${c.points.length > 1 ? "s" : ""}. Sans bouger les pieds, visez le coin suivant ; revenez au premier pour fermer.`);
   info.hidden = false;
 }
 
@@ -177,7 +177,11 @@ function positionStable(Csuivi) {
   traceur.historique.push({ quand, C: [...Csuivi] });
   while (traceur.historique.length && quand - traceur.historique[0].quand > 1000) traceur.historique.shift();
   const avant = traceur.historique[0].C;
-  traceur.marche = Math.hypot(Csuivi[0] - avant[0], Csuivi[1] - avant[1]) > 0.25 || maintenant() - traceur.secousse < 1.2;
+  const deplacement = Math.hypot(Csuivi[0] - avant[0], Csuivi[1] - avant[1]);
+  // Pendant le tracé d'une pièce, on vise depuis un même endroit (la méthode qui marche sur tous les téléphones : le
+  // gyroscope seul) : seule une vraie marche (plus de 80 cm en une seconde) déplace le point de vue ; une secousse non.
+  const pieceEnCours = traceur.actif && !!contourEnCours();
+  traceur.marche = pieceEnCours ? deplacement > 0.8 : deplacement > 0.25 || maintenant() - traceur.secousse < 1.2;
   if (!traceur.marche && !traceur.fige) {
     traceur.fige = true;
     traceur.Cfige = [Csuivi[0] - traceur.decalage[0], Csuivi[1] - traceur.decalage[1]];
@@ -904,7 +908,11 @@ function dessinerPlan(svg, plan, grand) {
     const [px, py] = P([d.x, d.y]);
     el("circle", { cx: px, cy: py, r: grand ? 6 : 3.5, fill: "#c0782a", stroke: "#fff", "stroke-width": 1.5 });
   }
-  for (const c of plan.coins) {  // les coins du relevé en cours, au fur et à mesure
+  if (plan.coins.length > 1) {  // le contour en cours, coin à coin
+    el("polyline", { class: "contour", points: plan.coins.map(P).map((q) => q.join(",")).join(" "), fill: "none",
+                     stroke: "#d08000", "stroke-width": grand ? 3 : 2 });
+  }
+  for (const c of plan.coins) {  // les coins du contour en cours, au fur et à mesure
     const [qx, qy] = P(c);
     el("circle", { class: "coin", cx: qx, cy: qy, r: grand ? 5 : 3, fill: "#ff8f00", stroke: "#fff", "stroke-width": 1.5 });
   }
@@ -937,7 +945,7 @@ function tournerVousIci() {
 function afficherCroquis(c) {
   if (c) etat.croquis = c;
   c = etat.croquis;
-  const vide = !c || !c.pieces.length;
+  const vide = !c || (!c.pieces.length && !(c.plan && (c.plan.coins || []).length));
   $("croquis").hidden = !croquisSeul();
   $("croquis-aide").hidden = !vide;
   if ($("croquis").hidden) return;
@@ -948,7 +956,7 @@ function afficherCroquis(c) {
     $("plan-pieces").replaceChildren(Object.assign(document.createElement("p"), { className: "petit", textContent: $("croquis-aide").textContent }));
     return;
   }
-  const avecPlan = c.plan && c.plan.pieces.length;
+  const avecPlan = c.plan && (c.plan.pieces.length || (c.plan.coins || []).length);
   if (avecPlan) dessinerPlan($("croquis-petit"), c.plan, false);
   else dessinerCroquis($("croquis-petit"), c, true);
   if ($("plan").hidden) return;
@@ -1428,6 +1436,10 @@ async function demarrer() {
   etat.minuteries.push(setInterval(chaqueSeconde, 1000));
   etat.minuteries.push(setInterval(envoyerMouvement, 250));
   suivreTrames();
+  if (croquisSeul()) {  // le croquis, ce sont les coins : la croix et « ＋ Coin » tout de suite
+    afficherTrace(true);
+    envoyerJson({ type: "trace", action: "debut", source: "demarrage" });
+  }
   etat.minuteries.push(setInterval(() => ($("chrono").textContent = horodatage(maintenant())), 1000));
   try { etat.verrouEcran = await navigator.wakeLock.request("screen"); } catch { /* écran : réglage du téléphone */ }
 }

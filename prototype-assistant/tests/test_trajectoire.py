@@ -135,6 +135,7 @@ def test_visite_amiante_plan_et_rotation_sur_place_sans_changement_de_piece(tmp_
     from test_fluidite import ouvrir
 
     monkeypatch.setattr(module_session, "INTERVALLE_PIECES_S", 1000.0)
+    monkeypatch.setattr(module_session, "RECONNAITRE_PIECES", True)  # pièces reconnues sur l'image (coupé depuis le 25/10)
     claude = ClaudeQuiVoitLesPieces({1.0: AvisPiece(None, "Entrée", "forte"), 8.0: AvisPiece(None, "Séjour", "forte"),
                                      14.0: AvisPiece(None, "Cuisine", "forte"), 24.0: AvisPiece(None, "Cuisine", "forte")})
 
@@ -200,6 +201,7 @@ def test_piece_decidee_sur_les_images_du_tour(tmp_path, monkeypatch):
         return None
 
     monkeypatch.setattr(module_session.Session, "_boucle_pieces", sans_coup_d_oeil)
+    monkeypatch.setattr(module_session, "RECONNAITRE_PIECES", True)  # pièces reconnues sur l'image (coupé depuis le 25/10)
 
     class ClaudeDuTour:
         def __init__(self):

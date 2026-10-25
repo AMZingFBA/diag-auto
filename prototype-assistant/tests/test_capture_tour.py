@@ -28,7 +28,10 @@ def journal(dossier) -> list[dict]:
     return [json.loads(ligne) for ligne in (dossier / "journal.jsonl").read_text(encoding="utf-8").splitlines()]
 
 
-def test_tour_vu_en_direct_et_images_posees(client, tmp_path):  # noqa: F811
+def test_tour_vu_en_direct_et_images_posees(client, tmp_path, monkeypatch):  # noqa: F811
+    import assistant.session as module_session
+
+    monkeypatch.setattr(module_session, "RECONNAITRE_PIECES", True)  # tour bipé avec la reconnaissance (coupée depuis le 25/10)
     mesures = releve([(1.0, 0), (3.0, 360), (1.0, 0)])
     with client.websocket_connect("/ws") as ws:
         ws.send_json({"type": "debut", "piece": "", "mission": "plomb"})
